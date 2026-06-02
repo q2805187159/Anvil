@@ -1,0 +1,58 @@
+"""Model Context Protocol integration primitives for Anvil."""
+
+from .client import (
+    build_mcp_client,
+    build_server_params,
+    has_real_transport_config,
+    mcp_server_placeholder_config_reason,
+    mcp_server_missing_env_names,
+    resolve_connection_config,
+    sanitize_mcp_error,
+)
+from .config import (
+    BUNDLED_MCP_CONFIG_FILE_NAMES,
+    DEFAULT_MCP_SERVERS,
+    McpServerVisibilityInput,
+    default_mcp_config_payload,
+    delete_mcp_server_from_config_file,
+    extract_mcp_servers_from_payload,
+    is_sensitive_config_key,
+    iter_env_refs_in_config,
+    mcp_server_model_visible,
+    normalize_mcp_server_config,
+    normalize_mcp_server_mapping,
+    parse_mcp_servers_config_text,
+    read_bundled_mcp_servers,
+    read_mcp_config_file,
+    redact_sensitive_config,
+    upsert_mcp_servers_in_config_file,
+)
+from .lifecycle import McpLifecycleManager, McpServerRuntimeState
+
+__all__ = [
+    "BUNDLED_MCP_CONFIG_FILE_NAMES",
+    "DEFAULT_MCP_SERVERS",
+    "McpLifecycleManager",
+    "McpServerRuntimeState",
+    "McpServerVisibilityInput",
+    "build_mcp_client",
+    "build_server_params",
+    "default_mcp_config_payload",
+    "delete_mcp_server_from_config_file",
+    "extract_mcp_servers_from_payload",
+    "has_real_transport_config",
+    "mcp_server_placeholder_config_reason",
+    "is_sensitive_config_key",
+    "iter_env_refs_in_config",
+    "mcp_server_missing_env_names",
+    "mcp_server_model_visible",
+    "normalize_mcp_server_config",
+    "normalize_mcp_server_mapping",
+    "parse_mcp_servers_config_text",
+    "read_bundled_mcp_servers",
+    "read_mcp_config_file",
+    "redact_sensitive_config",
+    "resolve_connection_config",
+    "sanitize_mcp_error",
+    "upsert_mcp_servers_in_config_file",
+]

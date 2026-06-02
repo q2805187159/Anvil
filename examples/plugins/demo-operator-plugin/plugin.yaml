@@ -1,0 +1,34 @@
+name: demo-operator
+display_name: Demo Operator
+description: Local example plugin for validating Anvil plugin catalog installs.
+version: 0.1.0
+trust: local-example
+tags:
+  - demo
+  - local
+  - ops
+inline_tools:
+  - name: demo_operator_echo
+    display_name: Demo Operator Echo
+    summary: Returns a deterministic demo payload so the plugin tool path can be verified.
+    capability_group: plugin
+    response:
+      plugin_id: demo-operator
+      ok: true
+resources:
+  - resource_id: demo-operator-readme
+    title: Demo Operator README
+    description: Short plugin README for catalog preview.
+    path: README.md
+prompts:
+  - prompt_id: demo-operator-brief
+    title: Demo Operator Brief
+    description: Summarize a plugin validation result.
+    arguments:
+      - result
+    template: "Summarize this demo plugin result: {result}"
+catalog_metadata:
+  publisher: Anvil Examples
+  trust_level: local-example
+  permissions:
+    - local filesystem read within plugin package

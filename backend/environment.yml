@@ -1,0 +1,12 @@
+name: anvil-backend
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - setuptools>=69
+  - wheel
+  - make
+  - pip:
+      - -r requirements.txt

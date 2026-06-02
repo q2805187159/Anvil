@@ -1,0 +1,64 @@
+site_name: Anvil
+site_description: Harness-first agent runtime with memory, tools, skills, MCP extensions, and an operator workspace.
+site_url: https://q2805187159.github.io/Anvil/
+repo_url: https://github.com/q2805187159/Anvil
+repo_name: q2805187159/Anvil
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  architecture/
+  debug-pic/
+  future/
+  internal/
+  FINAL-TESTING-REPORT.md
+  OPTIMIZATION-SUMMARY.md
+  PROJECT-COMPLETE.md
+  implementation/phases.md
+  implementation/*audit*.md
+  implementation/*待办*.md
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Guide Index: guides/index.md
+      - Usage: guides/usage.md
+      - Quickstart and Startup Modes: guides/quickstart-and-startup-modes.md
+      - Deployment: guides/deployment.md
+      - CLI Reference: guides/cli.md
+      - TUI Guide: guides/tui.md
+      - Command Reference: guides/commands.md
+      - Configuration Reference: guides/configuration.md
+      - Model Provider Configuration: guides/model-provider-configuration.md
+      - Plugins: guides/plugins.md
+      - Doctor, Smoke, and Tracing: guides/doctor-smoke-and-tracing.md
+      - Document Pipeline: guides/document-pipeline.md
+      - Extensions and Capability Surfaces: guides/extensions-and-capability-surfaces.md
+      - Local Docker Workspace: guides/local-docker-workspace.md
+      - Open Source Release Checklist: guides/open-source-release.md
+      - Release Verification: guides/release-verification.md
+  - ADRs:
+      - ADR Index: adr/index.md
+      - Baseline and Extension Policy: adr/ADR-001-architecture-baseline-and-extension-policy.md
+      - Protocol Deferral: adr/ADR-002-v1-protocol-deferral-and-upgrade-seam.md
+      - Capability Truth: adr/ADR-003-execution-control-and-capability-truth.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - fenced_code
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: ignore

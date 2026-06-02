@@ -1,0 +1,90 @@
+# Operating system and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local agent/session state
+.claude/
+.agents/
+.omx/
+.playwright-mcp/
+.anvil/
+host/
+%SystemDrive%/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+_tmp_test/
+_tmp-debug/
+_tmp_debug/
+.tmp-debug/
+_tmp_pkg_install/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+site/
+.venv/
+venv/
+
+# Backend build outputs
+backend/build/
+backend/*.egg-info
+backend/*.egg-info/
+backend/*.egg-info/**
+backend/_tmp_test/
+backend/_tmp_pkg_install/
+backend/.pytest_cache/
+backend/.pytest_tmp/
+backend/.coverage
+backend/coverage.xml
+backend/htmlcov/
+backend/.anvil/
+
+# Frontend dependencies and generated output
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+coverage/
+frontend/coverage/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Local secrets and machine-specific runtime config
+.env
+.env.*
+!.env.example
+config.yaml
+
+# Private/internal notes, generated planning logs, and raw debugging media
+docs/internal/
+docs/architecture/
+docs/future/
+**/docs/future/
+docs/implementation/phases.md
+docs/implementation/*todo*.md
+docs/implementation/*待办*.md
+docs/implementation/*audit*.md
+docs/*bootstrap-prompt*.md
+docs/*phased-build*.md
+docs/debug-pic/
+docs/FINAL-TESTING-REPORT.md
+docs/OPTIMIZATION-SUMMARY.md
+docs/PROJECT-COMPLETE.md
+optimization-log.md
+
+# Optional local skill packs. Public releases keep these out of the main tree;
+# install/share reviewed skill packs through Anvil Home or a dedicated package.
+skills/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak

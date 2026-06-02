@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "plugin_id": "memory-http-provider-plugin",
+      "name": "Memory HTTP Provider",
+      "description": "Registers a generic HTTP memory provider with recall, sync, session-end, compact, and delegation hooks.",
+      "source": "./memory-http-provider-plugin",
+      "version": "0.1.0",
+      "author": "Anvil",
+      "tags": ["memory", "provider", "http"],
+      "trust_level": "curated",
+      "permissions": ["sends memory lifecycle JSON payloads to the configured provider endpoint"]
+    }
+  ]
+}

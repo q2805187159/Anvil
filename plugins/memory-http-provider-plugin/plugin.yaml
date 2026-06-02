@@ -1,0 +1,30 @@
+name: memory-http-provider-plugin
+display_name: Memory HTTP Provider
+description: Registers a generic HTTP memory provider.
+version: 0.1.0
+author: Anvil
+tags:
+  - memory
+  - provider
+  - lifecycle
+memory_providers:
+  - provider_id: http_memory
+    display_name: HTTP Memory Provider
+    kind: http
+    roles:
+      - recall
+      - sync
+      - session_end
+      - pre_compact
+      - delegation
+      - explain
+    enabled: true
+    settings:
+      endpoint: http://127.0.0.1:8765/memory
+      timeout_seconds: 3
+      description: Configure this endpoint to your memory provider service URL.
+catalog_metadata:
+  publisher: Anvil
+  trust_level: curated
+  permissions:
+    - Sends memory lifecycle JSON payloads to the configured HTTP endpoint.

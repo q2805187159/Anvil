@@ -1,0 +1,1328 @@
+# ------------------------------------------------------------
+# Config field contract
+#
+# This file is not loaded when a real `config.yaml` exists. It is the canonical
+# onboarding template and field reference that `scripts/init-config.*` and
+# `anvil setup` copy into a real `config.yaml`, so it must stay parseable by the
+# same loader used for production runtime config.
+#
+# Legend:
+# - Required means no safe runtime default exists for that exact shape.
+# - Optional means the default is either shown in this file or supplied by the
+#   harness model in backend/packages/harness/anvil/config/models.py.
+# - Provider presets never choose a concrete model. They only supply connection,
+#   adapter, timeout, context, and capability defaults; `model` stays explicit.
+# - Secret values should stay in `.env`; config should reference them as
+#   ${ENV_NAME}. Secret env refs are preserved until provider construction.
+#
+# Root fields:
+# - llm (optional; default empty): compact provider catalog. Recommended path.
+# - default_model (optional; default null): legacy top-level default route.
+# - models (optional; default {}): legacy explicit model map/list. Each legacy
+#   item requires `name`; compact llm.providers entries can rely on presets for
+#   non-model defaults but still need an explicit `model`.
+# - profiles (optional; default {}): named defaults/subsystem model overrides.
+# - subsystem_models (optional; default {}): direct subsystem -> model routing.
+# - anvil.profile (optional; default active profile): profile marker stored in
+#   the active Anvil Home config, usually ~/.anvil/config.yaml.
+# - workspace.root/mode/auto_host_drives/path_bridges (optional; root default
+#   null, mode thread, auto_host_drives true, path_bridges []): user workspace,
+#   automatic local host-root projection, and explicit host path bridges.
+# - context_files (optional; defaults shown): project-context prompt files.
+# - sandbox_mode/sandbox (optional; defaults local + built-in audit/sandboxes):
+#   execution isolation and audit settings.
+# - summarization/title/plan_mode/loop_detection (optional; defaults shown):
+#   runtime UX and control-plane helpers.
+# - token_usage (optional; default disabled): token accounting and cost table.
+# - trajectory_export (optional; defaults shown): SFT/RL trajectory export.
+# - scheduled_tasks (optional; defaults shown): cron-like task runner settings.
+# - memory/memory_platform (optional; defaults disabled): memory injection,
+#   archival, review, updater, and reflection jobs.
+# - tool_output_budget/tool_visibility_budget (optional; defaults shown):
+#   tool-result truncation and schema-visibility budgets.
+# - skills_config (optional; defaults shown): skill discovery/governance.
+# - subagents (optional; default disabled): delegated agent execution limits.
+# - guardrails (optional; default disabled): approval/risk policy.
+# - uploads/documents (optional; defaults shown): attachment conversion.
+# - terminal (optional; defaults local): terminal backend catalog.
+# - extensions.skills/plugins (optional; defaults empty): capability overlays.
+# - mcp_servers (optional; default starter servers in new Home configs):
+#   MCP servers live in the active Anvil Home config.yaml.
+# - config_freshness (optional; defaults shown): config hot-reload watch.
+# - requirements (optional; default {}): request or environment requirements.
+# - additional top-level fields (optional): service-owned configs such as
+#   web_tools, browser_tools, google_workspace, media_tools, and tracing.
+#
+# Reusable object fields:
+# - llm.providers.<id>/models.<id>: name (required only for legacy list items),
+#   display_name, description, use, provider, provider_kind, model,
+#   default_model, selected_model, model_catalog, model_name, api_key,
+#   api_key_env, base_url/api_base, default_reasoning_effort, temperature,
+#   top_p, max_tokens, context_window_tokens,
+#   auto_compact_threshold_tokens, model_context_windows,
+#   model_auto_compact_thresholds, timeout/request_timeout/
+#   default_request_timeout, max_retries, default_headers, extra_body,
+#   provider_settings, supports_tool_calling, supports_thinking,
+#   supports_reasoning_effort, supports_vision, supports_image_generation,
+#   capabilities, when_thinking_enabled, when_thinking_disabled, thinking,
+#   use_responses_api, output_version, image_generation. Unknown provider
+#   fields are allowed here and passed through as provider_settings.
+# - mcp_servers.<id> entries use:
+#   enabled, description, transport/type, command, args, env, cwd, url,
+#   headers, startup_policy, refresh_policy, approval_policy, tool_prefix,
+#   collision_policy, tool_allowlist, tool_allowlist_active, tool_denylist,
+#   oauth, env_resolution, header_templates, resource_policy, prompt_policy,
+#   reconnect_policy, healthcheck. Common stdio/http MCP aliases are accepted.
+# - extensions.plugins.<id>: enabled, source_path, skill_roots, inline_tools,
+#   resources, prompts, memory_providers, catalog_metadata.
+# - extensions.plugins.<id>.memory_providers[]: provider_id (required),
+#   display_name, kind, roles, settings, enabled.
+# - terminal.backends.<id>: kind, label, enabled, command_prefix, default_cwd,
+#   working_dir, env, env_passthrough, env_prefix_passthrough, timeout_seconds,
+#   lifetime_seconds, image, host, username, sandbox_id, app, runtime,
+#   resource_limits, sync, notes.
+# - workspace.path_bridges[]: alias (required), display_root (required),
+#   actual_root, enabled.
+# - terminal.backends.<id>.mounts[]: host_path, container_path, read_only.
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# LLM models
+#
+# Product config should normally use llm.default + llm.providers.
+# The legacy top-level models list is still supported for advanced overrides.
+# Provider entries accept explicit provider/model fields and pass unknown
+# provider-specific fields through to the LangChain model constructor.
+# Provider presets keep common provider URLs and SDK choices out of code, but
+# the template below stays explicit: `api_key` uses env placeholders, and
+# `base_url` can be replaced for private gateways, regional endpoints, or
+# local proxies. Keep provider secrets in `.env`, then reference them here with
+# `api_key: ${PROVIDER_API_KEY}`.
+#
+# `max_tokens` is the per-response output cap. It is intentionally separate
+# from `context_window_tokens` and `auto_compact_threshold_tokens`, which drive
+# runtime context pressure tracking and automatic summarization.
+# ------------------------------------------------------------
+llm:
+  default: minimax
+  # Deprecated compatibility field. Anvil keeps this readable for older config
+  # files, but runtime execution no longer switches models automatically after
+  # errors; retry stays on the selected model and then surfaces the failure.
+  fallback_models: []
+  defaults:
+    timeout: 600.0
+    max_retries: 2
+    supports_tool_calling: true
+    supports_thinking: false
+    supports_reasoning_effort: false
+    supports_vision: false
+    supports_image_generation: false
+  providers:
+    # MiniMax Anthropic-compatible CN endpoint. Requires MINIMAX_API_KEY.
+    minimax:
+      display_name: MiniMax
+      description: Primary CN MiniMax model through the Anthropic-compatible API.
+      use: anvil.agents.provider_adapters:AnvilAnthropicChatModel
+      model:
+        - MiniMax-M2.7
+        - MiniMax-M2.7-highspeed
+        - MiniMax-M2.5
+        - MiniMax-M2.5-highspeed
+        - MiniMax-M1
+      default_model: MiniMax-M2.7
+      base_url: https://api.minimaxi.com/anthropic
+      api_key: ${MINIMAX_API_KEY}
+      # Total context window. `max_tokens` below remains the per-response output cap.
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 0.7
+      supports_tool_calling: true
+
+    # OpenAI or OpenAI-compatible chat-completions gateway.
+    # Inferred as OpenAI-compatible from the /v1 base_url.
+    openai:
+      display_name: OpenAI
+      model:
+        - gpt-5.5
+        - gpt-5.4
+        - gpt-5.4-mini
+      default_model: gpt-5.4
+      base_url: ${OPENAI_BASE_URL}
+      api_key: ${OPENAI_API_KEY}
+      context_window_tokens: 1047576
+      auto_compact_threshold_tokens: 785682
+      request_timeout: 600.0
+      max_retries: 2
+      temperature: 0.3
+      max_tokens: 4096
+      top_p: 1.0
+      supports_vision: true
+
+    # OpenAI Responses API shape for providers that explicitly support it.
+    openai_responses:
+      display_name: OpenAI Responses GPT
+      model: gpt-5
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      context_window_tokens: 400000
+      auto_compact_threshold_tokens: 300000
+      request_timeout: 600.0
+      max_retries: 2
+      temperature: 0.3
+      max_tokens: 8192
+      supports_thinking: true
+      supports_vision: true
+      supports_reasoning_effort: true
+      default_reasoning_effort: medium
+      use_responses_api: true
+      output_version: responses/v1
+      when_thinking_enabled:
+        extra_body:
+          thinking:
+            type: enabled
+      default_headers:
+        X-Anvil-Client: anvil
+
+    # Xiaomi MiMo OpenAI-compatible model. Requires MIMO_API_KEY.
+    MiMo:
+      display_name: MiMo V2.5 Pro
+      model:
+        - mimo-v2.5-pro
+        - mimo-v2.5
+        - mimo-v2-pro
+        - mimo-v2-omni
+        - mimo-v2-flash
+      default_model: mimo-v2.5-pro
+      base_url: https://token-plan-cn.xiaomimimo.com/v1
+      api_key: ${MIMO_API_KEY}
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      model_context_windows:
+        mimo-v2.5-pro: 1048576
+        mimo-v2.5: 1048576
+        mimo-v2-pro: 1048576
+        mimo-v2-omni: 1048576
+        mimo-v2-flash: 32768
+      model_auto_compact_thresholds:
+        mimo-v2.5-pro: 786432
+        mimo-v2.5: 786432
+        mimo-v2-pro: 786432
+        mimo-v2-omni: 786432
+        mimo-v2-flash: 24576
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 0.7
+
+    # Volcengine Ark/Doubao OpenAI-compatible endpoint. Requires VOLCENGINE_API_KEY.
+    doubao:
+      display_name: Doubao Seed
+      model: doubao-seed-1-8-251228
+      base_url: https://ark.cn-beijing.volces.com/api/v3
+      api_key: ${VOLCENGINE_API_KEY}
+      context_window_tokens: 128000
+      auto_compact_threshold_tokens: 96000
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_thinking: true
+      supports_vision: true
+      supports_reasoning_effort: true
+      when_thinking_enabled:
+        extra_body:
+          thinking:
+            type: enabled
+
+    # Anthropic Claude endpoint. Requires ANTHROPIC_API_KEY.
+    # Inferred as Anthropic-compatible from the official Anthropic host.
+    claude:
+      display_name: Claude 3.5 Sonnet
+      use: anvil.agents.provider_adapters:AnvilAnthropicChatModel
+      model: claude-3-5-sonnet-20241022
+      base_url: https://api.anthropic.com
+      api_key: ${ANTHROPIC_API_KEY}
+      context_window_tokens: 200000
+      auto_compact_threshold_tokens: 150000
+      default_request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_thinking: true
+      supports_vision: true
+      when_thinking_enabled:
+        thinking:
+          type: enabled
+
+    # Google Gemini native SDK provider. Requires GEMINI_API_KEY.
+    # Native SDK entries keep `use` because no base_url suffix is available.
+    gemini_native:
+      display_name: Gemini 2.5 Pro Native
+      use: langchain_google_genai:ChatGoogleGenerativeAI
+      provider: google
+      model: gemini-2.5-pro
+      provider_settings:
+        gemini_api_key: ${GEMINI_API_KEY}
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_vision: true
+
+    # Gemini through Google's OpenAI-compatible endpoint. Requires GEMINI_API_KEY.
+    gemini_openai:
+      display_name: Gemini 2.5 Flash OpenAI-Compatible
+      model: gemini-2.5-flash
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key: ${GEMINI_API_KEY}
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_vision: true
+
+    # DeepSeek OpenAI-compatible endpoint. Requires DEEPSEEK_API_KEY.
+    deepseek:
+      display_name: DeepSeek
+      model: deepseek-chat
+      base_url: https://api.deepseek.com/v1
+      api_key: ${DEEPSEEK_API_KEY}
+      context_window_tokens: 128000
+      auto_compact_threshold_tokens: 96000
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_thinking: true
+      supports_vision: false
+      when_thinking_enabled:
+        extra_body:
+          thinking:
+            type: enabled
+
+    # Moonshot/Kimi OpenAI-compatible endpoint. Requires MOONSHOT_API_KEY.
+    kimi:
+      display_name: Kimi K2.5
+      model: kimi-k2.5
+      base_url: https://api.moonshot.cn/v1
+      api_key: ${MOONSHOT_API_KEY}
+      context_window_tokens: 262144
+      auto_compact_threshold_tokens: 196608
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 32768
+      supports_thinking: true
+      supports_vision: true
+      when_thinking_enabled:
+        extra_body:
+          thinking:
+            type: enabled
+
+    # Novita OpenAI-compatible endpoint. Requires NOVITA_API_KEY.
+    novita:
+      display_name: Novita DeepSeek V3.2
+      model: deepseek/deepseek-v3.2
+      base_url: https://api.novita.ai/openai
+      api_key: ${NOVITA_API_KEY}
+      context_window_tokens: 65536
+      auto_compact_threshold_tokens: 49152
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 0.7
+      supports_thinking: true
+      supports_vision: true
+      when_thinking_enabled:
+        extra_body:
+          thinking:
+            type: enabled
+
+    # MiniMax international OpenAI-compatible endpoint. Requires MINIMAX_API_KEY.
+    minimax_global:
+      display_name: MiniMax M2.5 Global
+      model:
+        - MiniMax-M2.5
+        - MiniMax-M2.5-highspeed
+      default_model: MiniMax-M2.5
+      base_url: https://api.minimax.io/v1
+      api_key: ${MINIMAX_API_KEY}
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 1.0
+      supports_thinking: true
+      supports_vision: true
+
+    # MiniMax China OpenAI-compatible endpoint. Requires MINIMAX_API_KEY.
+    minimax_cn:
+      display_name: MiniMax M2.7 CN
+      model:
+        - MiniMax-M2.7
+        - MiniMax-M2.7-highspeed
+      default_model: MiniMax-M2.7
+      base_url: https://api.minimaxi.com/v1
+      api_key: ${MINIMAX_API_KEY}
+      context_window_tokens: 1048576
+      auto_compact_threshold_tokens: 786432
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 1.0
+      supports_thinking: true
+      supports_vision: true
+
+    # OpenRouter OpenAI-compatible gateway. Requires OPENROUTER_API_KEY.
+    openrouter:
+      display_name: OpenRouter Gemini 2.5 Flash
+      model: google/gemini-2.5-flash-preview
+      base_url: https://openrouter.ai/api/v1
+      api_key: ${OPENROUTER_API_KEY}
+      context_window_tokens: 1047576
+      auto_compact_threshold_tokens: 785682
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      temperature: 0.7
+      provider_settings:
+        extra_body:
+          provider:
+            order: [google]
+
+    # Local vLLM/OpenAI-compatible endpoint. Requires VLLM_API_KEY if enforced.
+    vllm:
+      display_name: Local vLLM Qwen3
+      use: langchain_openai:ChatOpenAI
+      provider: vllm
+      provider_kind: vllm_openai_compatible
+      model: Qwen/Qwen3-32B
+      base_url: http://127.0.0.1:8000/v1
+      api_key: ${VLLM_API_KEY}
+      context_window_tokens: 131072
+      auto_compact_threshold_tokens: 98304
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 8192
+      supports_thinking: true
+      supports_vision: false
+      when_thinking_enabled:
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: true
+      when_thinking_disabled:
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: false
+
+    # Generic OpenAI-compatible third-party API.
+    custom_openai:
+      display_name: Custom OpenAI-Compatible
+      model: your-model-name
+      base_url: ${CUSTOM_OPENAI_BASE_URL}
+      api_key: ${CUSTOM_OPENAI_API_KEY}
+      context_window_tokens: 128000
+      auto_compact_threshold_tokens: 96000
+      request_timeout: 600.0
+      max_retries: 2
+      max_tokens: 4096
+      temperature: 0.7
+      provider_settings:
+        organization: your-org
+
+    # Optional image generation provider. Tool exposure requires this flag.
+    image_gen:
+      display_name: OpenAI Image Generation
+      model: gpt-image-1
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      context_window_tokens: 128000
+      auto_compact_threshold_tokens: 96000
+      supports_tool_calling: false
+      supports_image_generation: true
+      image_generation:
+        kind: openai_responses
+        model: gpt-image-1
+        endpoint: /images/generations
+        api_key: ${OPENAI_API_KEY}
+        output_format: png
+        size: 1024x1024
+        quality: high
+        timeout: 120
+  subsystems:
+    # Shared background-task model binding. The Ops Console "Background tasks"
+    # switch updates these together for non-primary-model work.
+    summarization: minimax
+    title: minimax
+    session_search: minimax
+    memory_updater: minimax
+    memory_rerank: minimax
+    memory_reflection: minimax
+    memory_governance: minimax
+    memory_maintenance: minimax
+    skill_curator: minimax
+    skill_extraction: minimax
+    procedure_learning: minimax
+    scheduled_automation: minimax
+    trajectory_compression: minimax
+  vision:
+    max_images_per_turn: 4
+    max_image_bytes: 10485760
+    detail: auto
+  retry:
+    max_attempts: 3
+    initial_delay: 1.0
+    backoff_multiplier: 2.0
+    max_delay: 30.0
+
+# ------------------------------------------------------------
+# State roots / Home profile layout
+# The active Anvil Home is selected by ANVIL_HOME, defaulting to ~/.anvil.
+# The active profile is selected by ANVIL_PROFILE or ~/.anvil/active_profile.
+# Default profile data lives directly under ~/.anvil; named profiles live under
+# ~/.anvil/profiles/<name>. User config, MCP servers, installed skills,
+# memories, sessions, cron state, credentials, and logs all belong there.
+# `workspace.root` is optional; when omitted, each thread gets an isolated
+# workspace under the thread storage directory.
+# ------------------------------------------------------------
+anvil:
+  profile: default
+
+workspace:
+  mode: thread
+  # Set to an absolute or repo-relative project directory to make
+  # /mnt/user-data/workspace map to that external workspace.
+  # Example:
+  # root: E:/projects/demo-app
+  root:
+  # Optional. When true, local deployments auto-project host roots into
+  # /mnt/user-data/workspace/_host without asking users to hand-write bridges.
+  # Windows: available drive roots such as C: and E:
+  # macOS: home, Desktop, Documents, Downloads, and mounted /Volumes/*
+  # Linux: home, repo parent, and mounted /mnt/*, /media/*, /Volumes/*
+  # SSH/Modal/Daytona/Vercel still see their own remote/provider workspace
+  # unless an explicit sync/mount strategy is configured for that provider.
+  auto_host_drives: true
+  # Optional Windows allowlist. Empty means all existing drive letters.
+  # Example: [C, E]
+  auto_host_drive_letters: []
+  # Optional explicit host path bridges. These are the safe way to let an
+  # agent launched from Windows operate on files outside its thread workspace:
+  # the model sees only /mnt/user-data/workspace/_host/<alias>, while the
+  # runtime maps that virtual root to the configured host directory.
+  # Keep bridges as narrow as practical; prefer E:/projects/demo-app over E:/.
+  path_bridges: []
+    # - alias: e_drive_project
+    #   display_root: E:/projects/demo-app
+    #   actual_root: E:/projects/demo-app
+    #   enabled: true
+
+# ------------------------------------------------------------
+# Project context files
+# These files are loaded into the stable prompt prefix from the active
+# /mnt/user-data/workspace. Keep this bounded; use read_file for large docs.
+# ------------------------------------------------------------
+context_files:
+  enabled: true
+  filenames:
+    - AGENTS.md
+    - CLAUDE.md
+    - CODEX.md
+    - GEMINI.md
+    - .cursorrules
+    - .windsurfrules
+  rule_globs:
+    - .cursor/rules/*.md
+    - .github/copilot-instructions.md
+  include_readme: false
+  recursive_agents: false
+  recursive_names:
+    - AGENTS.md
+    - CODEX.md
+    - CLAUDE.md
+    - GEMINI.md
+  max_files: 12
+  max_chars: 12000
+  max_chars_per_file: 4000
+
+# Legacy advanced format remains valid:
+# default_model: openai_compatible
+# models:
+#   - name: openai_compatible
+#     model: gpt-5.4
+#     api_key: $OPENAI_API_KEY
+#     base_url: https://api.openai.com/v1
+#     supports_reasoning_effort: true
+#     supports_vision: true
+
+profiles:
+  default:
+    name: default
+    default_model: minimax
+    subsystem_models:
+      summarization: minimax
+      title: minimax
+
+# ------------------------------------------------------------
+# Sandbox
+# Canonical key is sandbox_mode.
+# Accepted compatibility alias on load: sandbox.mode
+# local is preserved as a backward-compatible alias of host_isolated.
+# external is unsupported and will fail configuration validation/startup.
+# ------------------------------------------------------------
+sandbox_mode: host_isolated
+sandbox:
+  audit:
+    enabled: true
+    # Optional. When omitted, runtime logs live under the active Anvil Home.
+    log_path: null
+    async_write: true
+  host_isolated:
+    allowed_paths: []
+    network_access: false
+    max_execution_time: 30
+  isolated:
+    image: python:3.12-slim
+    allowed_paths: []
+    network_access: false
+    max_execution_time: 30
+
+# ------------------------------------------------------------
+# Runtime feature surfaces
+# ------------------------------------------------------------
+summarization:
+  enabled: true
+  token_threshold: 80000
+  keep_recent_turns: 10
+  emergency_threshold: 110000
+  model_name: openai_compatible
+
+title:
+  enabled: true
+  max_length: 60
+  generation_strategy: truncate
+  model_name: minimax
+
+plan_mode:
+  enabled: true
+  default: false
+
+token_usage:
+  enabled: true
+  log_per_turn: false
+  include_entries: true
+  currency: USD
+  cost_precision: 8
+  # Optional per-provider/model estimates. Keys can be provider, route model,
+  # concrete model, provider/model, provider:model, or default.
+  # Values are USD per million tokens unless request_cost is used.
+  pricing: {}
+    # openai/gpt-5.4:
+    #   input_cost_per_million: 1.25
+    #   output_cost_per_million: 10.0
+    #   cache_read_cost_per_million: 0.125
+    #   cache_write_cost_per_million: 1.25
+    #   reasoning_cost_per_million: 10.0
+    #   request_cost: 0.0
+    #   source: operator-config
+
+trajectory_export:
+  enabled: true
+  export_root: ./.anvil/trajectories
+  default_format: anvil
+  batch_include_entries_default: false
+  batch_write_jsonl_default: true
+  # Batch exports keep warning/passed samples by default and filter failed samples
+  # before writing JSONL. Use failed for audit exports or passed for strict datasets.
+  batch_min_quality_status_default: warning
+  include_system: false
+  include_tools: true
+  include_tool_args: true
+  include_metadata: true
+  # Keep raw provider thinking out of training data by default. Turn this on only
+  # for explicit research runs where reasoning traces are permitted.
+  include_reasoning: false
+  # Parse textual tool-call encodings into metadata for SFT/RL data prep when
+  # providers did not persist native tool_calls.
+  include_parsed_tool_calls: true
+  include_hidden_steps: false
+  include_artifacts: true
+  include_approvals: true
+  include_token_usage: true
+  scrub_secrets: true
+  compression:
+    enabled: true
+    max_turns: 80
+    keep_first_turns: 2
+    keep_last_turns: 40
+    max_message_chars: 12000
+    max_tool_result_chars: 6000
+    max_metadata_chars: 4000
+
+# Generic scheduled automations. This is a harness-first cron surface: schedule
+# metadata is persisted below the runtime, while Gateway/Ops/SDK are thin views
+# over the same service.
+scheduled_tasks:
+  enabled: true
+  tick_seconds: 60
+  state_path: null
+  default_execution_mode: agent
+  default_profile: null
+  # Optional. Leave null to use llm.subsystems.scheduled_automation.
+  default_model: null
+  max_due_per_tick: 3
+  output_root: ./.anvil/scheduled-task-output
+  prompt_safety_scan_enabled: true
+
+loop_detection:
+  enabled: true
+  max_identical_turns: 3
+
+# ------------------------------------------------------------
+# Memory
+# transcript_context_tokens is used when transcript/archive recall is injected
+# alongside curated memory.
+# ------------------------------------------------------------
+memory:
+  enabled: true
+  prefetch_once_per_turn: true
+  # Optional. When omitted, legacy memory lives under the active Anvil Home.
+  store_path: null
+  namespace: global/default
+  max_facts: 12
+  injection_token_budget: 1200
+  transcript_context_tokens: 4000
+
+memory_platform:
+  enabled: true
+  stores:
+    runtime_memory:
+      enabled: true
+      display_name: Runtime Memory
+      max_chars: 2800
+      injection_chars: 1400
+      max_tokens: 700
+      injection_tokens: 350
+      category_bias: runtime
+    user_profile:
+      enabled: true
+      display_name: User Profile
+      max_chars: 1800
+      injection_chars: 1000
+      max_tokens: 450
+      injection_tokens: 250
+      category_bias: preference
+  archive:
+    enabled: true
+    sqlite_path: ./.anvil/memory-platform/archive.sqlite3
+    fts_enabled: true
+    max_hits: 8
+  providers:
+    active_provider_id: anvil_factgraph
+    catalog:
+      local_curated:
+        enabled: true
+        configured: true
+        roles: [sync, index, memory_write, session_end, pre_compact, delegation]
+        settings: {}
+      anvil_factgraph:
+        enabled: true
+        configured: true
+        roles: [sync, index, reflection, explain, memory_write, session_end, pre_compact, delegation]
+        settings: {}
+  reflection:
+    enabled: true
+    tick_seconds: 60
+    auto_register_defaults: true
+    jobs:
+      runtime_hourly_review:
+        enabled: false
+        schedule_kind: interval
+        cron: null
+        interval_seconds: 3600
+        template: custom
+        target_store_id: runtime_memory
+        instructions: null
+        source_query: null
+  compaction_hooks:
+    enabled: true
+    include_archive: true
+    include_provider_notes: true
+  session_search:
+    enabled: true
+    default_limit: 5
+    model_name: minimax
+    max_summary_input_chars: 100000
+    max_summary_output_chars: 10000
+    summary_timeout_seconds: 60
+  recall:
+    max_candidates: 16
+    max_evidence: 8
+    min_relevance_score: 0.05
+    turn_recall_token_budget: 900
+    enable_model_rerank: false
+    rerank_model_name: minimax
+  review:
+    auto_accept_confidence: 0.82
+    auto_supersede_confidence: 0.9
+    max_direct_content_chars: 360
+  updater:
+    enabled: true
+    model_name: minimax
+    max_input_tokens: 6000
+    max_output_tokens: 1800
+    fact_confidence_threshold: 0.82
+    outcome_confidence_threshold: 0.86
+    timeout_seconds: 60
+    fail_open: true
+  maintenance:
+    enabled: true
+    # Optional. Enables the gateway background watcher that periodically calls
+    # the same bounded maintenance runner used by Ops Console and the memory tool.
+    automation_enabled: true
+    policy: balanced
+    layer_id: null
+    limit: 12
+    # Default is bounded automatic execution. Ops Console can still dry-run
+    # plans or reject/repair bad memories after the fact.
+    execute: true
+    tick_seconds: 300
+    interval_seconds: 21600
+    interval_hours: null
+    min_idle_seconds: 0
+    max_archive_per_run: 2
+    max_review_per_run: 8
+    max_reinforce_per_run: 6
+    min_quality_score_for_execute: 0.55
+    max_pending_review_for_execute: 30
+    run_reflection_due_jobs: true
+    include_health: true
+  onboarding:
+    enabled: true
+    # Serena-style workspace bootstrap. The runtime reads only bounded entry files,
+    # excludes env/secret/build-cache paths, scrubs accidental credentials, and
+    # queues one review item by default instead of writing directly into prompt-visible memory.
+    trigger_when_project_memory_empty: true
+    review_first: true
+    target_store_id: runtime_memory
+    target_layer_id: workspace
+    category: project_context
+    max_files: 8
+    max_total_chars: 12000
+    max_file_chars: 2500
+    priority: 0.62
+    confidence: 0.68
+    salience: 0.72
+    include_patterns:
+      - AGENTS.md
+      - README.md
+      - README_zh.md
+      - pyproject.toml
+      - package.json
+      - pnpm-lock.yaml
+      - package-lock.json
+      - yarn.lock
+      - Makefile
+      - makefile
+      - justfile
+      - Taskfile.yml
+      - tox.ini
+      - pytest.ini
+      - setup.cfg
+      - requirements*.txt
+      - docs/architecture/*.md
+      - docs/adr/*.md
+      - docs/guides/quickstart*.md
+    exclude_patterns:
+      - .env
+      - .env.*
+      - "**/.env"
+      - "**/.env.*"
+      - "**/*secret*"
+      - "**/*token*"
+      - "**/*credential*"
+      - "**/.git/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/node_modules/**"
+      - "**/__pycache__/**"
+      - "**/dist/**"
+      - "**/build/**"
+  transcript:
+    enabled: true
+    sqlite_path: ./.anvil/memory-platform/transcript.sqlite3
+    fts_enabled: true
+    transcript_context_tokens: 4000
+  prompt_snapshot:
+    enabled: true
+    store_path: ./.anvil/memory-platform/prompt-snapshots
+    ttl_days: 7
+    max_snapshots_per_thread: 10
+  session_snapshot:
+    enabled: true
+    store_path: ./.anvil/memory-platform/session-snapshots
+  update_queue:
+    enabled: true
+    debounce_seconds: 1.5
+    # Optional. Low-signal turns are batched until this many completed turns are pending.
+    min_batch_turns: 4
+    max_batch_turns: 8
+
+tool_output_budget:
+  enabled: true
+  default_token_budget: 1600
+  hard_token_budget: 4000
+  default_char_budget: 6400
+  hard_char_budget: 16000
+  artifact_directory: tool-results
+  # RTK-inspired command output compaction stays inside Anvil's tool-output
+  # budget middleware. Known noisy command families are ANSI/control cleaned,
+  # progress-collapsed, summarized, and paired with a raw artifact recovery path;
+  # unknown commands fall back to the normal budget path.
+  command_compaction_enabled: true
+  command_compaction_min_chars: 1200
+  command_compaction_max_chars: 4800
+  raw_failure_artifacts: true
+  raw_compaction_artifacts: true
+  command_profiles:
+    - test
+    - typecheck
+    - lint
+    - git
+    - package
+    - container
+    - search
+
+tool_visibility_budget:
+  enabled: true
+  visible_schema_token_budget: 12000
+  # Optional task-aware prefilter for very large visible tool catalogs.
+  # Core discovery/governance tools and explicitly promoted tools remain visible.
+  action_prefilter_enabled: true
+  action_prefilter_min_tools: 48
+  action_prefilter_max_visible: 56
+  action_prefilter_min_score: 0.25
+
+# ------------------------------------------------------------
+# Skills
+# Installed skills live in the active Anvil Home profile:
+# - ~/.anvil/skills for the default profile
+# - ~/.anvil/profiles/<name>/skills for named profiles
+# Bundled repository skills are synchronized into that directory on discovery.
+# `.bundled_manifest` prevents overwriting user-edited bundled skills.
+# `external_dirs` are read-only scan roots; writes always return to Home skills.
+# ------------------------------------------------------------
+skills_config:
+  enabled: true
+  # When true, discovery cache keys include SKILL.md path/mtime/size so
+  # manually added or edited skills appear on the next /skills read without a restart.
+  watch_enabled: true
+  external_dirs: []
+  # Valid directory skills are enabled by default. Use disabled_ids or Ops disable
+  # for opt-out governance; enabled_ids is retained for legacy compatibility only.
+  enabled_ids: []
+  disabled_ids: []
+  governance_root: null
+  quarantine_root: null
+  history_root: null
+  quarantine_on_install: true
+  allow_remote_install: true
+  curator:
+    enabled: true
+    automation_enabled: true
+    schedule: interval
+    auto_merge: true
+    auto_review: true
+    pin_protection: true
+    tick_seconds: 60
+    interval_seconds: 21600
+    interval_hours: null
+    min_idle_hours: 0.0
+    core_score_threshold: 500
+    observe_score_threshold: 20
+    observe_min_age_days: 14
+    template_promotion_enabled: true
+    template_use_threshold: 3
+    template_context_threshold: 2
+    maintenance_enabled: true
+    max_actions_per_run: 25
+    max_archive_per_run: 2
+    max_review_plan_per_run: 6
+    max_merge_plan_per_run: 3
+    max_procedure_promotions_per_run: 3
+    max_template_promotions_per_run: 3
+    auto_promote_procedures: true
+    dry_run: false
+    force: false
+
+# ------------------------------------------------------------
+# Subagents
+# ------------------------------------------------------------
+subagents:
+  enabled: true
+  max_concurrency: 3
+  max_depth: 1
+  timeout_seconds: 900
+  batch_join_timeout_seconds: 900
+  show_child_reasoning: false
+  progress_event_budget: 20
+  allow_recursive_delegation: false
+  allow_memory_write: false
+  allow_clarification: false
+
+# ------------------------------------------------------------
+# Guardrails / approvals
+# ------------------------------------------------------------
+guardrails:
+  enabled: true
+  provider: builtin
+  require_network_approval: false
+  fail_closed: true
+  default_approval_mode: suggest
+  risk_thresholds:
+    auto_allow_below: low
+    require_approval_above: medium
+    always_block: critical
+  tool_policies:
+    shell_execution:
+      approval_mode: require
+      sandbox_policy: isolated
+    filesystem_write:
+      approval_mode: suggest
+      sandbox_policy: null
+    network_request:
+      approval_mode: suggest
+      sandbox_policy: null
+    delegation:
+      approval_mode: auto
+      sandbox_policy: null
+
+# ------------------------------------------------------------
+# Uploads / document handling
+# ------------------------------------------------------------
+uploads:
+  enabled: true
+  convert_documents: true
+  pdf_converter: auto
+  ocr_strategy: local
+  ocr_enabled: true
+  max_outline_entries: 50
+  preview_line_count: 5
+  max_ocr_pages: 20
+  ocr_languages: eng+chi_sim
+
+documents:
+  enabled: true
+  providers:
+    pdf_text: [pymupdf4llm, markitdown, pypdf2]
+    pdf_ocr: [marker-pdf, tesseract]
+    office: [python-docx, python-pptx, openpyxl, markitdown]
+  export:
+    default_mode: editable
+  scratch:
+    cleanup_on_success: true
+  page_image_derivatives:
+    enabled: false
+
+# ------------------------------------------------------------
+# Coding semantics
+# static is dependency-free and always available. external_index points at a
+# generated semantic index JSON. lsp_jsonrpc can call an opt-in language server
+# command without changing the model-visible coding tools.
+# ------------------------------------------------------------
+code_semantics:
+  backend: static
+  external_index_path: null
+  lsp_command: []
+  lsp_cwd: null
+  lsp_env: {}
+  lsp_timeout_seconds: 8
+  lsp_session_idle_ttl_seconds: 300
+  lsp_stderr_max_chars: 2000
+  lsp_initialization_options: {}
+  fallback_to_static: true
+  validate_freshness: true
+  watch_default_auto_recover: true
+  watch_state_ttl_seconds: 3600
+  watch_max_entries: 128
+  watch_drift_path_limit: 20
+
+# ------------------------------------------------------------
+# Terminal backends
+# The active backend controls process sessions and capability diagnostics.
+# Enable one non-local backend only after its CLI/host/sandbox config is ready.
+# env_passthrough is exact-key only; env_prefix_passthrough is prefix based.
+# ------------------------------------------------------------
+terminal:
+  active_backend: local
+  logs_dir: null
+  backends:
+    local:
+      kind: local
+      label: Local shell
+      enabled: true
+      command_prefix: []
+      default_cwd: null
+      working_dir: null
+      env: {}
+      env_passthrough: []
+      env_prefix_passthrough: []
+      timeout_seconds: null
+      lifetime_seconds: null
+      image: null
+      host: null
+      username: null
+      sandbox_id: null
+      app: null
+      runtime: null
+      resource_limits: {}
+      sync: {}
+      mounts: []
+      notes: []
+    docker:
+      kind: docker
+      label: Docker shell
+      enabled: false
+      image: python:3.12-slim
+      working_dir: /workspace
+      env_passthrough: []
+      env_prefix_passthrough: []
+      resource_limits:
+        cpus: 2
+        memory: 4g
+      sync:
+        mode: bind_mount
+      mounts: []
+    ssh:
+      kind: ssh
+      label: SSH shell
+      enabled: false
+      host: ${ANVIL_TERMINAL_SSH_HOST}
+      username: ${ANVIL_TERMINAL_SSH_USER}
+      working_dir: ${ANVIL_TERMINAL_SSH_WORKDIR}
+      env_passthrough: []
+      env_prefix_passthrough: []
+      sync:
+        mode: remote_cwd
+      mounts: []
+    singularity:
+      kind: singularity
+      label: Singularity shell
+      enabled: false
+      image: ${ANVIL_TERMINAL_SINGULARITY_IMAGE}
+      working_dir: /workspace
+      env_passthrough: []
+      env_prefix_passthrough: []
+      sync:
+        mode: bind_mount
+      mounts: []
+    modal:
+      kind: modal
+      label: Modal shell
+      enabled: false
+      # Modal requires an operator-provided runner that accepts the final command
+      # as one appended argument, for example:
+      # command_prefix: [modal, run, anvil_modal_runner.py::main, --command]
+      command_prefix: []
+      env_passthrough: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]
+      sync:
+        mode: operator_managed
+      mounts: []
+    daytona:
+      kind: daytona
+      label: Daytona workspace
+      enabled: false
+      sandbox_id: ${ANVIL_TERMINAL_DAYTONA_SANDBOX_ID}
+      working_dir: ${ANVIL_TERMINAL_DAYTONA_WORKDIR}
+      env_passthrough: [DAYTONA_API_KEY]
+      sync:
+        mode: provider_workspace
+      mounts: []
+    vercel:
+      kind: vercel
+      label: Vercel sandbox shell
+      enabled: false
+      # Uses the official Vercel Sandbox CLI executable named `sandbox`.
+      sandbox_id: ${ANVIL_TERMINAL_VERCEL_SANDBOX_ID}
+      working_dir: ${ANVIL_TERMINAL_VERCEL_WORKDIR}
+      env_passthrough: [VERCEL_TOKEN]
+      sync:
+        mode: provider_workspace
+      mounts: []
+
+# ------------------------------------------------------------
+# Web tools
+# ------------------------------------------------------------
+web_tools:
+  # Provider order is failover order. Values can also be overridden per operation
+  # with search_providers, fetch_providers, crawl_providers, or image_providers.
+  search_providers: [tavily, exa, searxng, duckduckgo_html]
+  fetch_providers: [tavily, jina, firecrawl, direct]
+  crawl_providers: [tavily, firecrawl, direct]
+  image_providers: [searxng, wikimedia]
+  timeout_seconds: 20
+  max_results: 10
+  max_fetch_chars: 12000
+  max_crawl_pages: 20
+  max_crawl_chars: 20000
+  max_response_bytes: 2000000
+  user_agent: AnvilWebTools/1.0
+  tavily_api_key: $TAVILY_API_KEY
+  exa_api_key: $EXA_API_KEY
+  firecrawl_api_key: $FIRECRAWL_API_KEY
+  firecrawl_base_url: $FIRECRAWL_API_URL
+  jina_api_key: $JINA_API_KEY
+  searxng_base_url: $SEARXNG_BASE_URL
+
+# ------------------------------------------------------------
+# Browser tools
+# ------------------------------------------------------------
+browser_tools:
+  # Use mock only in tests/offline demos. For real browser automation, start
+  # Chrome/Edge with --remote-debugging-port=9222 and set BROWSER_CDP_URL.
+  provider: cdp_http
+  cdp_url: $BROWSER_CDP_URL
+  timeout_seconds: 20
+  navigation_wait_ms: 400
+  max_snapshot_chars: 12000
+  allow_private_urls: false
+  reuse_existing_tab: false
+  mock_pages: {}
+
+# ------------------------------------------------------------
+# Google Workspace tools
+# ------------------------------------------------------------
+google_workspace:
+  # Use provider: mock in tests/offline demos. Real Gmail/Calendar calls need
+  # an OAuth access token with the matching Google Workspace scopes.
+  provider: google
+  access_token: $GOOGLE_ACCESS_TOKEN
+  api_key: $GOOGLE_API_KEY
+  gmail_user_id: $GOOGLE_GMAIL_USER_ID
+  gmail_from: $GOOGLE_GMAIL_FROM
+  calendar_id: $GOOGLE_CALENDAR_ID
+  gmail_base_url: $GOOGLE_GMAIL_BASE_URL
+  calendar_base_url: $GOOGLE_CALENDAR_BASE_URL
+  timeout_seconds: 30
+  mock_gmail_messages: []
+  mock_gmail_labels: []
+  mock_calendar_events: []
+
+# ------------------------------------------------------------
+# Media tools
+# ------------------------------------------------------------
+media_tools:
+  timeout_seconds: 60
+  tts:
+    # Provider order is failover order. Use [mock] in tests/offline demos.
+    providers: [openai, minimax, edge]
+    max_text_chars: 4096
+    model: gpt-4o-mini-tts
+    voice: alloy
+    openai_api_key: $OPENAI_API_KEY
+  stt:
+    # OpenAI-compatible providers use /audio/transcriptions.
+    providers: [openai, groq, mistral]
+    max_file_bytes: 26214400
+    model: gpt-4o-mini-transcribe
+    openai_api_key: $OPENAI_API_KEY
+    groq_api_key: $GROQ_API_KEY
+    mistral_api_key: $MISTRAL_API_KEY
+  openai:
+    base_url: $OPENAI_BASE_URL
+  minimax:
+    api_key: $MINIMAX_API_KEY
+    model: speech-2.8-hd
+    voice_id: English_Graceful_Lady
+    base_url: https://api.minimax.io/v1/t2a_v2
+  groq:
+    base_url: https://api.groq.com/openai/v1
+  mistral:
+    base_url: https://api.mistral.ai/v1
+  edge:
+    voice: en-US-AriaNeural
+
+# ------------------------------------------------------------
+# Extensions / MCP
+# MCP servers are normal user config in the active Home `config.yaml`.
+# New Home profiles are seeded with these starter entries. Users can edit or
+# delete them, and disabled servers or servers missing required env keys are not
+# exposed to the model.
+# ------------------------------------------------------------
+mcp_servers:
+  filesystem:
+    enabled: true
+    type: stdio
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem"
+      - /path/to/allowed/files
+    env: {}
+    description: Provides filesystem access within allowed directories.
+  github:
+    enabled: true
+    type: stdio
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    description: GitHub MCP server for repository operations.
+  postgres:
+    enabled: true
+    type: stdio
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-postgres"
+      - postgresql://localhost/mydb
+    env: {}
+    description: PostgreSQL database access.
+  prompts.chat:
+    enabled: true
+    type: http
+    url: https://prompts.chat/api/mcp
+    description: Remote prompt catalog MCP endpoint.
+
+extensions:
+  skills: {}
+  plugins:
+    local_example:
+      enabled: false
+      source_path: ./plugins/example
+      skill_roots: []
+      inline_tools: []
+      resources: []
+      prompts: []
+      memory_providers:
+        - provider_id: example_memory
+          display_name: Example Memory Provider
+          kind: http
+          roles: [recall, sync]
+          settings: {}
+          enabled: false
+      catalog_metadata: {}
+
+# ------------------------------------------------------------
+# Config freshness
+# ------------------------------------------------------------
+config_freshness:
+  mtime_watch_enabled: true
+  watch_interval_seconds: 5
+
+# ------------------------------------------------------------
+# Tracing
+# Optional LangSmith/LangChain tracing bridge. Env vars with the same names are
+# also honored; config values are useful for explicit local or container runs.
+# ------------------------------------------------------------
+tracing:
+  enabled: false
+  provider: langsmith
+  project: $LANGSMITH_PROJECT
+  endpoint: $LANGSMITH_ENDPOINT
+  api_key: $LANGSMITH_API_KEY
+  fail_open: true

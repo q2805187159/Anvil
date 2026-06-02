@@ -1,0 +1,13 @@
+default_model: openai_compatible
+
+models:
+  - name: openai_compatible
+    display_name: OpenAI-Compatible
+    description: Generic OpenAI-compatible gateway example
+    model: gpt-5.4
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${CUSTOM_OPENAI_BASE_URL}
+    max_tokens: 4096
+    temperature: 0.3
+    supports_reasoning_effort: true
+    default_reasoning_effort: xhigh

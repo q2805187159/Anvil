@@ -1,0 +1,22 @@
+name: Question
+description: Ask a usage, setup, or architecture question
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to understand or accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include your OS, run mode, config shape, and commands when relevant.
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Link docs or commands you already checked.

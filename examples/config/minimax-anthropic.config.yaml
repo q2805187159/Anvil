@@ -1,0 +1,11 @@
+default_model: minimax
+
+models:
+  - name: minimax
+    display_name: MiniMax M2.7
+    description: MiniMax Anthropic-compatible example
+    model: MiniMax-M2.7
+    api_key: ${MINIMAX_API_KEY}
+    base_url: https://api.minimaxi.com/anthropic
+    max_tokens: 4096
+    temperature: 0.7

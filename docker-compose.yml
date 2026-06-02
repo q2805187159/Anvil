@@ -1,0 +1,59 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      ANVIL_HOME: /app/.anvil
+      ANVIL_GATEWAY_CORS_ORIGINS: http://127.0.0.1:${ANVIL_FRONTEND_PORT:-13200},http://localhost:${ANVIL_FRONTEND_PORT:-13200},http://127.0.0.1:3000,http://localhost:3000
+      ANVIL_PATH_BRIDGES: ${ANVIL_PATH_BRIDGES:-}
+    ports:
+      - "${ANVIL_BACKEND_PORT:-18000}:18000"
+    volumes:
+      - ./backend:/app/backend:ro
+      # The agent workspace is intentionally a dedicated state directory.
+      # Never mount the repository root here as rw: deleting this path inside
+      # the container would delete the host source tree through the bind mount.
+      - anvil_workspace:/mnt/host-workspaces/harness:rw
+      - anvil_home:/app/.anvil:rw
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.omx/reports:/app/.omx/reports:rw
+      - ./examples:/app/examples:ro
+      - ./skills:/app/skills:ro
+      - backend_state:/app/backend/.anvil
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18000/health')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:22-alpine@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        NEXT_PUBLIC_ANVIL_GATEWAY_URL: ${NEXT_PUBLIC_ANVIL_GATEWAY_URL:-http://127.0.0.1:${ANVIL_BACKEND_PORT:-18000}}
+        NEXT_PUBLIC_LANGSMITH_URL: ${NEXT_PUBLIC_LANGSMITH_URL:-https://smith.langchain.com}
+    environment:
+      NEXT_PUBLIC_ANVIL_GATEWAY_URL: ${NEXT_PUBLIC_ANVIL_GATEWAY_URL:-http://127.0.0.1:${ANVIL_BACKEND_PORT:-18000}}
+      NEXT_PUBLIC_LANGSMITH_URL: ${NEXT_PUBLIC_LANGSMITH_URL:-https://smith.langchain.com}
+    ports:
+      - "${ANVIL_FRONTEND_PORT:-13200}:13200"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  anvil_home:
+  anvil_workspace:
+  backend_state:

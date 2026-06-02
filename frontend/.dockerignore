@@ -1,0 +1,14 @@
+.next
+.next/**
+.turbo
+.turbo/**
+.vercel
+.vercel/**
+coverage
+coverage/**
+node_modules
+node_modules/**
+npm-debug.log*
+tsconfig.tsbuildinfo
+yarn-debug.log*
+yarn-error.log*
