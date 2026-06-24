@@ -5,6 +5,22 @@ from pathlib import Path
 import os
 
 
+IGNORED_SOURCE_COPY_NAMES = {
+    "build",
+    "__pycache__",
+    ".pytest_tmp",
+    ".pytest_cache",
+    ".venv",
+    "venv",
+    "env",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    "htmlcov",
+}
+
+
 def copy_backend_source_for_packaging(backend_root: Path, tmp_path: Path) -> Path:
     source_root = tmp_path / "backend-src"
 
@@ -12,8 +28,8 @@ def copy_backend_source_for_packaging(backend_root: Path, tmp_path: Path) -> Pat
         return {
             name
             for name in names
-            if name in {"build", "anvil_backend.egg-info", "__pycache__", ".pytest_tmp", ".pytest_cache"}
-            or name.endswith(".pyc")
+            if name in IGNORED_SOURCE_COPY_NAMES
+            or name.endswith((".egg-info", ".pyc", ".pyo"))
         }
 
     shutil.copytree(backend_root, source_root, ignore=ignore)

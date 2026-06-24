@@ -4,160 +4,557 @@ import React from "react";
 import {
   ActivityIcon,
   AlertTriangleIcon,
-  CheckCircle2Icon,
+  ArchiveIcon,
+  BrainCircuitIcon,
   DatabaseIcon,
-  FlameIcon,
-  GitCompareArrowsIcon,
-  ListChecksIcon,
+  EyeOffIcon,
+  HistoryIcon,
+  Link2Icon,
+  NetworkIcon,
   RefreshCwIcon,
-  RotateCwIcon,
+  RotateCcwIcon,
+  SearchIcon,
   ShieldCheckIcon,
-  SnowflakeIcon,
-  ThermometerSunIcon,
-  XCircleIcon,
+  SparklesIcon,
+  Trash2Icon,
 } from "lucide-react";
 
 import type {
-  MemoryConflictView,
-  MemoryCandidateAuditEntryView,
-  MemoryGovernancePlanItemView,
-  MemoryMaintenanceAutomationRunResponse,
-  MemoryMaintenanceAutomationStatusResponse,
-  MemoryMaintenanceResponse,
-  ProfileFacetAuditEntryView,
-  ProfileFacetView,
-  MemoryQualityIssueView,
-  MemoryRecallBenchmarkCaseResultView,
-  MemoryRecallBenchmarkRunView,
-  MemoryRecallBenchmarkSuiteView,
-  MemoryReviewItemView,
-  MemoryStalenessEntryView,
+  HCMSCausalEdgeView,
+  HCMSCausalNodeView,
+  HCMSEvidenceView,
+  HCMSMemoryView,
+  HCMSRecallItemView,
+  HCMSRelationView,
+  HCMSWhyPathView,
   MemoryStoreHealthView,
-  RecallEvidenceView,
+  MemoryTraceView,
 } from "@/src/core/contracts";
 import {
-  useApproveMemoryReview,
-  useBatchGovernMemory,
-  useBatchMemoryReview,
-  useFlushMemory,
-  useMemoryAdminAudit,
-  useMemoryConflicts,
-  useGovernMemory,
+  useDeleteHCMSMemory,
+  useHCMSMemory,
+  useHCMSMemoryDiff,
+  useHCMSMemoryHistory,
+  useHCMSMemoryRelations,
+  useHCMSMemories,
+  useHCMSRecall,
+  useHCMSWhy,
   useMemoryHealth,
-  useMemoryLayerEntries,
-  useMemoryMaintenanceAutomation,
   useMemoryOverview,
-  useMemoryBenchmarkRuns,
-  useMemoryBenchmarkSuites,
-  useMemoryProviders,
-  useMemoryReview,
-  useMemoryStaleness,
-  useProfileFacetAudit,
-  useProfileFacets,
-  useGovernProfileFacet,
-  useRebuildProfileFacets,
-  useRejectMemoryReview,
-  useResolveMemoryConflict,
-  useRunMemoryMaintenanceAutomation,
-  useRunMemoryMaintenance,
-  useRunMemoryBenchmark,
-  useRunMemoryBenchmarkSuite,
+  useMemoryTrace,
+  useGovernMemory,
 } from "@/src/core/memory/hooks";
 import { Badge, Button, ScrollArea } from "@/src/components/ui";
 import { cn } from "@/src/lib/utils";
 
-import { OpsEmptyState, OpsPanelCard } from "./shared";
+import { OpsEmptyState, OpsJsonBlock, OpsPanelCard } from "./shared";
 import type { OpsCopy } from "./types";
 
 type MemoryGovernancePanelProps = {
   copy: OpsCopy;
 };
 
-type MemoryGovernanceSection = "overview" | "profile" | "review" | "benchmark" | "maintenance";
-const MEMORY_GOVERNANCE_SECTIONS: MemoryGovernanceSection[] = ["overview", "profile", "review", "benchmark", "maintenance"];
-type MemoryOverviewDrilldown = "health" | "providers" | "audit";
-const MEMORY_OVERVIEW_DRILLDOWNS: MemoryOverviewDrilldown[] = ["health", "providers", "audit"];
+type HCMSSection = "atlas" | "recall" | "causal" | "relations" | "versions" | "evidence";
+type HCMSLifecycleAction = "archive" | "forget" | "restore";
+type HCMSAtlasSort = "updated" | "confidence" | "salience" | "evidence";
+type DistributionBucket = {
+  label: string;
+  count: number;
+  confidence: number;
+  salience: number;
+  evidenceCount: number;
+};
+type EntityBucket = {
+  label: string;
+  count: number;
+  categories: number;
+  evidenceCount: number;
+  confidence: number;
+  memoryIds: string[];
+};
+type SpectrumBucket = {
+  label: string;
+  count: number;
+  evidenceCount: number;
+  confidence: number;
+  salience: number;
+};
+type AtlasNeighbor = {
+  relation: HCMSRelationView;
+  memory: HCMSMemoryView | null | undefined;
+  memoryId: string;
+  outbound: boolean;
+};
+type AtlasGraphMemory = {
+  memoryId: string;
+  summary: string;
+  category: string;
+  confidence: number | null | undefined;
+  salience: number | null | undefined;
+  state: string | null | undefined;
+  evidenceCount: number;
+};
+type AtlasGraphNode = AtlasGraphMemory & {
+  x: number;
+  y: number;
+  size: number;
+  degree: number;
+  categoryIndex: number;
+};
+type AtlasGraphCategory = {
+  label: string;
+  centerX: number;
+  centerY: number;
+  count: number;
+  confidence: number;
+  salience: number;
+};
+type HCMSPanelText = {
+  runtime: string;
+  memories: string;
+  recallHits: string;
+  causalPaths: string;
+  engines: string;
+  issues: string;
+  stores: string;
+  filter: string;
+  state: string;
+  category: string;
+  sort: string;
+  memoryAtlas: string;
+  selectedMemory: string;
+  lifecycle: string;
+  archive: string;
+  restore: string;
+  forget: string;
+  delete: string;
+  rawScores: string;
+  queryPlaceholder: string;
+  queryResultTitle: string;
+  recallEmptyTitle: string;
+  recallEmptyBody: string;
+  recallResultBody: string;
+  engineNotesLabel: string;
+  atlasEmptyTitle: string;
+  atlasEmptyBody: string;
+  recallAction: string;
+  atlasSection: string;
+  recallSection: string;
+  causalSection: string;
+  relationsSection: string;
+  versionsSection: string;
+  evidenceSection: string;
+  visibleNodes: string;
+  categories: string;
+  graphLinks: string;
+  avgConfidence: string;
+  activeCount: string;
+  filteredSet: string;
+  selectedNode: string;
+  attachedRecords: string;
+  evidenceLabel: string;
+  atlasFilterPlaceholder: string;
+  fourStreamRecall: string;
+  causalChains: string;
+  relationGraph: string;
+  versionHistory: string;
+  traceEvidence: string;
+  latestDiff: string;
+  graphAtlas: string;
+  graphAtlasHint: string;
+  graphFocus: string;
+  categoryConstellation: string;
+  categoryConstellationHint: string;
+  selectedCluster: string;
+  selectedClusterHint: string;
+  allMemory: string;
+  nodesLabel: string;
+  edgesLabel: string;
+  linksLabel: string;
+  evidenceSpectrum: string;
+  evidenceSpectrumHint: string;
+  bandsLabel: string;
+  entityLens: string;
+  entityLensHint: string;
+  entitiesLabel: string;
+  graphNeighborhood: string;
+  density: string;
+  direction: string;
+  relationTypes: string;
+  out: string;
+  in: string;
+  top: string;
+  quality: string;
+  retention: string;
+  entries: string;
+  evidenceGaps: string;
+  stale: string;
+  updated: string;
+  selectedNodeFallback: string;
+  categoryAll: string;
+  memoryFallback: string;
+  confidenceLabel: string;
+  salienceLabel: string;
+  scoreLabel: string;
+  strengthLabel: string;
+  weightLabel: string;
+  bm25Label: string;
+  vectorLabel: string;
+  graphLabel: string;
+  temporalLabel: string;
+  outboundLabel: string;
+  inboundLabel: string;
+  linkedLabel: string;
+  relationVersionLabel: string;
+  unknownLabel: string;
+  activeLabel: string;
+  notAvailableLabel: string;
+  categoryDistribution: string;
+  lifecycleDistribution: string;
+  showAllCategoriesAria: string;
+  selectCategoryAria: string;
+  categoryTitleSuffix: string;
+  graphCategoryAria: string;
+  graphMemoryAria: string;
+  evidenceSpectrumAria: string;
+  entityMemoryAria: string;
+  relatedMemoryAria: string;
+  memoryCountLabel: string;
+  stateLabels: Record<string, string>;
+  sortLabels: Record<HCMSAtlasSort, string>;
+  shownLabel: string;
+};
+
+const HCMS_SECTIONS: HCMSSection[] = ["atlas", "recall", "causal", "relations", "versions", "evidence"];
+const HCMS_MEMORY_STATES = ["all", "active", "archived", "forgotten"];
+const HCMS_ATLAS_SORTS: HCMSAtlasSort[] = ["updated", "confidence", "salience", "evidence"];
+const ATLAS_GRAPH_CENTERS = [
+  { x: 20, y: 30 },
+  { x: 50, y: 20 },
+  { x: 78, y: 34 },
+  { x: 30, y: 70 },
+  { x: 63, y: 72 },
+  { x: 86, y: 66 },
+  { x: 14, y: 76 },
+];
+
+function isChineseCopy(copy: OpsCopy) {
+  return /[\u4e00-\u9fff]/.test(copy.memory.title) || /[\u4e00-\u9fff]/.test(copy.memory.description);
+}
+
+function panelText(copy: OpsCopy): HCMSPanelText {
+  if (isChineseCopy(copy)) {
+    return {
+      runtime: "运行模式",
+      memories: "记忆数",
+      recallHits: "召回结果",
+      causalPaths: "因果路径",
+      engines: "引擎",
+      issues: "问题",
+      stores: "存储层",
+      filter: "筛选",
+      state: "状态",
+      category: "分类",
+      sort: "排序",
+      memoryAtlas: "记忆总览",
+      selectedMemory: "当前记忆",
+      lifecycle: "生命周期操作",
+      archive: "归档",
+      restore: "恢复",
+      forget: "遗忘",
+      delete: "删除",
+      rawScores: "原始分数",
+      queryPlaceholder: "例如：为什么最近这条记忆会形成？",
+      queryResultTitle: "召回查询结果",
+      recallEmptyTitle: "没有找到匹配的 HCMS 记忆",
+      recallEmptyBody: "四流召回和因果推理已运行，但当前存储层没有返回可展示的记忆或路径。请先沉淀记忆、换一个更具体的实体/原因查询，或执行刷新/Flush 后重试。",
+      recallResultBody: "四流召回返回了可展示的记忆。点击结果可查看证据、版本和关系邻域。",
+      engineNotesLabel: "运行状态",
+      atlasEmptyTitle: "当前还没有可展示的 HCMS 记忆",
+      atlasEmptyBody: "请先沉淀记忆、刷新列表，或切换到 Recall 查询。图谱、分类和证据面板会在有记忆后自动展开。",
+      recallAction: "HCMS 召回",
+      atlasSection: "总览",
+      recallSection: "召回",
+      causalSection: "因果",
+      relationsSection: "关系",
+      versionsSection: "版本",
+      evidenceSection: "证据",
+      visibleNodes: "可见节点",
+      categories: "分类数",
+      graphLinks: "图谱连线",
+      avgConfidence: "平均置信度",
+      activeCount: "活跃",
+      filteredSet: "筛选结果",
+      selectedNode: "当前节点",
+      attachedRecords: "关联证据",
+      evidenceLabel: "证据",
+      atlasFilterPlaceholder: "实体、分类、证据",
+      fourStreamRecall: "四流召回",
+      causalChains: "因果链",
+      relationGraph: "关系图谱",
+      versionHistory: "版本历史",
+      traceEvidence: "追踪证据",
+      latestDiff: "最新 diff",
+      graphAtlas: "HCMS 图谱总览",
+      graphAtlasHint: "按分类聚类，并用关系强度组织记忆节点",
+      graphFocus: "图谱焦点",
+      categoryConstellation: "分类星图",
+      categoryConstellationHint: "按节点数、置信度、价值和证据强度综合加权",
+      selectedCluster: "当前分类簇",
+      selectedClusterHint: "点击分类簇即可直接驱动 Atlas 分类筛选。",
+      allMemory: "全部记忆",
+      nodesLabel: "节点",
+      edgesLabel: "边",
+      linksLabel: "连线",
+      evidenceSpectrum: "证据光谱",
+      evidenceSpectrumHint: "按分类观察证据密度，并叠加记忆质量",
+      bandsLabel: "频带",
+      entityLens: "实体透镜",
+      entityLensHint: "查看跨记忆共享的实体、人、系统和工件",
+      entitiesLabel: "实体",
+      graphNeighborhood: "关系邻域",
+      density: "密度",
+      direction: "方向",
+      relationTypes: "关系类型",
+      out: "出",
+      in: "入",
+      top: "最高",
+      quality: "质量",
+      retention: "保留度",
+      entries: "条目",
+      evidenceGaps: "证据缺口",
+      stale: "陈旧",
+      updated: "更新时间",
+      selectedNodeFallback: "未选中",
+      categoryAll: "全部",
+      memoryFallback: "记忆",
+      confidenceLabel: "置信度",
+      salienceLabel: "价值",
+      scoreLabel: "分数",
+      strengthLabel: "强度",
+      weightLabel: "权重",
+      bm25Label: "词法",
+      vectorLabel: "向量",
+      graphLabel: "图谱",
+      temporalLabel: "时序",
+      outboundLabel: "出向",
+      inboundLabel: "入向",
+      linkedLabel: "关联",
+      relationVersionLabel: "版本",
+      unknownLabel: "未知",
+      activeLabel: "活跃",
+      notAvailableLabel: "暂无",
+      categoryDistribution: "分类分布",
+      lifecycleDistribution: "生命周期状态",
+      showAllCategoriesAria: "显示全部分类",
+      selectCategoryAria: "选择分类",
+      categoryTitleSuffix: "条记忆",
+      graphCategoryAria: "筛选图谱分类",
+      graphMemoryAria: "选择图谱记忆",
+      evidenceSpectrumAria: "选择证据光谱",
+      entityMemoryAria: "跳转到实体记忆",
+      relatedMemoryAria: "选择关联记忆",
+      memoryCountLabel: "记忆",
+      stateLabels: {
+        all: "全部",
+        active: "活跃",
+        archived: "已归档",
+        forgotten: "已遗忘",
+        healthy: "健康",
+        ok: "正常",
+        ready: "就绪",
+        warning: "警告",
+        review: "待复核",
+        failed: "失败",
+        error: "错误",
+      },
+      sortLabels: {
+        updated: "更新时间",
+        confidence: "置信度",
+        salience: "价值",
+        evidence: "证据数",
+      },
+      shownLabel: "已显示",
+    };
+  }
+  return {
+    runtime: "runtime",
+    memories: "memories",
+    recallHits: "recall hits",
+    causalPaths: "causal paths",
+    engines: "engines",
+    issues: "issues",
+    stores: "stores",
+    filter: "Filter",
+    state: "State",
+    category: "Category",
+    sort: "Sort",
+    memoryAtlas: "Memory Atlas",
+    selectedMemory: "Selected memory",
+    lifecycle: "Lifecycle actions",
+    archive: "Archive",
+    restore: "Restore",
+    forget: "Forget",
+    delete: "Delete",
+    rawScores: "Raw scores",
+    queryPlaceholder: "why did the latest memory decision happen?",
+    queryResultTitle: "Recall query result",
+    recallEmptyTitle: "No matching HCMS memory found",
+    recallEmptyBody: "Four-stream recall and causal reasoning ran, but the current stores returned no displayable memories or paths. Capture memory first, try a more specific entity or why query, or refresh/flush and retry.",
+    recallResultBody: "Four-stream recall returned displayable memories. Select a result to inspect evidence, versions, and relation neighborhood.",
+    engineNotesLabel: "Engine state",
+    atlasEmptyTitle: "No HCMS memories are available yet",
+    atlasEmptyBody: "Flush or capture memory first, refresh the list, or run recall. Graph, category, and evidence views will appear once memories exist.",
+    recallAction: "HCMS Recall",
+    atlasSection: "Atlas",
+    recallSection: "Recall",
+    causalSection: "Causal",
+    relationsSection: "Relations",
+    versionsSection: "Versions",
+    evidenceSection: "Evidence",
+    visibleNodes: "visible nodes",
+    categories: "categories",
+    graphLinks: "graph links",
+    avgConfidence: "avg confidence",
+    activeCount: "active",
+    filteredSet: "filtered set",
+    selectedNode: "selected node",
+    attachedRecords: "attached records",
+    evidenceLabel: "evidence",
+    atlasFilterPlaceholder: "entity, category, evidence",
+    fourStreamRecall: "Four-stream recall",
+    causalChains: "Causal chains",
+    relationGraph: "Relation graph",
+    versionHistory: "Version history",
+    traceEvidence: "Trace evidence",
+    latestDiff: "Latest diff",
+    graphAtlas: "HCMS Graph Atlas",
+    graphAtlasHint: "Clustered by category with relation-weighted memory nodes",
+    graphFocus: "Graph focus",
+    categoryConstellation: "Category constellation",
+    categoryConstellationHint: "Weighted by nodes, confidence, salience, and evidence",
+    selectedCluster: "Selected cluster",
+    selectedClusterHint: "Click a cluster to drive the Atlas category filter without leaving the graph.",
+    allMemory: "All memory",
+    nodesLabel: "nodes",
+    edgesLabel: "edges",
+    linksLabel: "links",
+    evidenceSpectrum: "Evidence spectrum",
+    evidenceSpectrumHint: "Category bands sized by attached evidence and weighted by memory quality",
+    bandsLabel: "bands",
+    entityLens: "Entity lens",
+    entityLensHint: "Cross-memory entity clusters for drilling into shared people, systems, and artifacts",
+    entitiesLabel: "entities",
+    graphNeighborhood: "Graph neighborhood",
+    density: "density",
+    direction: "direction",
+    relationTypes: "relation types",
+    out: "out",
+    in: "in",
+    top: "top",
+    quality: "quality",
+    retention: "retention",
+    entries: "entries",
+    evidenceGaps: "evidence gaps",
+    stale: "stale",
+    updated: "updated",
+    selectedNodeFallback: "none",
+    categoryAll: "all",
+    memoryFallback: "memory",
+    confidenceLabel: "confidence",
+    salienceLabel: "salience",
+    scoreLabel: "score",
+    strengthLabel: "strength",
+    weightLabel: "weight",
+    bm25Label: "bm25",
+    vectorLabel: "vector",
+    graphLabel: "graph",
+    temporalLabel: "temporal",
+    outboundLabel: "outbound",
+    inboundLabel: "inbound",
+    linkedLabel: "linked",
+    relationVersionLabel: "version",
+    unknownLabel: "unknown",
+    activeLabel: "active",
+    notAvailableLabel: "n/a",
+    categoryDistribution: "Categories",
+    lifecycleDistribution: "Lifecycle states",
+    showAllCategoriesAria: "Show all categories",
+    selectCategoryAria: "Select category",
+    categoryTitleSuffix: "memories",
+    graphCategoryAria: "Filter graph category",
+    graphMemoryAria: "Select graph memory",
+    evidenceSpectrumAria: "Select evidence spectrum",
+    entityMemoryAria: "Jump to entity memory",
+    relatedMemoryAria: "Select related memory",
+    memoryCountLabel: "memories",
+    stateLabels: {
+      all: "all",
+      active: "active",
+      archived: "archived",
+      forgotten: "forgotten",
+      healthy: "healthy",
+      ok: "ok",
+      ready: "ready",
+      warning: "warning",
+      review: "review",
+      failed: "failed",
+      error: "error",
+    },
+    sortLabels: {
+      updated: "updated",
+      confidence: "confidence",
+      salience: "salience",
+      evidence: "evidence",
+    },
+    shownLabel: "shown",
+  };
+}
 
 function pct(value: number | null | undefined) {
-  return `${Math.round((value ?? 0) * 100)}%`;
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "--";
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function score(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "--";
+  }
+  return value.toFixed(3);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toneForScore(value: number | null | undefined): "success" | "warning" | "danger" | "neutral" {
+  const numeric = value ?? 0;
+  if (numeric >= 0.75) {
+    return "success";
+  }
+  if (numeric >= 0.45) {
+    return "warning";
+  }
+  if (numeric > 0) {
+    return "danger";
+  }
+  return "neutral";
 }
 
 function statusTone(status: string | null | undefined): "success" | "warning" | "danger" | "neutral" {
   const normalized = (status ?? "").toLowerCase();
-  if (normalized === "healthy" || normalized === "ok" || normalized === "ready") {
+  if (["active", "healthy", "ok", "ready"].includes(normalized)) {
     return "success";
   }
-  if (normalized === "critical" || normalized === "error" || normalized === "failed") {
-    return "danger";
-  }
-  if (normalized === "warning" || normalized === "degraded") {
+  if (["archived", "watch", "warning", "review"].includes(normalized)) {
     return "warning";
   }
-  return "neutral";
-}
-
-function actionTone(action: string | null | undefined): "success" | "warning" | "danger" | "neutral" {
-  const normalized = (action ?? "").toLowerCase();
-  if (normalized === "write") {
-    return "success";
-  }
-  if (normalized === "review") {
-    return "warning";
-  }
-  if (normalized === "skip" || normalized === "error") {
+  if (["forgotten", "critical", "failed", "error"].includes(normalized)) {
     return "danger";
   }
   return "neutral";
-}
-
-function severityTone(severity: string | null | undefined): "success" | "warning" | "danger" | "neutral" {
-  const normalized = (severity ?? "").toLowerCase();
-  if (normalized === "critical" || normalized === "error") {
-    return "danger";
-  }
-  if (normalized === "warning") {
-    return "warning";
-  }
-  return "neutral";
-}
-
-function profileFacetTone(facet: ProfileFacetView): "success" | "warning" | "danger" | "neutral" {
-  if (facet.user_state === "forgotten" || facet.state === "dropped") {
-    return "danger";
-  }
-  if (facet.state === "active") {
-    return "success";
-  }
-  if (facet.state === "provisional" || facet.source_polluted) {
-    return "warning";
-  }
-  return "neutral";
-}
-
-function profileStateLabel(copy: OpsCopy, state: string) {
-  if (state === "active") {
-    return copy.memory.active;
-  }
-  if (state === "provisional") {
-    return copy.memory.provisional;
-  }
-  if (state === "candidate") {
-    return copy.memory.candidate;
-  }
-  if (state === "dropped") {
-    return copy.memory.forgotten;
-  }
-  return state;
-}
-
-function CompactMetric({ label, value, sub }: { label: string; value: string; sub?: string | null }) {
-  return (
-    <div className="min-w-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
-      <div className="truncate text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{label}</div>
-      <div className="mt-2 truncate font-mono text-xl font-semibold leading-none text-[var(--ink)]">{value}</div>
-      {sub ? <div className="mt-1 truncate text-xs text-[var(--muted)]">{sub}</div> : null}
-    </div>
-  );
 }
 
 function formatDate(value: string | null | undefined, emptyLabel: string) {
@@ -165,364 +562,249 @@ function formatDate(value: string | null | undefined, emptyLabel: string) {
     return emptyLabel;
   }
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function formatDuration(seconds: number | null | undefined, emptyLabel: string) {
-  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) {
-    return emptyLabel;
-  }
-  const normalized = Math.max(0, Math.round(seconds));
-  if (normalized >= 86400 && normalized % 86400 === 0) {
-    return `${normalized / 86400}d`;
-  }
-  if (normalized >= 3600 && normalized % 3600 === 0) {
-    return `${normalized / 3600}h`;
-  }
-  if (normalized >= 60 && normalized % 60 === 0) {
-    return `${normalized / 60}m`;
-  }
-  return `${normalized}s`;
+function oneLine(value: string | null | undefined, fallback: string) {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  return normalized || fallback;
 }
 
-function tierTone(tier: string | null | undefined): "success" | "warning" | "danger" | "neutral" {
-  const normalized = (tier ?? "").toLowerCase();
-  if (normalized === "hot") {
-    return "success";
+function averageScore(values: Array<number | null | undefined>) {
+  const numeric = values.filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
+  if (!numeric.length) {
+    return null;
   }
-  if (normalized === "warm") {
-    return "warning";
-  }
-  if (normalized === "cold") {
-    return "danger";
-  }
-  return "neutral";
+  return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
 }
 
-function clampPct(value: number | null | undefined) {
-  return Math.min(100, Math.max(0, Math.round((value ?? 0) * 100)));
+function memoryEvidenceCount(memory: HCMSMemoryView) {
+  return memory.evidence?.length ?? 0;
 }
 
-function ScoreBar({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: number | null | undefined;
-  tone?: "success" | "warning" | "danger" | "neutral";
-}) {
-  const percent = clampPct(value);
-  const fillClass =
-    tone === "success"
+function memoryUpdatedAt(memory: HCMSMemoryView) {
+  const time = new Date(memory.updated_at || memory.created_at).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function shortMemoryLabel(memoryId: string) {
+  return memoryId.replace(/^mem[_-]?/, "").replace(/[_-]+/g, " ").trim().slice(0, 5) || memoryId.slice(0, 5);
+}
+
+function sortAtlasMemories(items: HCMSMemoryView[], sort: HCMSAtlasSort) {
+  return [...items].sort((left, right) => {
+    if (sort === "confidence") {
+      return (right.confidence ?? 0) - (left.confidence ?? 0) || memoryUpdatedAt(right) - memoryUpdatedAt(left);
+    }
+    if (sort === "salience") {
+      return (right.salience ?? 0) - (left.salience ?? 0) || memoryUpdatedAt(right) - memoryUpdatedAt(left);
+    }
+    if (sort === "evidence") {
+      return memoryEvidenceCount(right) - memoryEvidenceCount(left) || memoryUpdatedAt(right) - memoryUpdatedAt(left);
+    }
+    return memoryUpdatedAt(right) - memoryUpdatedAt(left);
+  });
+}
+
+function selectedMemoryFromResult(item: HCMSRecallItemView | null): HCMSMemoryView | null {
+  return item?.memory ?? null;
+}
+
+function CompactMetric({ label, value, sub }: { label: string; value: string; sub?: string | null }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
+      <div className="truncate text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{label}</div>
+      <div className="mt-2 truncate font-mono text-xl font-semibold leading-none text-[var(--ink)]">{value}</div>
+      {sub ? <div className="mt-1 truncate text-xs text-[var(--muted)]">{sub}</div> : null}
+    </div>
+  );
+}
+
+function ScoreBar({ label, value }: { label: string; value: number | null | undefined }) {
+  const percent = Math.min(100, Math.max(0, Math.round((value ?? 0) * 100)));
+  const fill =
+    percent >= 75
       ? "bg-[var(--success)]"
-      : tone === "warning"
+      : percent >= 45
         ? "bg-[var(--warning)]"
-        : tone === "danger"
+        : percent > 0
           ? "bg-[var(--danger)]"
-          : "bg-[var(--primary)]";
+          : "bg-[var(--line)]";
   return (
     <div className="min-w-0">
-      <div className="mb-1 flex min-w-0 items-center justify-between gap-2 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">
+      <div className="mb-1 flex items-center justify-between gap-2 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">
         <span className="truncate">{label}</span>
         <span className="font-mono">{percent}%</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-[var(--panel-muted)]">
-        <div className={cn("h-full rounded-full", fillClass)} style={{ width: `${percent}%` }} />
+        <div className={cn("h-full rounded-full", fill)} style={{ width: `${percent}%` }} />
       </div>
     </div>
   );
 }
 
-function StoreHealthCard({ copy, store }: { copy: OpsCopy; store: MemoryStoreHealthView }) {
-  const issueCount = store.issues?.length ?? 0;
+function StoreHealthStrip({ stores, text }: { stores: MemoryStoreHealthView[]; text: HCMSPanelText }) {
+  if (!stores.length) {
+    return null;
+  }
   return (
-    <article className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow-card)]">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{store.store_id}</div>
-          <div className="mt-1 truncate text-xs text-[var(--muted)]">{store.layer_id ?? copy.common.none}</div>
+    <div className="grid gap-2 lg:grid-cols-2">
+      {stores.map((store) => (
+        <div key={store.store_id} className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[var(--ink)]">{store.store_id}</div>
+              <div className="mt-1 truncate text-xs text-[var(--muted)]">{store.layer_id ?? "hcms"}</div>
+            </div>
+            <Badge tone={statusTone(store.status)}>{store.status ? (text.stateLabels[store.status] ?? store.status) : text.unknownLabel}</Badge>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <ScoreBar label={text.quality} value={store.quality_score} />
+            <ScoreBar label={text.retention} value={store.retention_average} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Badge tone="neutral">{text.entries} {store.entry_count ?? 0}</Badge>
+            <Badge tone={(store.missing_evidence_count ?? 0) > 0 ? "warning" : "neutral"}>{text.evidenceGaps} {store.missing_evidence_count ?? 0}</Badge>
+            <Badge tone={(store.stale_count ?? 0) > 0 ? "warning" : "neutral"}>{text.stale} {store.stale_count ?? 0}</Badge>
+          </div>
         </div>
-        <Badge tone={statusTone(store.status)}>{store.status ?? "unknown"}</Badge>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-        <CompactMetric label={copy.memory.qualityScore} value={pct(store.quality_score)} />
-        <CompactMetric label={copy.memory.entries} value={String(store.entry_count ?? 0)} sub={`${copy.memory.active} ${store.active_count ?? 0}`} />
-        <CompactMetric label={copy.memory.duplicates} value={String(store.duplicate_cluster_count ?? 0)} />
-        <CompactMetric label={copy.memory.tokenPressure} value={pct(store.injection_token_pressure)} />
-      </div>
-      <div className="mt-3 grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <ScoreBar label={copy.memory.retentionScore} value={store.retention_average} tone={tierTone((store.cold_count ?? 0) > (store.hot_count ?? 0) ? "cold" : "hot")} />
-        <ScoreBar label={copy.memory.tokenPressure} value={store.injection_token_pressure} tone={(store.injection_token_pressure ?? 0) > 0.82 ? "danger" : (store.injection_token_pressure ?? 0) > 0.62 ? "warning" : "neutral"} />
-        <div className="flex min-w-0 flex-wrap gap-2 md:col-span-2">
-          <Badge tone={(store.hot_count ?? 0) > 0 ? "success" : "neutral"}>
-            <FlameIcon className="size-3" />
-            {copy.memory.hot}: {store.hot_count ?? 0}
-          </Badge>
-          <Badge tone={(store.warm_count ?? 0) > 0 ? "warning" : "neutral"}>
-            <ThermometerSunIcon className="size-3" />
-            {copy.memory.warm}: {store.warm_count ?? 0}
-          </Badge>
-          <Badge tone={(store.cold_count ?? 0) > 0 ? "danger" : "neutral"}>
-            <SnowflakeIcon className="size-3" />
-            {copy.memory.cold}: {store.cold_count ?? 0}
-          </Badge>
-          <Badge tone={(store.accessed_count ?? 0) > 0 ? "accent" : "neutral"}>
-            {copy.memory.accessed}: {store.accessed_count ?? 0}
-          </Badge>
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Badge tone={(store.low_confidence_count ?? 0) > 0 ? "warning" : "neutral"}>
-          {copy.memory.lowConfidence}: {store.low_confidence_count ?? 0}
-        </Badge>
-        <Badge tone={(store.low_salience_count ?? 0) > 0 ? "warning" : "neutral"}>
-          {copy.memory.lowSalience}: {store.low_salience_count ?? 0}
-        </Badge>
-        <Badge tone={(store.missing_evidence_count ?? 0) > 0 ? "warning" : "neutral"}>
-          {copy.memory.missingEvidence}: {store.missing_evidence_count ?? 0}
-        </Badge>
-        <Badge tone={(store.conflict_count ?? 0) > 0 ? "danger" : "neutral"}>
-          {copy.memory.conflicts}: {store.conflict_count ?? 0}
-        </Badge>
-        <Badge tone={(store.stale_count ?? 0) > 0 ? "warning" : "neutral"}>
-          {copy.memory.stale}: {store.stale_count ?? 0}
-        </Badge>
-      </div>
-      {issueCount > 0 ? (
-        <div className="mt-3 space-y-2">
-          {store.issues.slice(0, 3).map((issue) => (
-            <IssueRow key={issue.issue_id} issue={issue} />
-          ))}
-        </div>
-      ) : null}
-    </article>
+      ))}
+    </div>
   );
 }
 
-function ReviewItemCard({
-  copy,
+function EvidenceRows({ evidence, emptyLabel, text }: { evidence: HCMSEvidenceView[]; emptyLabel: string; text: HCMSPanelText }) {
+  if (!evidence.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="space-y-2">
+      {evidence.map((item) => (
+        <div key={item.evidence_id} className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.type || text.evidenceLabel}</div>
+              <div className="mt-1 truncate text-xs text-[var(--muted)]">{item.source_id}</div>
+            </div>
+            <Badge tone={toneForScore(item.weight)}>{pct(item.weight)}</Badge>
+          </div>
+          <div className="mt-2 text-sm leading-6 text-[var(--muted)] [overflow-wrap:anywhere]">{item.content}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecallCard({
   item,
-  approvePending,
-  rejectPending,
-  onApprove,
-  onReject,
+  active,
+  onSelect,
+  text,
 }: {
-  copy: OpsCopy;
-  item: MemoryReviewItemView;
-  approvePending: boolean;
-  rejectPending: boolean;
-  onApprove(reviewId: string): void;
-  onReject(reviewId: string): void;
+  item: HCMSRecallItemView;
+  active: boolean;
+  onSelect(): void;
+  text: HCMSPanelText;
 }) {
+  const memory = item.memory;
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "block w-full min-w-0 rounded-lg border px-3 py-3 text-left transition-[background,border-color,box-shadow,transform] active:translate-y-px",
+        active
+          ? "border-[color-mix(in_srgb,var(--primary)_44%,var(--line))] bg-[var(--accent-soft)] shadow-[var(--shadow-card)]"
+          : "border-[var(--line)] bg-[var(--panel-muted)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))]",
+      )}
+    >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.category}</div>
-          <div className="mt-1 truncate text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
-            {item.layer_id} · {item.action} · {item.store_id}
-          </div>
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{memory?.summary || item.memory_id}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{memory?.category ?? "hcms"} · {item.memory_id}</div>
         </div>
-        <Badge tone={item.status === "pending" ? "warning" : "neutral"}>{item.status}</Badge>
-      </div>
-      <div className="mt-2 overflow-hidden text-sm leading-6 text-[var(--muted)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]">
-        {item.content}
-      </div>
-      {item.rationale ? <div className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.rationale}</div> : null}
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        <ScoreBar label={copy.memory.confidence} value={item.confidence} />
-        <ScoreBar label={copy.memory.salience} value={item.salience} />
-        <CompactMetric label={copy.memory.evidence} value={String(item.evidence_refs?.length ?? 0)} />
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" variant="primary" disabled={approvePending || rejectPending} onClick={() => onApprove(item.review_id)}>
-          <CheckCircle2Icon className="size-4" />
-          {copy.memory.approve}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={approvePending || rejectPending} onClick={() => onReject(item.review_id)}>
-          <XCircleIcon className="size-4" />
-          {copy.memory.reject}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ConflictCard({
-  copy,
-  conflict,
-  pending,
-  onResolve,
-}: {
-  copy: OpsCopy;
-  conflict: MemoryConflictView;
-  pending: boolean;
-  onResolve(conflictId: string, action: string): void;
-}) {
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{conflict.reason}</div>
-          <div className="mt-1 truncate text-xs text-[var(--muted)]">
-            {conflict.memory_id} {"<->"} {conflict.conflicting_memory_id}
-          </div>
-        </div>
-        <Badge tone={conflict.resolved ? "success" : "danger"}>{conflict.resolved ? copy.memory.resolved : copy.memory.conflicts}</Badge>
-      </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="min-w-0 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-          <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.leftMemory}</div>
-          <div className="overflow-hidden text-sm leading-6 text-[var(--ink)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:4]">
-            {conflict.memory_content || conflict.memory_id}
-          </div>
-        </div>
-        <div className="min-w-0 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-          <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.rightMemory}</div>
-          <div className="overflow-hidden text-sm leading-6 text-[var(--muted)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:4]">
-            {conflict.conflicting_content || conflict.conflicting_memory_id}
-          </div>
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" variant="secondary" disabled={pending || conflict.resolved} onClick={() => onResolve(conflict.conflict_id, "keep_both")}>
-          {copy.memory.keepBoth}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pending || conflict.resolved} onClick={() => onResolve(conflict.conflict_id, "keep_memory")}>
-          {copy.memory.keepLeft}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pending || conflict.resolved} onClick={() => onResolve(conflict.conflict_id, "keep_conflicting")}>
-          {copy.memory.keepRight}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function StalenessCard({
-  copy,
-  item,
-  pending,
-  onGovern,
-}: {
-  copy: OpsCopy;
-  item: MemoryStalenessEntryView;
-  pending: boolean;
-  onGovern(memoryId: string, action: string): void;
-}) {
-  const tone = tierTone(item.tier);
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.memory_id}</div>
-          <div className="mt-1 truncate text-xs uppercase tracking-[0.06em] text-[var(--muted)]">{item.layer_id}</div>
-        </div>
-        <Badge tone={tone}>{item.tier ?? "cold"}</Badge>
+        <Badge tone={toneForScore(item.score)}>{score(item.score)}</Badge>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <ScoreBar label={copy.memory.staleScore} value={item.stale_score} tone={(item.stale_score ?? 0) > 0.72 ? "danger" : "warning"} />
-        <ScoreBar label={copy.memory.retentionScore} value={item.retention_score} tone={tone} />
-        <ScoreBar label={copy.memory.reinforcement} value={item.reinforcement_boost} tone="success" />
-        <ScoreBar label={copy.memory.temporalDecay} value={item.temporal_decay} tone="warning" />
-      </div>
-      <div className="mt-3 text-sm leading-6 text-[var(--muted)]">{item.reason}</div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Badge tone="neutral">
-          {copy.memory.accessCount}: {item.access_count ?? 0}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.salience}: {pct(item.salience)}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.lastAccessed}: {formatDate(item.last_accessed_at, copy.common.none)}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.expiresAt}: {formatDate(item.expires_at, copy.common.none)}
-        </Badge>
+        <ScoreBar label={text.confidenceLabel} value={memory?.confidence} />
+        <ScoreBar label={text.salienceLabel} value={memory?.salience} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(item.memory_id, "reinforce")}>
-          {copy.memory.reinforceMemory}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(item.memory_id, "refresh")}>
-          <RotateCwIcon className="size-4" />
-          {copy.memory.refreshMemory}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(item.memory_id, "review")}>
-          <ListChecksIcon className="size-4" />
-          {copy.memory.reviewMemory}
-        </Button>
-        <Button size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(item.memory_id, "archive")}>
-          {copy.memory.archiveMemory}
-        </Button>
+        <Badge tone={statusTone(memory?.state)}>{memory?.state ? (text.stateLabels[memory.state] ?? memory.state) : text.unknownLabel}</Badge>
+        <Badge tone="neutral">{text.bm25Label} {score(item.raw_scores?.bm25)}</Badge>
+        <Badge tone="neutral">{text.vectorLabel} {score(item.raw_scores?.vector)}</Badge>
+        <Badge tone="neutral">{text.graphLabel} {score(item.raw_scores?.graph)}</Badge>
+        <Badge tone="neutral">{text.temporalLabel} {score(item.raw_scores?.temporal)}</Badge>
       </div>
-    </div>
+      {item.explanation ? <div className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.explanation}</div> : null}
+    </button>
   );
 }
 
-function GovernancePlanItemCard({ copy, item }: { copy: OpsCopy; item: MemoryGovernancePlanItemView }) {
+function MemoryDetail({
+  memory,
+  emptyLabel,
+  text,
+}: {
+  memory: HCMSMemoryView | null;
+  emptyLabel: string;
+  text: HCMSPanelText;
+}) {
+  if (!memory) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.memory_id}</div>
-          <div className="mt-1 truncate text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
-            {item.layer_id ?? copy.common.none} · {item.store_id}
+    <div className="space-y-3">
+      <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-[var(--ink)]">{memory.memory_id}</div>
+            <div className="mt-1 truncate text-xs text-[var(--muted)]">{memory.category} · {text.relationVersionLabel} {memory.version ?? 1}</div>
           </div>
+          <Badge tone={statusTone(memory.state)}>{memory.state ? (text.stateLabels[memory.state] ?? memory.state) : text.activeLabel}</Badge>
         </div>
-        <Badge tone={item.action === "archive" ? "danger" : item.action === "review" ? "warning" : "success"}>{item.action}</Badge>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <ScoreBar label={text.confidenceLabel} value={memory.confidence} />
+          <ScoreBar label={text.salienceLabel} value={memory.salience} />
+        </div>
+        <div className="mt-3 max-h-[190px] overflow-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 text-sm leading-6 text-[var(--ink)] [overflow-wrap:anywhere]">
+          {memory.content}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(memory.tags ?? []).slice(0, 8).map((tag) => (
+            <Badge key={tag} tone="neutral">{tag}</Badge>
+          ))}
+          {(memory.entities ?? []).slice(0, 8).map((entity) => (
+            <Badge key={entity} tone="neutral">{entity}</Badge>
+          ))}
+        </div>
       </div>
-      <div className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{item.reason}</div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-        <ScoreBar label={copy.memory.staleScore} value={item.stale_score} tone={(item.stale_score ?? 0) > 0.72 ? "danger" : "warning"} />
-        <ScoreBar label={copy.memory.retentionScore} value={item.retention_score} tone={tierTone(item.tier)} />
-        <CompactMetric label={copy.memory.accessCount} value={String(item.access_count ?? 0)} />
-      </div>
+      <EvidenceRows evidence={memory.evidence ?? []} emptyLabel={emptyLabel} text={text} />
     </div>
   );
 }
 
-function MaintenanceRunCard({ copy, run }: { copy: OpsCopy; run: MemoryMaintenanceResponse }) {
-  const before = run.health_before?.quality_score;
-  const after = run.health_after?.quality_score;
+function CausalPathCard({ path, text }: { path: HCMSWhyPathView; text: HCMSPanelText }) {
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <div className="min-w-0 truncate text-sm font-semibold text-[var(--ink)]">{run.run_id}</div>
-        <Badge tone={run.status === "completed" || run.status === "noop" ? "success" : run.status === "partial" ? "warning" : "neutral"}>
-          {run.status}
-        </Badge>
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={toneForScore(path.confidence)}>{text.confidenceLabel} {pct(path.confidence)}</Badge>
+        <Badge tone={toneForScore(path.total_strength)}>{text.strengthLabel} {score(path.total_strength)}</Badge>
+        <Badge tone="neutral">{text.nodesLabel} {path.nodes.length}</Badge>
+        <Badge tone="neutral">{text.edgesLabel} {path.edges.length}</Badge>
       </div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-        <CompactMetric label={copy.memory.pendingUpdates} value={String(run.update_queue_pending ?? 0)} />
-        <CompactMetric label={copy.memory.drainedUpdates} value={String(run.update_queue_drained ?? 0)} />
-        <CompactMetric label={copy.memory.reflectionDue} value={String(run.reflection_jobs_due ?? 0)} />
-        <CompactMetric label={copy.memory.reflectionJobs} value={String(run.reflection_jobs_run ?? 0)} />
-        <CompactMetric label={copy.memory.governanceCandidates} value={String(run.governance?.candidate_count ?? 0)} />
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
+        {path.nodes.map((node, index) => (
+          <React.Fragment key={`${node.memory_id}-${index}`}>
+            {index > 0 ? <Link2Icon className="size-4 shrink-0 text-[var(--muted)]" /> : null}
+            <CausalNodePill node={node} />
+          </React.Fragment>
+        ))}
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Badge tone={run.dry_run ? "neutral" : "success"}>{run.dry_run ? copy.memory.dryRun : copy.memory.executed}</Badge>
-        <Badge tone="neutral">
-          {copy.memory.executed}: {run.governance?.executed_count ?? 0}
-        </Badge>
-        <Badge tone={(run.governance?.skipped_count ?? 0) > 0 ? "warning" : "neutral"}>
-          {copy.memory.skipped}: {run.governance?.skipped_count ?? 0}
-        </Badge>
-        {before !== undefined || after !== undefined ? (
-          <Badge tone="neutral">
-            {copy.memory.qualityScore}: {before !== undefined ? pct(before) : "--"} → {after !== undefined ? pct(after) : "--"}
-          </Badge>
-        ) : null}
-      </div>
-      {run.errors?.length ? (
-        <div className="mt-2 space-y-1">
-          {run.errors.slice(0, 3).map((item) => (
-            <div key={item} className="text-xs text-[var(--danger)]">{item}</div>
+      {path.edges.length ? (
+        <div className="mt-3 space-y-2">
+          {path.edges.map((edge) => (
+            <CausalEdgeRow key={edge.edge_id} edge={edge} />
           ))}
         </div>
       ) : null}
@@ -530,566 +812,1420 @@ function MaintenanceRunCard({ copy, run }: { copy: OpsCopy; run: MemoryMaintenan
   );
 }
 
-function MaintenanceAutomationCard({
-  copy,
-  status,
-  latestRun,
-  pending,
-  onRunDueCheck,
-}: {
-  copy: OpsCopy;
-  status: MemoryMaintenanceAutomationStatusResponse | undefined;
-  latestRun: MemoryMaintenanceAutomationRunResponse | undefined;
-  pending: boolean;
-  onRunDueCheck(): void;
-}) {
-  const lastCounts = status?.last_counts ?? {};
-  const countEntries = Object.entries(lastCounts)
-    .filter(([, value]) => value !== null && value !== undefined)
-    .slice(0, 4);
-  const latestReport = latestRun?.report ?? null;
+function CausalNodePill({ node }: { node: HCMSCausalNodeView }) {
   return (
-    <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <span className="inline-flex max-w-full items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-xs text-[var(--ink)]">
+      <span className="truncate">{node.memory_id}</span>
+      <span className="font-mono text-[var(--muted)]">{pct(node.confidence)}</span>
+    </span>
+  );
+}
+
+function CausalEdgeRow({ edge }: { edge: HCMSCausalEdgeView }) {
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-[var(--ink)]">{edge.causal_type}</span>
+        <span className="font-mono">{pct(edge.strength)}</span>
+      </div>
+      <div className="mt-1 truncate">
+        {edge.source_event} {"->"} {edge.target_event}
+      </div>
+    </div>
+  );
+}
+
+function RelationRows({
+  relations,
+  selectedMemoryId,
+  emptyLabel,
+  text,
+}: {
+  relations: HCMSRelationView[];
+  selectedMemoryId: string | null;
+  emptyLabel: string;
+  text: HCMSPanelText;
+}) {
+  if (!relations.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="space-y-2">
+      {relations.map((relation) => (
+        <RelationCard
+          key={relation.relation_id}
+          relation={relation}
+          selectedMemoryId={selectedMemoryId}
+          text={text}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RelationCard({
+  relation,
+  selectedMemoryId,
+  text,
+}: {
+  relation: HCMSRelationView;
+  selectedMemoryId: string | null;
+  text: HCMSPanelText;
+}) {
+  const connectedMemory =
+    relation.source_memory_id === selectedMemoryId
+      ? relation.target_memory ?? relation.source_memory
+      : relation.target_memory_id === selectedMemoryId
+        ? relation.source_memory ?? relation.target_memory
+        : relation.source_memory ?? relation.target_memory;
+  const directionLabel =
+    relation.source_memory_id === selectedMemoryId
+      ? text.outboundLabel
+      : relation.target_memory_id === selectedMemoryId
+        ? text.inboundLabel
+        : text.linkedLabel;
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+      <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{copy.memory.automationStatus}</div>
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{relation.relation_type}</div>
           <div className="mt-1 truncate text-xs text-[var(--muted)]">
-            {copy.memory.nextRun}: {formatDate(status?.next_run_at, copy.common.none)}
+            {relation.source_memory_id} {"->"} {relation.target_memory_id}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={status?.enabled ? "success" : "neutral"}>
-            {status?.enabled ? copy.common.enabled : copy.common.disabled}
-          </Badge>
-          <Badge tone={status?.dry_run ? "neutral" : "success"}>
-            {status?.dry_run ? copy.memory.backgroundDryRun : copy.memory.executed}
-          </Badge>
-          <Button size="sm" variant="secondary" disabled={pending} onClick={onRunDueCheck}>
-            <RotateCwIcon className={cn("size-4", pending ? "animate-spin" : "")} />
-            {copy.memory.forceRun}
-          </Button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <Badge tone="neutral">{directionLabel}</Badge>
+          <Badge tone={toneForScore(relation.confidence)}>{text.confidenceLabel} {pct(relation.confidence)}</Badge>
+          <Badge tone={toneForScore(relation.weight)}>{text.weightLabel} {score(relation.weight)}</Badge>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <CompactMetric label={copy.memory.lastStatus} value={status?.last_status ?? latestRun?.reason ?? copy.common.none} />
-        <CompactMetric label={copy.memory.lastRun} value={formatDate(status?.last_run_at, copy.common.none)} />
-        <CompactMetric label={copy.memory.lastRunId} value={status?.last_run_id ?? latestReport?.run_id ?? copy.common.none} />
-        <CompactMetric label={copy.memory.interval} value={formatDuration(status?.interval_seconds, copy.common.none)} />
+      {connectedMemory ? (
+        <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="truncate text-xs font-semibold text-[var(--ink)]">{connectedMemory.memory_id}</div>
+          <div className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
+            {oneLine(connectedMemory.summary || connectedMemory.content, connectedMemory.memory_id)}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function VersionTimeline({
+  versions,
+  emptyLabel,
+  text,
+}: {
+  versions: NonNullable<ReturnType<typeof useHCMSMemoryHistory>["data"]>["versions"];
+  emptyLabel: string;
+  text: HCMSPanelText;
+}) {
+  if (!versions.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="space-y-2">
+      {versions.map((version) => (
+        <div key={version.version_id} className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[var(--ink)]">v{version.version}</div>
+              <div className="mt-1 truncate text-xs text-[var(--muted)]">{formatDate(version.created_at, text.notAvailableLabel)}</div>
+            </div>
+            <Badge tone="neutral">{version.reason || text.relationVersionLabel}</Badge>
+          </div>
+          <div className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{oneLine(version.summary || version.content, version.memory_id)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TraceRows({ traces, emptyLabel, text }: { traces: MemoryTraceView[]; emptyLabel: string; text: HCMSPanelText }) {
+  if (!traces.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="space-y-2">
+      {traces.map((trace) => (
+        <div key={trace.trace_id} className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[var(--ink)]">{trace.trace_kind}</div>
+              <div className="mt-1 truncate text-xs text-[var(--muted)]">{formatDate(trace.created_at, text.notAvailableLabel)}</div>
+            </div>
+            <Badge tone="neutral">{trace.evidence.length} {text.evidenceLabel}</Badge>
+          </div>
+          <div className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{trace.query ?? trace.target_id ?? trace.trace_id}</div>
+          {trace.engine_notes.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {trace.engine_notes.map((note) => (
+                <Badge key={note} tone="neutral">{note}</Badge>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function distribution(items: HCMSMemoryView[], key: "category" | "state"): DistributionBucket[] {
+  const groups = new Map<string, HCMSMemoryView[]>();
+  for (const item of items) {
+    const value = item[key] || "unknown";
+    const group = groups.get(value) ?? [];
+    group.push(item);
+    groups.set(value, group);
+  }
+  return Array.from(groups.entries())
+    .map(([label, memories]) => ({
+      label,
+      count: memories.length,
+      confidence: averageScore(memories.map((memory) => memory.confidence)) ?? 0,
+      salience: averageScore(memories.map((memory) => memory.salience)) ?? 0,
+      evidenceCount: memories.reduce((sum, memory) => sum + memoryEvidenceCount(memory), 0),
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+function stateDisplay(value: string | null | undefined, text: HCMSPanelText) {
+  return value ? (text.stateLabels[value] ?? value) : text.unknownLabel;
+}
+
+function entityDistribution(memories: HCMSMemoryView[]): EntityBucket[] {
+  const groups = new Map<
+    string,
+    {
+      memories: HCMSMemoryView[];
+      categories: Set<string>;
+    }
+  >();
+  for (const memory of memories) {
+    for (const entity of memory.entities ?? []) {
+      const label = entity.trim();
+      if (!label) {
+        continue;
+      }
+      const group = groups.get(label) ?? { memories: [], categories: new Set<string>() };
+      group.memories.push(memory);
+      group.categories.add(memory.category || "unknown");
+      groups.set(label, group);
+    }
+  }
+  return Array.from(groups.entries())
+    .map(([label, group]) => ({
+      label,
+      count: group.memories.length,
+      categories: group.categories.size,
+      evidenceCount: group.memories.reduce((sum, memory) => sum + memoryEvidenceCount(memory), 0),
+      confidence: averageScore(group.memories.map((memory) => memory.confidence)) ?? 0,
+      memoryIds: Array.from(new Set(group.memories.map((memory) => memory.memory_id))),
+    }))
+    .sort((left, right) => right.count - left.count || right.evidenceCount - left.evidenceCount || right.confidence - left.confidence || left.label.localeCompare(right.label));
+}
+
+function evidenceSpectrum(memories: HCMSMemoryView[]): SpectrumBucket[] {
+  return distribution(memories, "category")
+    .map((item) => ({
+      label: item.label,
+      count: item.count,
+      evidenceCount: item.evidenceCount,
+      confidence: item.confidence,
+      salience: item.salience,
+    }))
+    .sort((left, right) => right.evidenceCount - left.evidenceCount || right.confidence - left.confidence || left.label.localeCompare(right.label));
+}
+
+function graphMemory(memory: HCMSMemoryView): AtlasGraphMemory {
+  return {
+    memoryId: memory.memory_id,
+    summary: oneLine(memory.summary || memory.content, memory.memory_id),
+    category: memory.category || "unknown",
+    confidence: memory.confidence,
+    salience: memory.salience,
+    state: memory.state,
+    evidenceCount: memoryEvidenceCount(memory),
+  };
+}
+
+function graphPlaceholder(memoryId: string): AtlasGraphMemory {
+  return {
+    memoryId,
+    summary: memoryId,
+    category: "linked",
+    confidence: null,
+    salience: null,
+    state: "linked",
+    evidenceCount: 0,
+  };
+}
+
+function mergeGraphMemories(
+  memories: HCMSMemoryView[],
+  selectedMemory: HCMSMemoryView | null,
+  relations: HCMSRelationView[],
+) {
+  const byId = new Map<string, AtlasGraphMemory>();
+  const addMemory = (memory: HCMSMemoryView | null | undefined) => {
+    if (memory) {
+      byId.set(memory.memory_id, graphMemory(memory));
+    }
+  };
+  for (const memory of memories) {
+    addMemory(memory);
+  }
+  addMemory(selectedMemory);
+  for (const relation of relations) {
+    addMemory(relation.source_memory);
+    addMemory(relation.target_memory);
+    if (!byId.has(relation.source_memory_id)) {
+      byId.set(relation.source_memory_id, graphPlaceholder(relation.source_memory_id));
+    }
+    if (!byId.has(relation.target_memory_id)) {
+      byId.set(relation.target_memory_id, graphPlaceholder(relation.target_memory_id));
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function atlasGraphLayout(
+  memories: AtlasGraphMemory[],
+  relations: HCMSRelationView[],
+): { nodes: AtlasGraphNode[]; categories: AtlasGraphCategory[] } {
+  const degreeById = new Map<string, number>();
+  for (const relation of relations) {
+    degreeById.set(relation.source_memory_id, (degreeById.get(relation.source_memory_id) ?? 0) + 1);
+    degreeById.set(relation.target_memory_id, (degreeById.get(relation.target_memory_id) ?? 0) + 1);
+  }
+  const groups = new Map<string, AtlasGraphMemory[]>();
+  for (const memory of memories) {
+    const group = groups.get(memory.category) ?? [];
+    group.push(memory);
+    groups.set(memory.category, group);
+  }
+  const grouped = Array.from(groups.entries())
+    .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]));
+  const categories: AtlasGraphCategory[] = grouped.map(([label, group], index) => {
+    const center = ATLAS_GRAPH_CENTERS[index % ATLAS_GRAPH_CENTERS.length] ?? ATLAS_GRAPH_CENTERS[0]!;
+    return {
+      label,
+      centerX: center.x,
+      centerY: center.y,
+      count: group.length,
+      confidence: averageScore(group.map((memory) => memory.confidence)) ?? 0,
+      salience: averageScore(group.map((memory) => memory.salience)) ?? 0,
+    };
+  });
+  const nodes = grouped.flatMap(([label, group], categoryIndex) => {
+    const center = ATLAS_GRAPH_CENTERS[categoryIndex % ATLAS_GRAPH_CENTERS.length] ?? ATLAS_GRAPH_CENTERS[0]!;
+    return [...group]
+      .sort((left, right) => {
+        const leftDegree = degreeById.get(left.memoryId) ?? 0;
+        const rightDegree = degreeById.get(right.memoryId) ?? 0;
+        return rightDegree - leftDegree || (right.confidence ?? 0) - (left.confidence ?? 0) || left.memoryId.localeCompare(right.memoryId);
+      })
+      .map((memory, index) => {
+        const angle = group.length === 1 ? -Math.PI / 2 : (Math.PI * 2 * index) / group.length - Math.PI / 2;
+        const radius = group.length === 1 ? 0 : clamp(7 + group.length * 1.2, 8, 15);
+        const degree = degreeById.get(memory.memoryId) ?? 0;
+        const quality = averageScore([memory.confidence, memory.salience]) ?? 0;
+        return {
+          ...memory,
+          category: label,
+          categoryIndex,
+          degree,
+          x: clamp(center.x + Math.cos(angle) * radius, 8, 92),
+          y: clamp(center.y + Math.sin(angle) * radius, 10, 90),
+          size: clamp(44 + degree * 8 + memory.evidenceCount * 3 + quality * 12, 44, 76),
+        };
+      });
+  });
+  return { nodes, categories };
+}
+
+function DistributionBars({
+  title,
+  items,
+  emptyLabel,
+  activeLabel,
+  onSelect,
+  text,
+}: {
+  title: string;
+  items: DistributionBucket[];
+  emptyLabel: string;
+  activeLabel?: string;
+  onSelect?(label: string): void;
+  text: HCMSPanelText;
+}) {
+  const total = items.reduce((sum, item) => sum + item.count, 0) || 1;
+  if (!items.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="truncate text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{title}</div>
+        <span className="font-mono text-xs text-[var(--muted)]">{total}</span>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Badge tone="neutral">
-          {copy.memory.governancePolicy}: {status?.policy ?? copy.common.none}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.governanceCandidates}: {status?.limit ?? 0}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.errors}: {status?.last_error_count ?? status?.last_errors?.length ?? 0}
-        </Badge>
-        {countEntries.map(([key, value]) => (
-          <Badge key={key} tone="neutral">
-            {key}: {String(value)}
-          </Badge>
-        ))}
+      <div className="mt-3 space-y-2">
+        {items.slice(0, 6).map((item) => {
+          const width = Math.max(8, Math.round((item.count / total) * 100));
+          const active = activeLabel === item.label;
+          const content = (
+            <>
+              <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                <span className="truncate font-medium text-[var(--ink)]">{title === text.lifecycleDistribution ? stateDisplay(item.label, text) : item.label}</span>
+                <span className="font-mono text-[var(--muted)]">{item.count}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-[var(--panel)]">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-[width,background-color]",
+                    active ? "bg-[var(--primary)]" : "bg-[color-mix(in_srgb,var(--primary)_54%,var(--muted))]",
+                  )}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] uppercase tracking-[0.04em] text-[var(--muted)]">
+                <span className="font-mono">{text.confidenceLabel} {pct(item.confidence)}</span>
+                <span className="font-mono">{text.salienceLabel} {pct(item.salience)}</span>
+                <span className="font-mono">{text.evidenceLabel} {item.evidenceCount}</span>
+              </div>
+            </>
+          );
+          return (
+            <div key={item.label} className="min-w-0">
+              {onSelect ? (
+                <button
+                  type="button"
+                  onClick={() => onSelect(item.label)}
+                  className={cn(
+                    "block w-full min-w-0 rounded-lg px-2 py-2 text-left transition-[background,border-color,transform] active:translate-y-px",
+                    active
+                      ? "bg-[var(--accent-soft)]"
+                      : "hover:bg-[color-mix(in_srgb,var(--panel)_60%,var(--panel-muted))]",
+                  )}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className="px-2 py-2">{content}</div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      {status?.last_errors?.length ? (
-        <div className="mt-2 space-y-1">
-          {status.last_errors.slice(0, 3).map((item) => (
-            <div key={item} className="text-xs text-[var(--danger)]">{item}</div>
+    </div>
+  );
+}
+
+function CategoryConstellation({
+  items,
+  emptyLabel,
+  activeLabel,
+  onSelect,
+  text,
+}: {
+  items: DistributionBucket[];
+  emptyLabel: string;
+  activeLabel?: string;
+  onSelect(label: string): void;
+  text: HCMSPanelText;
+}) {
+  const total = items.reduce((sum, item) => sum + item.count, 0) || 1;
+  const visible = items.slice(0, 7);
+  if (!visible.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-muted)]">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{text.categoryConstellation}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{text.categoryConstellationHint}</div>
+        </div>
+        <Badge tone="neutral">{visible.length} {text.categories}</Badge>
+      </div>
+      <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,0.92fr)_minmax(220px,0.68fr)]">
+        <div className="relative min-h-[320px] overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel)]">
+          <svg className="pointer-events-none absolute inset-0 size-full" viewBox="0 0 320 320" aria-hidden="true">
+            <circle cx="160" cy="160" r="52" fill="none" stroke="var(--line)" strokeDasharray="2 8" />
+            <circle cx="160" cy="160" r="104" fill="none" stroke="var(--line)" strokeDasharray="4 10" />
+            <circle cx="160" cy="160" r="142" fill="none" stroke="var(--line)" strokeDasharray="1 12" />
+            {visible.map((item, index) => {
+              const angle = (Math.PI * 2 * index) / Math.max(visible.length, 1) - Math.PI / 2;
+              const radius = 104 + (index % 2) * 28;
+              const x = 160 + Math.cos(angle) * radius;
+              const y = 160 + Math.sin(angle) * radius;
+              return (
+                <line
+                  key={`category-line-${item.label}`}
+                  x1="160"
+                  y1="160"
+                  x2={x}
+                  y2={y}
+                  stroke="var(--primary)"
+                  strokeOpacity={activeLabel === item.label ? 0.54 : 0.22}
+                  strokeWidth={activeLabel === item.label ? 2.4 : 1.2}
+                />
+              );
+            })}
+          </svg>
+          <button
+            type="button"
+            onClick={() => onSelect("all")}
+            className={cn(
+              "absolute left-1/2 top-1/2 flex size-28 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border p-3 text-center shadow-[var(--shadow-card)] transition-[border-color,background,transform] active:translate-y-px",
+              activeLabel ? "border-[var(--line)] bg-[var(--panel-muted)]" : "border-[color-mix(in_srgb,var(--primary)_42%,var(--line))] bg-[var(--accent-soft)]",
+            )}
+            aria-label={text.showAllCategoriesAria}
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.allMemory}</span>
+            <span className="mt-1 font-mono text-2xl font-semibold leading-none text-[var(--ink)]">{total}</span>
+            <span className="mt-1 text-[10px] text-[var(--muted)]">{text.nodesLabel}</span>
+          </button>
+          {visible.map((item, index) => {
+            const active = activeLabel === item.label;
+            const angle = (Math.PI * 2 * index) / Math.max(visible.length, 1) - Math.PI / 2;
+            const radius = 104 + (index % 2) * 28;
+            const x = Math.cos(angle) * radius;
+            const y = Math.sin(angle) * radius;
+            const size = clamp(58 + (item.count / total) * 42 + item.evidenceCount * 2, 58, 94);
+            return (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => onSelect(item.label)}
+                className={cn(
+                  "absolute left-1/2 top-1/2 flex flex-col items-center justify-center rounded-full border px-2 text-center shadow-[var(--shadow-card)] transition-[border-color,background] active:opacity-90",
+                  active
+                    ? "border-[color-mix(in_srgb,var(--primary)_52%,var(--line))] bg-[var(--accent-soft)]"
+                    : "border-[var(--line)] bg-[var(--panel-muted)] hover:border-[color-mix(in_srgb,var(--primary)_32%,var(--line))] hover:bg-[var(--panel)]",
+                )}
+                style={{
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
+                }}
+                aria-label={`${text.selectCategoryAria} ${item.label}`}
+                title={`${item.label}: ${item.count} ${text.categoryTitleSuffix}`}
+              >
+                <span className="max-w-full truncate text-[11px] font-semibold text-[var(--ink)]">{item.label}</span>
+                <span className="mt-1 font-mono text-sm text-[var(--muted)]">{item.count}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="min-w-0 space-y-2">
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.selectedCluster}</div>
+            <div className="mt-2 truncate text-lg font-semibold text-[var(--ink)]">{activeLabel ?? text.categoryAll}</div>
+            <div className="mt-1 text-xs leading-5 text-[var(--muted)]">{text.selectedClusterHint}</div>
+          </div>
+          {visible.slice(0, 5).map((item) => (
+            <button
+              key={`category-rank-${item.label}`}
+              type="button"
+              onClick={() => onSelect(item.label)}
+              className={cn(
+                "block w-full rounded-lg border px-3 py-2 text-left transition-[border-color,background,transform] active:translate-y-px",
+                activeLabel === item.label
+                  ? "border-[color-mix(in_srgb,var(--primary)_42%,var(--line))] bg-[var(--accent-soft)]"
+                  : "border-[var(--line)] bg-[var(--panel)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))]",
+              )}
+            >
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate text-sm font-semibold text-[var(--ink)]">{item.label}</span>
+                <span className="font-mono text-xs text-[var(--muted)]">{item.count}</span>
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                <ScoreBar label={text.confidenceLabel} value={item.confidence} />
+                <ScoreBar label={text.salienceLabel} value={item.salience} />
+              </div>
+            </button>
           ))}
         </div>
-      ) : null}
-      {latestReport ? (
-        <div className="mt-3">
-          <MaintenanceRunCard copy={copy} run={latestReport} />
-        </div>
-      ) : null}
+      </div>
     </div>
   );
 }
 
-function BenchmarkCaseCard({ copy, item }: { copy: OpsCopy; item: MemoryRecallBenchmarkCaseResultView }) {
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.query}</div>
-          <div className="mt-1 truncate text-xs text-[var(--muted)]">{item.case_id}</div>
-        </div>
-        <Badge tone={item.passed ? "success" : "danger"}>{item.passed ? copy.memory.benchmarkPassed : copy.memory.benchmarkFailed}</Badge>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        <ScoreBar label={copy.memory.score} value={item.score} tone={item.passed ? "success" : "danger"} />
-        <CompactMetric label={copy.memory.evidence} value={String(item.evidence_count ?? item.top_evidence?.length ?? 0)} />
-        <CompactMetric label={copy.memory.falsePositives} value={String(item.false_positive_count ?? 0)} />
-      </div>
-      {item.summary ? <div className="mt-2 text-sm leading-6 text-[var(--muted)]">{item.summary}</div> : null}
-      {(item.missing_expectations?.length ?? 0) > 0 ? (
-        <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-          <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.missingExpectations}</div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {item.missing_expectations.map((value) => (
-              <Badge key={value} tone="danger">{value}</Badge>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {(item.false_positives?.length ?? 0) > 0 ? (
-        <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-          <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.falsePositives}</div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {item.false_positives.map((value) => (
-              <Badge key={value} tone="warning">{value}</Badge>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {item.top_evidence?.length ? <EvidenceList copy={copy} evidence={item.top_evidence.slice(0, 3)} /> : null}
-    </div>
-  );
-}
-
-function BenchmarkSuiteCard({
-  copy,
-  suite,
-  latestRun,
-  onRun,
-  isRunning,
+function AtlasGraphView({
+  memories,
+  relations,
+  selectedMemoryId,
+  activeCategory,
+  emptyLabel,
+  onSelectMemory,
+  onSelectCategory,
+  text,
 }: {
-  copy: OpsCopy;
-  suite: MemoryRecallBenchmarkSuiteView;
-  latestRun?: MemoryRecallBenchmarkRunView;
-  onRun: (suiteId: string) => void;
-  isRunning: boolean;
+  memories: AtlasGraphMemory[];
+  relations: HCMSRelationView[];
+  selectedMemoryId: string | null;
+  activeCategory?: string;
+  emptyLabel: string;
+  onSelectMemory(memoryId: string): void;
+  onSelectCategory(category: string): void;
+  text: HCMSPanelText;
 }) {
-  const latestPassed = latestRun?.report?.passed ?? suite.latest_passed;
-  const latestScore = latestRun?.report?.score ?? suite.latest_score;
-  const latestRunAt = latestRun?.created_at ?? suite.latest_run_at;
+  const { nodes, categories } = React.useMemo(() => atlasGraphLayout(memories, relations), [memories, relations]);
+  const nodesById = React.useMemo(() => new Map(nodes.map((node) => [node.memoryId, node])), [nodes]);
+  const visibleRelations = relations
+    .map((relation) => ({
+      relation,
+      source: nodesById.get(relation.source_memory_id),
+      target: nodesById.get(relation.target_memory_id),
+    }))
+    .filter((item): item is { relation: HCMSRelationView; source: AtlasGraphNode; target: AtlasGraphNode } => Boolean(item.source && item.target));
+  const selectedNode = selectedMemoryId ? nodesById.get(selectedMemoryId) : null;
+
+  if (!nodes.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-      <div className="flex min-w-0 items-start justify-between gap-3">
+    <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-muted)]">
+      <div className="flex flex-col gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--ink)]">{suite.name || suite.suite_id}</div>
-          <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{suite.description || suite.suite_id}</div>
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{text.graphAtlas}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{text.graphAtlasHint}</div>
         </div>
-        <Badge tone={suite.enabled ? "success" : "neutral"}>{suite.enabled ? copy.memory.active : copy.memory.inactive}</Badge>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Badge tone="neutral">
-          {copy.memory.entries}: {suite.cases?.length ?? 0}
-        </Badge>
-        {typeof latestScore === "number" ? (
-          <Badge tone={latestPassed ? "success" : "danger"}>
-            {copy.memory.latestRun}: {pct(latestScore)}
-          </Badge>
-        ) : null}
-        {latestRunAt ? <Badge tone="neutral">{new Date(latestRunAt).toLocaleString()}</Badge> : null}
-      </div>
-      <Button
-        type="button"
-        className="mt-3"
-        size="sm"
-        variant="secondary"
-        disabled={!suite.enabled || !(suite.cases?.length ?? 0) || isRunning}
-        onClick={() => onRun(suite.suite_id)}
-      >
-        <ActivityIcon className={cn("size-4", isRunning ? "animate-spin" : "")} />
-        {copy.memory.runSuite}
-      </Button>
-    </div>
-  );
-}
-
-function EvidenceList({ copy, evidence }: { copy: OpsCopy; evidence: RecallEvidenceView[] }) {
-  return (
-    <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-      <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.topEvidence}</div>
-      <div className="mt-2 space-y-2">
-        {evidence.map((item) => (
-          <div key={item.evidence_id} className="min-w-0">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <div className="min-w-0 truncate text-xs font-semibold text-[var(--ink)]">{item.source_kind}</div>
-              <Badge tone="neutral">{pct(item.final_score ?? item.score)}</Badge>
-            </div>
-            <div className="mt-1 overflow-hidden text-xs leading-5 text-[var(--muted)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
-              {item.excerpt || item.reason || item.evidence_id}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function IssueRow({ issue }: { issue: MemoryQualityIssueView }) {
-  return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <div className="min-w-0 truncate text-sm font-medium text-[var(--ink)]">{issue.kind}</div>
-        <Badge tone={severityTone(issue.severity)}>{issue.severity ?? "info"}</Badge>
-      </div>
-      <div className="mt-1 text-xs leading-5 text-[var(--muted)]">{issue.message}</div>
-      {issue.recommendation ? (
-        <div className="mt-1 text-xs leading-5 text-[var(--ink)]">{issue.recommendation}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function CandidateAuditCard({ copy, item }: { copy: OpsCopy; item: MemoryCandidateAuditEntryView }) {
-  return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={actionTone(item.action)}>{item.action}</Badge>
-            <Badge tone="neutral">
-              {copy.memory.qualityScore}: {pct(item.quality_score)}
-            </Badge>
-            <Badge tone="neutral">
-              {copy.memory.evidence}: {item.evidence_count ?? item.evidence_refs?.length ?? 0}
-            </Badge>
-          </div>
-          <div className="mt-2 line-clamp-2 text-sm leading-5 text-[var(--ink)]">{item.candidate_preview || item.category}</div>
-        </div>
-        <div className="shrink-0 text-right text-[10px] uppercase tracking-wide text-[var(--muted)]">
-          {item.created_at ? new Date(item.created_at).toLocaleString() : item.category}
-        </div>
-      </div>
-      <div className="mt-2 space-y-1 text-xs leading-5 text-[var(--muted)]">
-        <div>
-          {copy.memory.reason}: <span className="text-[var(--ink)]">{item.reason || item.quality_decision}</span>
-        </div>
-        {item.blockers?.length ? (
-          <div>
-            {copy.memory.blockers}: <span className="text-[var(--ink)]">{item.blockers.join(", ")}</span>
-          </div>
-        ) : null}
         <div className="flex flex-wrap gap-2">
-          <Badge tone="neutral">{item.store_id || item.layer_id || "memory"}</Badge>
-          <Badge tone="neutral">{item.category}</Badge>
-          {item.target_id ? <Badge tone="neutral">{item.target_id}</Badge> : null}
+          <Badge tone="neutral">{nodes.length} {text.nodesLabel}</Badge>
+          <Badge tone="neutral">{visibleRelations.length} {text.edgesLabel}</Badge>
+          <Badge tone="neutral">{categories.length} {text.categories}</Badge>
+          {selectedNode ? <Badge tone={toneForScore(selectedNode.confidence)}>{text.selectedNode} {pct(selectedNode.confidence)}</Badge> : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function ProfileFacetCard({
-  copy,
-  facet,
-  onGovern,
-  pending,
-}: {
-  copy: OpsCopy;
-  facet: ProfileFacetView;
-  onGovern: (facetId: string, action: string) => void;
-  pending: boolean;
-}) {
-  return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium text-[var(--ink)]">{facet.class_id}</span>
-            <Badge tone={profileFacetTone(facet)}>{profileStateLabel(copy, facet.state)}</Badge>
-            {facet.user_state !== "auto" ? <Badge tone="neutral">{facet.user_state}</Badge> : null}
-            {facet.prompt_visible ? <Badge tone="success">{copy.memory.profileVisible}</Badge> : null}
-            {facet.source_polluted ? <Badge tone="warning">{copy.memory.polluted}</Badge> : null}
+      <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_240px]">
+        <div className="relative min-h-[420px] overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel)]">
+          <svg className="pointer-events-none absolute inset-0 size-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <pattern id="hcms-graph-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+                <path d="M 8 0 L 0 0 0 8" fill="none" stroke="var(--line)" strokeWidth="0.18" opacity="0.5" />
+              </pattern>
+            </defs>
+            <rect width="100" height="100" fill="url(#hcms-graph-grid)" opacity="0.36" />
+            {categories.map((category) => {
+              const active = activeCategory === category.label;
+              return (
+                <circle
+                  key={`cluster-${category.label}`}
+                  cx={category.centerX}
+                  cy={category.centerY}
+                  r={clamp(13 + category.count * 2.2, 15, 25)}
+                  fill="var(--primary)"
+                  fillOpacity={active ? 0.14 : 0.05}
+                  stroke="var(--primary)"
+                  strokeOpacity={active ? 0.42 : 0.18}
+                  strokeWidth={active ? 0.7 : 0.38}
+                />
+              );
+            })}
+            {visibleRelations.map(({ relation, source, target }) => {
+              const active = relation.source_memory_id === selectedMemoryId || relation.target_memory_id === selectedMemoryId;
+              return (
+                <line
+                  key={relation.relation_id}
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  stroke="var(--primary)"
+                  strokeOpacity={active ? 0.64 : 0.25}
+                  strokeWidth={active ? clamp((relation.weight ?? 0.5) * 1.2, 0.45, 1.6) : clamp((relation.weight ?? 0.5) * 0.75, 0.28, 1)}
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            })}
+          </svg>
+          {categories.map((category) => {
+            const active = activeCategory === category.label;
+            return (
+              <button
+                key={`category-anchor-${category.label}`}
+                type="button"
+                onClick={() => onSelectCategory(category.label)}
+                className={cn(
+                  "absolute max-w-[9.5rem] -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-[var(--shadow-card)] transition-[border-color,background,transform] active:translate-y-px",
+                  active
+                    ? "border-[color-mix(in_srgb,var(--primary)_46%,var(--line))] bg-[var(--accent-soft)] text-[var(--ink)]"
+                    : "border-[var(--line)] bg-[var(--panel-muted)] text-[var(--muted)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))] hover:text-[var(--ink)]",
+                )}
+                style={{
+                  left: `${category.centerX}%`,
+                  top: `${clamp(category.centerY - 20, 4, 86)}%`,
+                }}
+                aria-label={`${text.graphCategoryAria} ${category.label}`}
+                title={`${category.label}: ${category.count} ${text.nodesLabel}`}
+              >
+                <span className="block truncate">{category.label}</span>
+              </button>
+            );
+          })}
+          {nodes.map((node) => {
+            const active = node.memoryId === selectedMemoryId;
+            const dimmed = Boolean(activeCategory && node.category !== activeCategory && !active);
+            return (
+              <button
+                key={node.memoryId}
+                type="button"
+                onClick={() => onSelectMemory(node.memoryId)}
+                className={cn(
+                  "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border px-2 text-center shadow-[var(--shadow-card)] transition-[border-color,background,opacity,transform] hover:scale-[1.03] active:scale-[0.98]",
+                  active
+                    ? "border-[color-mix(in_srgb,var(--primary)_58%,var(--line))] bg-[var(--accent-soft)] text-[var(--ink)]"
+                    : "border-[var(--line)] bg-[var(--panel-muted)] text-[var(--ink)] hover:border-[color-mix(in_srgb,var(--primary)_34%,var(--line))] hover:bg-[var(--panel)]",
+                  dimmed ? "opacity-35" : "opacity-100",
+                )}
+                style={{
+                  left: `${node.x}%`,
+                  top: `${node.y}%`,
+                  width: `${node.size}px`,
+                  height: `${node.size}px`,
+                }}
+                aria-label={`${text.graphMemoryAria} ${node.memoryId}`}
+                title={node.summary}
+              >
+                <span className="max-w-full truncate text-[10px] font-semibold leading-4">{shortMemoryLabel(node.memoryId)}</span>
+                <span className="mt-0.5 font-mono text-[9px] text-[var(--muted)]">{node.degree} {text.linksLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.graphFocus}</div>
+            <div className="mt-2 truncate text-lg font-semibold text-[var(--ink)]">{selectedNode?.summary ?? selectedMemoryId ?? text.selectedNodeFallback}</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              <ScoreBar label={text.confidenceLabel} value={selectedNode?.confidence} />
+              <ScoreBar label={text.salienceLabel} value={selectedNode?.salience} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge tone={statusTone(selectedNode?.state)}>{selectedNode?.state ?? text.memoryFallback}</Badge>
+              <Badge tone="neutral">{selectedNode?.category ?? text.category}</Badge>
+              <Badge tone="neutral">{selectedNode?.evidenceCount ?? 0} {text.evidenceLabel}</Badge>
+            </div>
           </div>
-          <div className="mt-1 truncate font-mono text-[11px] text-[var(--muted)]">{facet.key}</div>
+          <div className="space-y-2">
+            {categories.slice(0, 6).map((category) => (
+              <button
+                key={`graph-category-row-${category.label}`}
+                type="button"
+                onClick={() => onSelectCategory(category.label)}
+                className={cn(
+                  "block w-full rounded-lg border px-3 py-2 text-left transition-[border-color,background,transform] active:translate-y-px",
+                  activeCategory === category.label
+                    ? "border-[color-mix(in_srgb,var(--primary)_42%,var(--line))] bg-[var(--accent-soft)]"
+                    : "border-[var(--line)] bg-[var(--panel)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))]",
+                )}
+              >
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold text-[var(--ink)]">{category.label}</span>
+                  <span className="font-mono text-xs text-[var(--muted)]">{category.count}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--panel-muted)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--primary)]"
+                    style={{ width: `${clamp(Math.round(category.confidence * 100), 5, 100)}%` }}
+                  />
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="shrink-0 text-right font-mono text-xs text-[var(--muted)]">{(facet.stability_score ?? 0).toFixed(2)}</div>
-      </div>
-      <div className="mt-2 overflow-hidden text-xs leading-5 text-[var(--muted)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]">
-        {facet.value}
-      </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Badge tone="neutral">
-          {copy.memory.confidence}: {pct(facet.confidence)}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.salience}: {pct(facet.salience)}
-        </Badge>
-        <Badge tone="neutral">
-          {copy.memory.evidence}: {facet.evidence_refs?.length ?? 0}
-        </Badge>
-        {facet.reason ? <Badge tone="neutral">{facet.reason}</Badge> : null}
-      </div>
-      {facet.pollution_reasons?.length ? (
-        <div className="mt-2 text-xs leading-5 text-[var(--muted)]">{facet.pollution_reasons.join(", ")}</div>
-      ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {facet.user_state === "pinned" ? (
-          <Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(facet.facet_id, "unpin")}>
-            {copy.memory.unpin}
-          </Button>
-        ) : (
-          <Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(facet.facet_id, "pin")}>
-            {copy.memory.pin}
-          </Button>
-        )}
-        {facet.user_state === "forgotten" ? (
-          <Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(facet.facet_id, "reset")}>
-            {copy.memory.resetFacet}
-          </Button>
-        ) : (
-          <Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onGovern(facet.facet_id, "forget")}>
-            {copy.memory.forget}
-          </Button>
-        )}
       </div>
     </div>
   );
 }
 
-function ProfileFacetAuditRow({ item }: { item: ProfileFacetAuditEntryView }) {
+function AtlasTopologySummary({
+  memories,
+  relations,
+  text,
+}: {
+  memories: HCMSMemoryView[];
+  relations: HCMSRelationView[];
+  text: HCMSPanelText;
+}) {
+  const activeCount = memories.filter((memory) => (memory.state ?? "").toLowerCase() === "active").length;
+  const avgConfidence = averageScore(memories.map((memory) => memory.confidence));
+  const avgSalience = averageScore(memories.map((memory) => memory.salience));
+  const evidenceCount = memories.reduce((sum, memory) => sum + memoryEvidenceCount(memory), 0);
+  const categories = new Set(memories.map((memory) => memory.category || text.unknownLabel)).size;
+
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2 text-xs text-[var(--muted)]">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0 truncate text-[var(--ink)]">{item.action}</div>
-        <div className="shrink-0 font-mono">{new Date(item.created_at).toLocaleString()}</div>
-      </div>
-      <div className="mt-1 truncate font-mono">{item.facet_id}</div>
-      {item.reason ? <div className="mt-1 line-clamp-2">{item.reason}</div> : null}
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <CompactMetric label={text.visibleNodes} value={String(memories.length)} sub={`${activeCount} ${text.activeCount}`} />
+      <CompactMetric label={text.categories} value={String(categories)} sub={text.filteredSet} />
+      <CompactMetric label={text.graphLinks} value={String(relations.length)} sub={text.selectedNode} />
+      <CompactMetric label={text.avgConfidence} value={pct(avgConfidence)} sub={`${text.salienceLabel} ${pct(avgSalience)}`} />
+      <CompactMetric label={text.evidenceLabel} value={String(evidenceCount)} sub={text.attachedRecords} />
     </div>
   );
+}
+
+function EvidenceSpectrum({
+  items,
+  activeLabel,
+  emptyLabel,
+  onSelect,
+  text,
+}: {
+  items: SpectrumBucket[];
+  activeLabel?: string;
+  emptyLabel: string;
+  onSelect(label: string): void;
+  text: HCMSPanelText;
+}) {
+  if (!items.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  const maxEvidence = Math.max(...items.map((item) => item.evidenceCount), 1);
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-muted)]">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{text.evidenceSpectrum}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{text.evidenceSpectrumHint}</div>
+        </div>
+        <Badge tone="neutral">{items.length} {text.bandsLabel}</Badge>
+      </div>
+      <div className="space-y-2 p-4">
+        {items.slice(0, 6).map((item) => {
+          const active = activeLabel === item.label;
+          const evidenceWidth = clamp(Math.round((item.evidenceCount / maxEvidence) * 100), 8, 100);
+          return (
+            <button
+              key={`spectrum-${item.label}`}
+              type="button"
+              onClick={() => onSelect(item.label)}
+              className={cn(
+                "block w-full rounded-lg border px-3 py-3 text-left transition-[border-color,background,transform] active:translate-y-px",
+                active
+                  ? "border-[color-mix(in_srgb,var(--primary)_42%,var(--line))] bg-[var(--accent-soft)]"
+                  : "border-[var(--line)] bg-[var(--panel)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))]",
+              )}
+              aria-label={`${text.evidenceSpectrumAria} ${item.label}`}
+            >
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.04em] text-[var(--muted)]">
+                    <span className="font-mono">{item.count} {text.memoryCountLabel}</span>
+                    <span className="font-mono">{item.evidenceCount} {text.evidenceLabel}</span>
+                  </div>
+                </div>
+                <Badge tone={toneForScore(item.confidence)}>{pct(item.confidence)}</Badge>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--panel-muted)]">
+                <div className="h-full rounded-full bg-[var(--primary)] transition-[width]" style={{ width: `${evidenceWidth}%` }} />
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <ScoreBar label={text.confidenceLabel} value={item.confidence} />
+                <ScoreBar label={text.salienceLabel} value={item.salience} />
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EntityLens({
+  items,
+  emptyLabel,
+  onSelectMemory,
+  text,
+}: {
+  items: EntityBucket[];
+  emptyLabel: string;
+  onSelectMemory(memoryId: string): void;
+  text: HCMSPanelText;
+}) {
+  if (!items.length) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-muted)]">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{text.entityLens}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{text.entityLensHint}</div>
+        </div>
+        <Badge tone="neutral">{items.length} {text.entitiesLabel}</Badge>
+      </div>
+      <div className="grid gap-3 p-4 xl:grid-cols-[minmax(0,0.92fr)_minmax(220px,0.68fr)]">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {items.slice(0, 4).map((item) => (
+            <div key={`entity-card-${item.label}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-[var(--ink)]">{item.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.04em] text-[var(--muted)]">
+                    <span className="font-mono">{item.count} {text.memories}</span>
+                    <span className="font-mono">{item.categories} {text.categories}</span>
+                  </div>
+                </div>
+                <Badge tone={toneForScore(item.confidence)}>{pct(item.confidence)}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-2.5 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.evidenceLabel}</div>
+                  <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{item.evidenceCount}</div>
+                </div>
+                <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-2.5 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.graphLinks}</div>
+                  <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{item.memoryIds.length}</div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {item.memoryIds.slice(0, 3).map((memoryId) => (
+                  <button
+                    key={`${item.label}-${memoryId}`}
+                    type="button"
+                    onClick={() => onSelectMemory(memoryId)}
+                    className="rounded-full border border-[var(--line)] bg-[var(--panel-muted)] px-2.5 py-1 text-xs text-[var(--ink)] transition-[border-color,background,transform] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))] hover:bg-[var(--panel)] active:translate-y-px"
+                    aria-label={`${text.entityMemoryAria} ${memoryId}`}
+                  >
+                    {shortMemoryLabel(memoryId)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {items.slice(0, 6).map((item) => (
+            <div key={`entity-row-${item.label}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate text-sm font-semibold text-[var(--ink)]">{item.label}</span>
+                <span className="font-mono text-xs text-[var(--muted)]">{item.memoryIds.length}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--panel-muted)]">
+                <div
+                  className="h-full rounded-full bg-[var(--primary)]"
+                  style={{ width: `${clamp(Math.round(item.confidence * 100), 6, 100)}%` }}
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Badge tone="neutral">{item.categories} {text.categories}</Badge>
+                <Badge tone="neutral">{item.evidenceCount} {text.evidenceLabel}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MemoryAtlasCard({
+  memory,
+  active,
+  relationCount,
+  onSelect,
+  text,
+}: {
+  memory: HCMSMemoryView;
+  active: boolean;
+  relationCount: number;
+  onSelect(): void;
+  text: HCMSPanelText;
+}) {
+  const evidenceCount = memoryEvidenceCount(memory);
+  const quality = averageScore([memory.confidence, memory.salience]) ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "group block h-full w-full min-w-0 overflow-hidden rounded-lg border text-left shadow-[var(--shadow-card)] transition-[background,border-color,transform] hover:-translate-y-0.5 active:translate-y-px",
+        active
+          ? "border-[color-mix(in_srgb,var(--primary)_44%,var(--line))] bg-[var(--accent-soft)]"
+          : "border-[var(--line)] bg-[var(--panel-muted)] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))]",
+      )}
+    >
+      <div className="h-1 bg-[var(--line)]">
+        <div
+          className="h-full bg-[var(--primary)] transition-[width]"
+          style={{ width: `${clamp(Math.round(quality * 100), 4, 100)}%` }}
+        />
+      </div>
+      <div className="px-3 py-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="line-clamp-2 text-sm font-semibold leading-5 text-[var(--ink)]">{memory.summary || memory.memory_id}</div>
+            <div className="mt-1 truncate text-xs text-[var(--muted)]">{memory.category} · {memory.memory_id}</div>
+          </div>
+          <Badge tone={statusTone(memory.state)}>{memory.state ? (text.stateLabels[memory.state] ?? memory.state) : text.unknownLabel}</Badge>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <ScoreBar label={text.confidenceLabel} value={memory.confidence} />
+          <ScoreBar label={text.salienceLabel} value={memory.salience} />
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-2">
+            <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.evidenceLabel}</div>
+            <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{evidenceCount}</div>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-2">
+            <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.linksLabel}</div>
+            <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{relationCount}</div>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-2">
+            <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.quality}</div>
+            <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{pct(quality)}</div>
+          </div>
+        </div>
+        <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-2">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <span className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.updated}</span>
+            <span className="truncate font-mono text-xs text-[var(--ink)]">{formatDate(memory.updated_at, text.notAvailableLabel)}</span>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(memory.entities ?? []).slice(0, 4).map((entity) => (
+            <Badge key={entity} tone="neutral">{entity}</Badge>
+          ))}
+          {(memory.tags ?? []).slice(0, 4).map((tag) => (
+            <Badge key={tag} tone="neutral">{tag}</Badge>
+          ))}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function RelationGraph({
+  selectedMemory,
+  relations,
+  onSelect,
+  emptyLabel,
+  text,
+}: {
+  selectedMemory: HCMSMemoryView | null;
+  relations: HCMSRelationView[];
+  onSelect(memoryId: string): void;
+  emptyLabel: string;
+  text: HCMSPanelText;
+}) {
+  if (!selectedMemory) {
+    return <OpsEmptyState text={emptyLabel} />;
+  }
+  const neighbors: AtlasNeighbor[] = relations
+    .map((relation) => {
+      const outbound = relation.source_memory_id === selectedMemory.memory_id;
+      const memory = outbound ? relation.target_memory : relation.source_memory;
+      const memoryId = outbound ? relation.target_memory_id : relation.source_memory_id;
+      return {
+        relation,
+        memory,
+        memoryId,
+        outbound,
+      };
+    })
+    .filter((item) => item.memoryId !== selectedMemory.memory_id);
+  const visibleNeighbors = neighbors.slice(0, 8);
+  const strongest = neighbors.reduce<(typeof neighbors)[number] | null>(
+    (current, item) => ((item.relation.weight ?? 0) > (current?.relation.weight ?? -1) ? item : current),
+    null,
+  );
+  const outboundCount = neighbors.filter((item) => item.outbound).length;
+  const inboundCount = neighbors.length - outboundCount;
+  const relationTypes = Array.from(new Set(neighbors.map((item) => item.relation.relation_type))).slice(0, 4);
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-muted)]">
+      <div className="flex flex-col gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[var(--ink)]">{text.graphNeighborhood}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">{selectedMemory.memory_id}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone="neutral">{neighbors.length} {text.linksLabel}</Badge>
+          <Badge tone="neutral">{outboundCount} {text.out}</Badge>
+          <Badge tone="neutral">{inboundCount} {text.in}</Badge>
+          {strongest ? <Badge tone={toneForScore(strongest.relation.weight)}>{text.top} {score(strongest.relation.weight)}</Badge> : null}
+        </div>
+      </div>
+      <div className="grid min-h-[340px] gap-4 p-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="flex min-h-[280px] items-center justify-center">
+          <div className="relative flex size-[300px] items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <svg className="pointer-events-none absolute inset-0 size-full" viewBox="0 0 300 300" aria-hidden="true">
+              <circle cx="150" cy="150" r="58" fill="none" stroke="var(--line)" strokeDasharray="2 8" />
+              <circle cx="150" cy="150" r="104" fill="none" stroke="var(--line)" strokeDasharray="4 9" />
+              <circle cx="150" cy="150" r="132" fill="none" stroke="var(--line)" strokeDasharray="1 11" />
+              {visibleNeighbors.map((item, index) => {
+                const angle = (Math.PI * 2 * index) / Math.max(visibleNeighbors.length, 1) - Math.PI / 2;
+                const radius = 116 + (index % 2) * 12;
+                const x = 150 + Math.cos(angle) * radius;
+                const y = 150 + Math.sin(angle) * radius;
+                return (
+                  <line
+                    key={`line-${item.relation.relation_id}-${item.memoryId}`}
+                    x1="150"
+                    y1="150"
+                    x2={x}
+                    y2={y}
+                    stroke={item.outbound ? "var(--primary)" : "var(--muted)"}
+                    strokeOpacity={item.outbound ? 0.68 : 0.42}
+                    strokeWidth={clamp(Math.round((item.relation.weight ?? 0.4) * 4), 1, 4)}
+                  />
+                );
+              })}
+            </svg>
+            <button
+              type="button"
+              onClick={() => onSelect(selectedMemory.memory_id)}
+              className="z-[1] flex size-36 flex-col items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--primary)_36%,var(--line))] bg-[var(--accent-soft)] p-3 text-center shadow-[var(--shadow-card)] transition-transform active:translate-y-px"
+            >
+              <span className="line-clamp-2 text-xs font-semibold text-[var(--ink)]">{selectedMemory.summary || selectedMemory.memory_id}</span>
+              <span className="mt-1 font-mono text-[10px] text-[var(--muted)]">{pct(selectedMemory.confidence)}</span>
+              <span className="mt-1 rounded-full border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)]">{selectedMemory.category}</span>
+            </button>
+            {visibleNeighbors.map((item, index) => {
+              const angle = (Math.PI * 2 * index) / Math.max(visibleNeighbors.length, 1) - Math.PI / 2;
+              const radius = 116 + (index % 2) * 12;
+              const x = Math.cos(angle) * radius;
+              const y = Math.sin(angle) * radius;
+              const size = clamp(54 + (item.relation.weight ?? 0.4) * 24, 54, 76);
+              return (
+                <button
+                  key={`${item.relation.relation_id}-${item.memoryId}`}
+                  type="button"
+                  onClick={() => onSelect(item.memoryId)}
+                  className="absolute left-1/2 top-1/2 flex flex-col items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel-muted)] text-[10px] font-semibold text-[var(--ink)] shadow-[var(--shadow-card)] transition-[border-color,background] hover:border-[color-mix(in_srgb,var(--primary)_38%,var(--line))] hover:bg-[var(--panel)] active:opacity-90"
+                  style={{ width: `${size}px`, height: `${size}px`, transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))` }}
+                  title={item.memory?.summary || item.memoryId}
+                  aria-label={`${text.relatedMemoryAria} ${item.memoryId}`}
+                >
+                  <span>{shortMemoryLabel(item.memoryId)}</span>
+                  <span className="font-mono text-[9px] text-[var(--muted)]">{item.outbound ? text.out : text.in}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="min-w-0 space-y-2">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.density}</div>
+              <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{score(neighbors.length / Math.max(1, visibleNeighbors.length || 1))}</div>
+            </div>
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.direction}</div>
+              <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{outboundCount}/{inboundCount}</div>
+            </div>
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">{text.relationTypes}</div>
+              <div className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">{relationTypes.length}</div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {relationTypes.map((type) => (
+              <Badge key={type} tone="neutral">{type}</Badge>
+            ))}
+          </div>
+          {!neighbors.length ? <OpsEmptyState text={emptyLabel} /> : null}
+          {neighbors.slice(0, 6).map((item) => (
+            <button
+              key={item.relation.relation_id}
+              type="button"
+              onClick={() => onSelect(item.memoryId)}
+              className="block w-full rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-3 text-left transition-[border-color,background,transform] hover:border-[color-mix(in_srgb,var(--primary)_28%,var(--line))] active:translate-y-px"
+            >
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-[var(--ink)]">{item.relation.relation_type}</span>
+                <span className="font-mono text-xs text-[var(--muted)]">{item.outbound ? text.out : text.in} {score(item.relation.weight)}</span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-sm leading-5 text-[var(--muted)]">
+                {oneLine(item.memory?.summary || item.memory?.content, item.memoryId)}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Badge tone={toneForScore(item.relation.confidence)}>{text.confidenceLabel} {pct(item.relation.confidence)}</Badge>
+                <Badge tone="neutral">{item.memory?.category ?? text.memoryFallback}</Badge>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function sectionLabel(section: HCMSSection, text: HCMSPanelText) {
+  switch (section) {
+    case "atlas":
+      return text.atlasSection;
+    case "causal":
+      return text.causalSection;
+    case "relations":
+      return text.relationsSection;
+    case "versions":
+      return text.versionsSection;
+    case "evidence":
+      return text.evidenceSection;
+    case "recall":
+    default:
+      return text.recallSection;
+  }
 }
 
 export function MemoryGovernancePanel({ copy }: MemoryGovernancePanelProps) {
-  const [activeSection, setActiveSection] = React.useState<MemoryGovernanceSection>("overview");
-  const [activeOverviewDrilldown, setActiveOverviewDrilldown] = React.useState<MemoryOverviewDrilldown>("health");
-  const overviewVisible = activeSection === "overview";
-  const overviewHealthVisible = overviewVisible && activeOverviewDrilldown === "health";
-  const overviewProvidersVisible = overviewVisible && activeOverviewDrilldown === "providers";
-  const overviewAuditVisible = overviewVisible && activeOverviewDrilldown === "audit";
-  const profileVisible = activeSection === "profile";
-  const reviewVisible = activeSection === "review";
-  const benchmarkVisible = activeSection === "benchmark";
-  const maintenanceVisible = activeSection === "maintenance";
-  const overview = useMemoryOverview({ enabled: overviewVisible });
-  const audit = useMemoryAdminAudit({ enabled: overviewAuditVisible });
-  const health = useMemoryHealth({ enabled: overviewHealthVisible });
-  const providers = useMemoryProviders({ enabled: overviewProvidersVisible });
-  const profileEntries = useMemoryLayerEntries("user", { enabled: benchmarkVisible });
-  const workspaceEntries = useMemoryLayerEntries("workspace", { enabled: benchmarkVisible });
-  const profileFacets = useProfileFacets({ enabled: profileVisible });
-  const profileFacetAudit = useProfileFacetAudit(8, { enabled: profileVisible });
-  const review = useMemoryReview({ enabled: reviewVisible });
-  const conflicts = useMemoryConflicts({ enabled: reviewVisible });
-  const staleness = useMemoryStaleness({ enabled: maintenanceVisible });
-  const flushMemory = useFlushMemory();
-  const benchmark = useRunMemoryBenchmark();
-  const benchmarkSuites = useMemoryBenchmarkSuites({ enabled: benchmarkVisible });
-  const benchmarkRuns = useMemoryBenchmarkRuns(null, { enabled: benchmarkVisible });
-  const runBenchmarkSuite = useRunMemoryBenchmarkSuite();
-  const batchGovernMemory = useBatchGovernMemory();
-  const maintenance = useRunMemoryMaintenance();
-  const maintenanceAutomation = useMemoryMaintenanceAutomation({ enabled: maintenanceVisible });
-  const runMaintenanceAutomation = useRunMemoryMaintenanceAutomation();
-  const approveReview = useApproveMemoryReview();
-  const rejectReview = useRejectMemoryReview();
-  const batchReview = useBatchMemoryReview();
-  const resolveConflict = useResolveMemoryConflict();
+  const text = React.useMemo(() => panelText(copy), [copy]);
+  const [query, setQuery] = React.useState("");
+  const [atlasQuery, setAtlasQuery] = React.useState("");
+  const [atlasState, setAtlasState] = React.useState("all");
+  const [atlasCategory, setAtlasCategory] = React.useState("all");
+  const [atlasSort, setAtlasSort] = React.useState<HCMSAtlasSort>("updated");
+  const [activeSection, setActiveSection] = React.useState<HCMSSection>("atlas");
+  const [selectedMemoryId, setSelectedMemoryId] = React.useState<string | null>(null);
+
+  const overview = useMemoryOverview();
+  const health = useMemoryHealth();
+  const recall = useHCMSRecall();
+  const why = useHCMSWhy();
+  const trace = useMemoryTrace(null);
+  const deleteMemory = useDeleteHCMSMemory();
   const governMemory = useGovernMemory();
-  const governProfileFacet = useGovernProfileFacet();
-  const rebuildProfileFacets = useRebuildProfileFacets();
+  const hcmsMemories = useHCMSMemories({
+    query: atlasQuery,
+    state: atlasState,
+    category: atlasCategory === "all" ? null : atlasCategory,
+    layerId: "all",
+    limit: 50,
+    offset: 0,
+  });
+  const detail = useHCMSMemory(selectedMemoryId, { enabled: Boolean(selectedMemoryId) });
+  const relations = useHCMSMemoryRelations(selectedMemoryId, { enabled: Boolean(selectedMemoryId) });
+  const history = useHCMSMemoryHistory(selectedMemoryId, { enabled: Boolean(selectedMemoryId) });
+  const diff = useHCMSMemoryDiff(selectedMemoryId, { enabled: Boolean(selectedMemoryId) });
 
-  const report = health.data;
-  const stores = report?.stores ?? [];
-  const issues = report?.issues ?? [];
-  const recommendations = report?.recommendations ?? [];
-  const providerHealth = Object.entries(report?.provider_health ?? {});
-  const facetItems = profileFacets.data?.items ?? [];
-  const profilePolicy = profileFacets.data?.policy;
-  const reviewItems = review.data ?? [];
-  const candidateAudit = audit.data?.candidate_audit ?? [];
-  const conflictItems = conflicts.data ?? [];
-  const staleItems = staleness.data ?? [];
-  const hotStores = stores.reduce((total, store) => total + (store.hot_count ?? 0), 0);
-  const warmStores = stores.reduce((total, store) => total + (store.warm_count ?? 0), 0);
-  const coldStores = stores.reduce((total, store) => total + (store.cold_count ?? 0), 0);
-  const providerCount = report?.provider_count ?? (overviewProvidersVisible ? providers.data?.length : undefined);
-  const busy =
-    (overviewVisible && overview.isFetching) ||
-    (overviewHealthVisible && health.isFetching) ||
-    (overviewAuditVisible && audit.isFetching) ||
-    (overviewProvidersVisible && providers.isFetching) ||
-    (profileVisible && (profileFacets.isFetching || profileFacetAudit.isFetching)) ||
-    (reviewVisible && (review.isFetching || conflicts.isFetching)) ||
-    (benchmarkVisible && (profileEntries.isFetching || workspaceEntries.isFetching || benchmarkSuites.isFetching || benchmarkRuns.isFetching)) ||
-    (maintenanceVisible && (staleness.isFetching || maintenanceAutomation.isFetching));
-  const benchmarkCases = React.useMemo(() => {
-    const entries = [...(profileEntries.data ?? []), ...(workspaceEntries.data ?? [])];
-    return entries.slice(0, 4).map((entry, index) => {
-      const phrase = compactBenchmarkPhrase(entry.content);
-      return {
-        case_id: `ops-${entry.entry_id || index}`,
-        query: phrase || entry.category || "memory",
-        thread_id: "ops-benchmark",
-        expected_terms: phrase ? [phrase] : [entry.category],
-        expected_memory_ids: entry.memory_id ? [entry.memory_id] : entry.entry_id ? [entry.entry_id] : [],
-        expected_archive_thread_ids: [],
-        forbidden_terms: [],
-        forbidden_memory_ids: [],
-        min_score: 0.5,
-      };
+  const items = React.useMemo(
+    () => (recall.data?.items ?? []).filter((item) => item.memory_id !== deleteMemory.data?.memory_id),
+    [deleteMemory.data?.memory_id, recall.data?.items],
+  );
+  const atlasMemories = React.useMemo(
+    () => (hcmsMemories.data?.items ?? []).filter((memory) => memory.memory_id !== deleteMemory.data?.memory_id),
+    [deleteMemory.data?.memory_id, hcmsMemories.data?.items],
+  );
+  const sortedAtlasMemories = React.useMemo(
+    () => sortAtlasMemories(atlasMemories, atlasSort),
+    [atlasMemories, atlasSort],
+  );
+  const categoryDistribution = React.useMemo(() => distribution(atlasMemories, "category"), [atlasMemories]);
+  const stateDistribution = React.useMemo(() => distribution(atlasMemories, "state"), [atlasMemories]);
+  const entityBuckets = React.useMemo(() => entityDistribution(atlasMemories), [atlasMemories]);
+  const evidenceBands = React.useMemo(() => evidenceSpectrum(atlasMemories), [atlasMemories]);
+  const atlasCategories = React.useMemo(() => {
+    const labels = new Set(categoryDistribution.map((item) => item.label));
+    if (atlasCategory !== "all") {
+      labels.add(atlasCategory);
+    }
+    return ["all", ...Array.from(labels).sort((a, b) => a.localeCompare(b))];
+  }, [atlasCategory, categoryDistribution]);
+  const selectedItem = React.useMemo(
+    () => items.find((item) => item.memory_id === selectedMemoryId) ?? items[0] ?? null,
+    [items, selectedMemoryId],
+  );
+  const selectedAtlasMemory = React.useMemo(
+    () => sortedAtlasMemories.find((memory) => memory.memory_id === selectedMemoryId) ?? sortedAtlasMemories[0] ?? null,
+    [selectedMemoryId, sortedAtlasMemories],
+  );
+  const selectedMemory = detail.data?.memory ?? selectedMemoryFromResult(selectedItem) ?? selectedAtlasMemory;
+  const selectedMemoryState = (selectedMemory?.state ?? "").toLowerCase();
+  const lifecyclePending = deleteMemory.isPending || governMemory.isPending;
+  const canArchiveSelected = Boolean(selectedMemoryId) && !["archived", "forgotten"].includes(selectedMemoryState);
+  const canForgetSelected = Boolean(selectedMemoryId) && selectedMemoryState !== "forgotten";
+  const canRestoreSelected = Boolean(selectedMemoryId) && ["archived", "forgotten"].includes(selectedMemoryState);
+  const stores = health.data?.stores ?? [];
+  const engineHealth = Object.entries(health.data?.engine_health ?? {});
+  const relationItems = relations.data?.relations ?? [];
+  const graphMemories = React.useMemo(
+    () => mergeGraphMemories(atlasMemories, selectedMemory ?? null, relationItems),
+    [atlasMemories, relationItems, selectedMemory],
+  );
+  const relationCountByMemoryId = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const relation of relationItems) {
+      counts.set(relation.source_memory_id, (counts.get(relation.source_memory_id) ?? 0) + 1);
+      counts.set(relation.target_memory_id, (counts.get(relation.target_memory_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [relationItems]);
+  const notes = [
+    ...(recall.data?.engine_notes ?? []),
+    ...(why.data?.engine_notes ?? []),
+    ...(detail.data?.engine_notes ?? []),
+    ...(relations.data?.engine_notes ?? []),
+  ];
+  const causalPathCount = why.data?.paths?.length ?? 0;
+  const hasQueryResponse = Boolean(recall.data || why.data);
+  const hasQueryResults = items.length > 0 || causalPathCount > 0;
+
+  React.useEffect(() => {
+    const firstMemoryId = items[0]?.memory_id ?? sortedAtlasMemories[0]?.memory_id;
+    if (!selectedMemoryId && firstMemoryId) {
+      setSelectedMemoryId(firstMemoryId);
+    }
+  }, [items, selectedMemoryId, sortedAtlasMemories]);
+
+  function runRecall() {
+    const normalized = query.trim();
+    if (!normalized) {
+      return;
+    }
+    void recall.mutateAsync({ query: normalized, limit: 10 });
+    void why.mutateAsync({ query: normalized, limit: 4 });
+    void trace.mutateAsync({ targetId: selectedMemoryId, limit: 12 });
+  }
+
+  function refreshAll() {
+    void overview.refetch();
+    void health.refetch();
+    void hcmsMemories.refetch();
+    void trace.mutateAsync({ targetId: selectedMemoryId, limit: 12 });
+    if (query.trim()) {
+      runRecall();
+    }
+  }
+
+  async function deleteSelectedMemory() {
+    if (!selectedMemoryId || lifecyclePending) {
+      return;
+    }
+    const deletedId = selectedMemoryId;
+    await deleteMemory.mutateAsync(deletedId);
+    setSelectedMemoryId((current) => (current === deletedId ? null : current));
+    void overview.refetch();
+    void health.refetch();
+    void hcmsMemories.refetch();
+  }
+
+  async function governSelectedMemory(action: HCMSLifecycleAction) {
+    if (!selectedMemoryId || lifecyclePending) {
+      return;
+    }
+    await governMemory.mutateAsync({
+      memoryId: selectedMemoryId,
+      action,
+      reason: `HCMS lifecycle ${action} from Memory Governance panel`,
     });
-  }, [profileEntries.data, workspaceEntries.data]);
-
-  async function refreshAll() {
-    if (overviewVisible) {
-      const refetches: Array<Promise<unknown>> = [overview.refetch()];
-      if (overviewHealthVisible) {
-        refetches.push(health.refetch());
-      }
-      if (overviewAuditVisible) {
-        refetches.push(audit.refetch());
-      }
-      if (overviewProvidersVisible) {
-        refetches.push(providers.refetch());
-      }
-      await Promise.all(refetches);
-      return;
-    }
-    if (profileVisible) {
-      await Promise.all([profileFacets.refetch(), profileFacetAudit.refetch()]);
-      return;
-    }
-    if (reviewVisible) {
-      await Promise.all([review.refetch(), conflicts.refetch()]);
-      return;
-    }
-    if (benchmarkVisible) {
-      await Promise.all([profileEntries.refetch(), workspaceEntries.refetch(), benchmarkSuites.refetch(), benchmarkRuns.refetch()]);
-      return;
-    }
-    if (maintenanceVisible) {
-      await Promise.all([staleness.refetch(), maintenanceAutomation.refetch()]);
-    }
-  }
-
-  function runMaintenance(dryRun: boolean) {
-    void maintenance.mutateAsync({
-      dry_run: dryRun,
-      policy: "balanced",
-      layer_id: null,
-      limit: 12,
-      source: "ops",
-      run_reflection_due_jobs: true,
-    });
-  }
-
-  function runMaintenanceDueCheck() {
-    void runMaintenanceAutomation.mutateAsync({ force_run: true });
-  }
-
-  function approveReviewItem(reviewId: string) {
-    void approveReview.mutateAsync(reviewId);
-  }
-
-  function rejectReviewItem(reviewId: string) {
-    void rejectReview.mutateAsync(reviewId);
-  }
-
-  function batchReviewItems(action: "approve" | "reject") {
-    const ids = reviewItems.map((item) => item.review_id).filter(Boolean);
-    if (!ids.length) {
-      return;
-    }
-    void batchReview.mutateAsync(action === "approve" ? { approve: ids, reject: [] } : { approve: [], reject: ids });
-  }
-
-  function resolveConflictItem(conflictId: string, action: string) {
-    void resolveConflict.mutateAsync({ conflictId, action });
-  }
-
-  function governStaleMemory(memoryId: string, action: string) {
-    void governMemory.mutateAsync({ memoryId, action });
-  }
-
-  function governFacet(facetId: string, action: string) {
-    void governProfileFacet.mutateAsync({ facetId, action, reason: `ops profile facet ${action}` });
-  }
-
-  function runGovernancePlan(dryRun: boolean) {
-    void batchGovernMemory.mutateAsync({
-      policy: "balanced",
-      layer_id: null,
-      limit: 12,
-      dry_run: dryRun,
-      source: "ops",
-    });
-  }
-
-  function runStoredBenchmarkSuite(suiteId: string) {
-    void runBenchmarkSuite.mutateAsync({ suiteId, evidenceLimit: 4 });
+    void overview.refetch();
+    void health.refetch();
+    void hcmsMemories.refetch();
   }
 
   return (
-    <ScrollArea className="h-full min-h-0" hideHorizontalScrollbar>
-      <div className="space-y-4 pr-2">
-        <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5 shadow-[var(--shadow-card)]">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <ScrollArea className="h-full">
+      <div className="space-y-4 p-4">
+        <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow-card)]">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <DatabaseIcon className="size-4 text-[var(--primary)]" />
-                <h2 className="text-base font-semibold text-[var(--ink)]">{copy.memory.title}</h2>
+              <div className="flex min-w-0 items-center gap-2">
+                <BrainCircuitIcon className="size-5 shrink-0 text-[var(--primary)]" />
+                <h2 className="truncate text-base font-semibold text-[var(--ink)]">{copy.memory.title}</h2>
               </div>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">{copy.memory.description}</p>
             </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <Button type="button" size="sm" variant="secondary" onClick={() => void refreshAll()} disabled={busy}>
-                <RefreshCwIcon className={cn("size-4", busy ? "animate-spin" : "")} />
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="secondary" onClick={refreshAll} disabled={overview.isFetching || health.isFetching || recall.isPending || why.isPending}>
+                <RefreshCwIcon className={cn("size-4", overview.isFetching || health.isFetching ? "animate-spin" : "")} />
                 {copy.memory.refresh}
-              </Button>
-              <Button type="button" size="sm" variant="primary" onClick={() => void flushMemory.mutateAsync({})} disabled={flushMemory.isPending}>
-                <RotateCwIcon className={cn("size-4", flushMemory.isPending ? "animate-spin" : "")} />
-                {copy.memory.flush}
               </Button>
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <CompactMetric label={copy.memory.health} value={report?.status ?? copy.common.loading} />
-            <CompactMetric label={copy.memory.qualityScore} value={report ? pct(report.quality_score) : "--"} />
-            <CompactMetric label={copy.memory.stores} value={String(overview.data?.store_count ?? stores.length)} />
-            <CompactMetric label={copy.memory.pendingReview} value={String(report?.pending_review_count ?? reviewItems.length)} />
-            <CompactMetric label={copy.memory.conflicts} value={String(report?.conflict_count ?? conflictItems.length)} />
-            <CompactMetric label={copy.memory.archiveTurns} value={String(report?.archive_turn_count ?? overview.data?.archive_turn_count ?? 0)} />
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <CompactMetric label={text.runtime} value={overview.data?.runtime_mode ?? "hcms"} sub={overview.data?.active_engine_id ?? "hcms"} />
+            <CompactMetric label={copy.memory.health} value={health.data?.status ?? copy.common.loading} />
+            <CompactMetric label={copy.memory.qualityScore} value={pct(health.data?.quality_score)} />
+            <CompactMetric label={text.memories} value={String(hcmsMemories.data?.total ?? atlasMemories.length)} sub={`${atlasMemories.length} ${text.shownLabel}`} />
+            <CompactMetric label={text.recallHits} value={String(items.length)} sub={recall.data?.metrics ? `${recall.data.metrics.last_latency_ms ?? 0}ms` : null} />
+            <CompactMetric label={text.causalPaths} value={String(why.data?.paths?.length ?? 0)} />
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2 lg:flex-row">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">HCMS query</span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    runRecall();
+                  }
+                }}
+                className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)]"
+                placeholder={text.queryPlaceholder}
+              />
+            </label>
+            <Button type="button" variant="primary" disabled={!query.trim() || recall.isPending || why.isPending} onClick={runRecall}>
+              <SearchIcon className={cn("size-4", recall.isPending || why.isPending ? "animate-spin" : "")} />
+              {text.recallAction}
+            </Button>
+          </div>
+
+          {hasQueryResponse ? (
+            <div className={cn(
+              "mt-3 rounded-lg border px-3 py-3",
+              hasQueryResults
+                ? "border-[var(--success)]/25 bg-[color-mix(in_srgb,var(--success)_10%,transparent)]"
+                : "border-[var(--warning)]/25 bg-[var(--warning-soft)]",
+            )}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.queryResultTitle}</div>
+                  <div className="mt-1 text-sm font-semibold text-[var(--ink)]">
+                    {hasQueryResults
+                      ? `${items.length} ${text.recallHits} · ${causalPathCount} ${text.causalPaths}`
+                      : text.recallEmptyTitle}
+                  </div>
+                </div>
+                <Badge tone={hasQueryResults ? "success" : "warning"}>
+                  {recall.data?.metrics ? `${recall.data.metrics.last_latency_ms ?? 0}ms` : text.runtime}
+                </Badge>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                {hasQueryResults ? text.recallResultBody : text.recallEmptyBody}
+              </p>
+              {notes.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge tone="neutral">
+                    <SparklesIcon className="size-3" />
+                    {text.engineNotesLabel}
+                  </Badge>
+                  {notes.slice(0, 3).map((note) => (
+                    <Badge key={note} tone="neutral">{note}</Badge>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Badge tone={engineHealth.length ? "success" : "neutral"}>
+              <ShieldCheckIcon className="size-3" />
+              {text.engines} {engineHealth.length || 1}
+            </Badge>
+            <Badge tone={(health.data?.issues?.length ?? 0) > 0 ? "warning" : "success"}>
+              <AlertTriangleIcon className="size-3" />
+              {text.issues} {health.data?.issues?.length ?? 0}
+            </Badge>
+            <Badge tone="neutral">
+              <DatabaseIcon className="size-3" />
+              {text.stores} {overview.data?.store_count ?? stores.length}
+            </Badge>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <Badge tone={statusTone(report?.status)}>
-              {copy.memory.health}: {report?.status ?? copy.common.loading}
-            </Badge>
-            <Badge tone={(report?.stale_count ?? staleItems.length ?? 0) > 0 ? "warning" : "neutral"}>
-              {copy.memory.stale}: {report?.stale_count ?? staleItems.length ?? 0}
-            </Badge>
-            <Badge tone="neutral">
-              {copy.memory.providers}: {providerCount ?? "--"}
-            </Badge>
-            <Badge tone={hotStores ? "success" : "neutral"}>
-              <FlameIcon className="size-3" />
-              {copy.memory.hot}: {hotStores}
-            </Badge>
-            <Badge tone={warmStores ? "warning" : "neutral"}>
-              <ThermometerSunIcon className="size-3" />
-              {copy.memory.warm}: {warmStores}
-            </Badge>
-            <Badge tone={coldStores ? "danger" : "neutral"}>
-              <SnowflakeIcon className="size-3" />
-              {copy.memory.cold}: {coldStores}
-            </Badge>
-            {report?.generated_at ? (
-              <Badge tone="neutral">
-                {copy.memory.generatedAt}: {new Date(report.generated_at).toLocaleString()}
-              </Badge>
-            ) : null}
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            {MEMORY_GOVERNANCE_SECTIONS.map((section) => (
+            {HCMS_SECTIONS.map((section) => (
               <Button
                 key={section}
                 type="button"
@@ -1097,396 +2233,290 @@ export function MemoryGovernancePanel({ copy }: MemoryGovernancePanelProps) {
                 variant={activeSection === section ? "primary" : "secondary"}
                 onClick={() => setActiveSection(section)}
               >
-                {memoryGovernanceSectionLabel(copy, section)}
+                {section === "atlas" ? <NetworkIcon className="size-4" /> : section === "causal" ? <BrainCircuitIcon className="size-4" /> : section === "relations" ? <Link2Icon className="size-4" /> : section === "versions" ? <HistoryIcon className="size-4" /> : section === "evidence" ? <ActivityIcon className="size-4" /> : <SearchIcon className="size-4" />}
+                {sectionLabel(section, text)}
               </Button>
             ))}
           </div>
-          {overviewVisible ? (
-            <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--line)] pt-3">
-              {MEMORY_OVERVIEW_DRILLDOWNS.map((section) => (
-                <Button
-                  key={section}
-                  type="button"
-                  size="sm"
-                  variant={activeOverviewDrilldown === section ? "primary" : "secondary"}
-                  onClick={() => setActiveOverviewDrilldown(section)}
-                >
-                  {memoryOverviewDrilldownLabel(copy, section)}
-                </Button>
-              ))}
-            </div>
-          ) : null}
         </section>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+        <StoreHealthStrip stores={stores} text={text} />
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
           <div className="space-y-4">
-            {overviewHealthVisible ? (
-              <>
-                <OpsPanelCard title={copy.memory.stores}>
-                  {!stores.length ? <OpsEmptyState text={copy.memory.noStores} /> : null}
-                  <div className="space-y-3">
-                    {stores.map((store) => (
-                      <StoreHealthCard key={store.store_id} copy={copy} store={store} />
+            {activeSection === "atlas" ? (
+              <OpsPanelCard title={text.memoryAtlas}>
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_150px_180px_160px]">
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.filter}</span>
+                    <input
+                      value={atlasQuery}
+                      onChange={(event) => setAtlasQuery(event.target.value)}
+                      className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)]"
+                      placeholder={text.atlasFilterPlaceholder}
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.state}</span>
+                    <select
+                      value={atlasState}
+                      onChange={(event) => setAtlasState(event.target.value)}
+                      className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)]"
+                    >
+                      {HCMS_MEMORY_STATES.map((state) => (
+                        <option key={state} value={state}>{text.stateLabels[state] ?? state}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.category}</span>
+                    <select
+                      value={atlasCategory}
+                      onChange={(event) => setAtlasCategory(event.target.value)}
+                      className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)]"
+                    >
+                      {atlasCategories.map((category) => (
+                        <option key={category} value={category}>{category === "all" ? text.categoryAll : category}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{text.sort}</span>
+                    <select
+                      value={atlasSort}
+                      onChange={(event) => setAtlasSort(event.target.value as HCMSAtlasSort)}
+                      className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)]"
+                    >
+                      {HCMS_ATLAS_SORTS.map((sort) => (
+                        <option key={sort} value={sort}>{text.sortLabels[sort]}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {!atlasMemories.length ? (
+                  <div className="mt-4 rounded-xl border border-dashed border-[var(--line)] bg-[var(--panel-muted)] px-4 py-5">
+                    <div className="text-sm font-semibold text-[var(--ink)]">{text.atlasEmptyTitle}</div>
+                    <div className="mt-2 text-sm leading-6 text-[var(--muted)]">{text.atlasEmptyBody}</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4">
+                      <AtlasTopologySummary memories={atlasMemories} relations={relationItems} text={text} />
+                    </div>
+
+                    <div className="mt-4">
+                      <AtlasGraphView
+                        memories={graphMemories}
+                        relations={relationItems}
+                        selectedMemoryId={selectedMemoryId}
+                        activeCategory={atlasCategory === "all" ? undefined : atlasCategory}
+                        emptyLabel={copy.common.none}
+                        onSelectMemory={setSelectedMemoryId}
+                        onSelectCategory={(category) => setAtlasCategory((current) => (current === category ? "all" : category))}
+                        text={text}
+                      />
+                    </div>
+
+                    <div className="mt-4">
+                      <CategoryConstellation
+                        items={categoryDistribution}
+                        emptyLabel={copy.common.none}
+                        activeLabel={atlasCategory === "all" ? undefined : atlasCategory}
+                        onSelect={(label) => setAtlasCategory((current) => (label === "all" || current === label ? "all" : label))}
+                        text={text}
+                      />
+                    </div>
+
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                      <DistributionBars
+                        title={text.categoryDistribution}
+                        items={categoryDistribution}
+                        emptyLabel={copy.common.none}
+                        activeLabel={atlasCategory === "all" ? undefined : atlasCategory}
+                        onSelect={(label) => setAtlasCategory((current) => (current === label ? "all" : label))}
+                        text={text}
+                      />
+                      <DistributionBars
+                        title={text.lifecycleDistribution}
+                        items={stateDistribution}
+                        emptyLabel={copy.common.none}
+                        activeLabel={atlasState === "all" ? undefined : atlasState}
+                        onSelect={(label) => setAtlasState((current) => (current === label ? "all" : label))}
+                        text={text}
+                      />
+                    </div>
+
+                    <div className="mt-4">
+                      <EvidenceSpectrum
+                        items={evidenceBands}
+                        activeLabel={atlasCategory === "all" ? undefined : atlasCategory}
+                        emptyLabel={copy.common.none}
+                        onSelect={(label) => setAtlasCategory((current) => (current === label ? "all" : label))}
+                        text={text}
+                      />
+                    </div>
+
+                    <div className="mt-4">
+                      <EntityLens
+                        items={entityBuckets}
+                        emptyLabel={copy.common.none}
+                        onSelectMemory={setSelectedMemoryId}
+                        text={text}
+                      />
+                    </div>
+
+                    <div className="mt-4">
+                      <RelationGraph
+                        selectedMemory={selectedMemory}
+                        relations={relationItems}
+                        onSelect={setSelectedMemoryId}
+                        emptyLabel={copy.common.none}
+                        text={text}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <div className="mt-4 space-y-2">
+                  {hcmsMemories.isFetching ? (
+                    <div className="grid gap-2">
+                      <div className="h-20 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] opacity-70" />
+                      <div className="h-20 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] opacity-50" />
+                    </div>
+                  ) : null}
+                  {!sortedAtlasMemories.length && atlasMemories.length > 0 && !hcmsMemories.isFetching ? <OpsEmptyState text={copy.common.none} /> : null}
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {sortedAtlasMemories.map((memory) => (
+                      <MemoryAtlasCard
+                        key={memory.memory_id}
+                        memory={memory}
+                        active={memory.memory_id === selectedMemoryId}
+                        relationCount={relationCountByMemoryId.get(memory.memory_id) ?? 0}
+                        onSelect={() => setSelectedMemoryId(memory.memory_id)}
+                        text={text}
+                      />
                     ))}
                   </div>
-                </OpsPanelCard>
-
-                <OpsPanelCard title={copy.memory.issues}>
-                  {!issues.length ? <OpsEmptyState text={copy.memory.noIssues} /> : null}
-                  <div className="space-y-2">
-                    {issues.slice(0, 12).map((issue) => (
-                      <IssueRow key={issue.issue_id} issue={issue} />
-                    ))}
-                  </div>
-                </OpsPanelCard>
-
-              </>
+                </div>
+              </OpsPanelCard>
             ) : null}
-            {overviewAuditVisible ? (
-              <OpsPanelCard title={copy.memory.candidateAudit}>
-                {!candidateAudit.length ? <OpsEmptyState text={copy.memory.noCandidateAudit} /> : null}
-                {candidateAudit.length ? (
-                  <div className="space-y-2">
-                    {candidateAudit.slice(0, 8).map((item) => (
-                      <CandidateAuditCard key={item.audit_id} copy={copy} item={item} />
-                    ))}
-                  </div>
-                ) : null}
+
+            {activeSection === "recall" ? (
+              <OpsPanelCard title={text.fourStreamRecall}>
+                {!items.length ? <OpsEmptyState text={text.recallEmptyTitle} /> : null}
+                <div className="space-y-2">
+                  {items.map((item) => (
+                    <RecallCard
+                      key={item.memory_id}
+                      item={item}
+                      active={item.memory_id === selectedMemoryId}
+                      onSelect={() => setSelectedMemoryId(item.memory_id)}
+                      text={text}
+                    />
+                  ))}
+                </div>
+              </OpsPanelCard>
+            ) : null}
+
+            {activeSection === "causal" ? (
+              <OpsPanelCard title={text.causalChains}>
+                {!(why.data?.paths ?? []).length ? <OpsEmptyState text={copy.common.none} /> : null}
+                <div className="space-y-2">
+                  {(why.data?.paths ?? []).map((path, index) => (
+                    <CausalPathCard key={`${path.nodes.map((node) => node.memory_id).join("-")}-${index}`} path={path} text={text} />
+                  ))}
+                </div>
+              </OpsPanelCard>
+            ) : null}
+
+            {activeSection === "relations" ? (
+              <OpsPanelCard title={text.relationGraph}>
+                <RelationRows
+                  relations={relationItems}
+                  selectedMemoryId={selectedMemoryId}
+                  emptyLabel={copy.common.none}
+                  text={text}
+                />
+              </OpsPanelCard>
+            ) : null}
+
+            {activeSection === "versions" ? (
+              <OpsPanelCard title={text.versionHistory}>
+                <VersionTimeline versions={history.data?.versions ?? []} emptyLabel={copy.common.none} text={text} />
+              </OpsPanelCard>
+            ) : null}
+
+            {activeSection === "evidence" ? (
+              <OpsPanelCard title={text.traceEvidence}>
+                <TraceRows traces={trace.data?.items ?? []} emptyLabel={copy.common.none} text={text} />
               </OpsPanelCard>
             ) : null}
           </div>
 
           <div className="space-y-4">
-            {overviewProvidersVisible ? (
-              <OpsPanelCard title={copy.memory.providers}>
-                {!providerHealth.length && !providers.data?.length ? <OpsEmptyState text={copy.common.none} /> : null}
-                <div className="space-y-2">
-                  {providerHealth.map(([providerId, status]) => (
-                    <div key={providerId} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-                      <div className="min-w-0 truncate text-sm text-[var(--ink)]">{providerId}</div>
-                      <Badge tone={statusTone(status)}>{status}</Badge>
-                    </div>
-                  ))}
-                  {!providerHealth.length
-                    ? (providers.data ?? []).map((provider) => (
-                        <div key={provider.provider_id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm text-[var(--ink)]">{provider.display_name || provider.provider_id}</div>
-                            <div className="truncate text-xs text-[var(--muted)]">{provider.family}</div>
-                          </div>
-                          <Badge tone={statusTone(provider.health)}>{provider.health}</Badge>
-                        </div>
-                      ))
-                    : null}
+            <OpsPanelCard title={text.selectedMemory}>
+              <div className="mb-3 space-y-3">
+                <div className="min-w-0 text-xs uppercase tracking-[0.06em] text-[var(--muted)]">{text.lifecycle}</div>
+                <div className="grid grid-cols-2 gap-2 xl:grid-cols-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="min-w-0 overflow-hidden px-2 [&>svg]:shrink-0"
+                    disabled={!canArchiveSelected || lifecyclePending}
+                    onClick={() => void governSelectedMemory("archive")}
+                  >
+                    <ArchiveIcon className={cn("size-4", governMemory.isPending ? "animate-pulse" : "")} />
+                    <span className="truncate">{text.archive}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="min-w-0 overflow-hidden px-2 [&>svg]:shrink-0"
+                    disabled={!canRestoreSelected || lifecyclePending}
+                    onClick={() => void governSelectedMemory("restore")}
+                  >
+                    <RotateCcwIcon className={cn("size-4", governMemory.isPending ? "animate-pulse" : "")} />
+                    <span className="truncate">{text.restore}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="min-w-0 overflow-hidden px-2 [&>svg]:shrink-0"
+                    disabled={!canForgetSelected || lifecyclePending}
+                    onClick={() => void governSelectedMemory("forget")}
+                  >
+                    <EyeOffIcon className={cn("size-4", governMemory.isPending ? "animate-pulse" : "")} />
+                    <span className="truncate">{text.forget}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    className="min-w-0 overflow-hidden px-2 [&>svg]:shrink-0"
+                    disabled={!selectedMemoryId || lifecyclePending}
+                    onClick={deleteSelectedMemory}
+                  >
+                    <Trash2Icon className={cn("size-4", deleteMemory.isPending ? "animate-pulse" : "")} />
+                    <span className="truncate">{text.delete}</span>
+                  </Button>
                 </div>
+              </div>
+              <MemoryDetail memory={selectedMemory} emptyLabel={copy.common.none} text={text} />
+            </OpsPanelCard>
+
+            {activeSection === "versions" ? (
+              <OpsPanelCard title={text.latestDiff}>
+                <OpsJsonBlock value={diff.data?.diff ?? ""} emptyLabel={copy.common.none} />
               </OpsPanelCard>
             ) : null}
 
-            {profileVisible ? (
-            <OpsPanelCard title={copy.memory.profileFacets}>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void rebuildProfileFacets.mutateAsync()}
-                  disabled={rebuildProfileFacets.isPending}
-                >
-                  <RefreshCwIcon className={cn("size-4", rebuildProfileFacets.isPending ? "animate-spin" : "")} />
-                  {copy.memory.rebuildFacets}
-                </Button>
-                <Badge tone="success">
-                  {copy.memory.active}: {facetItems.filter((facet) => facet.state === "active").length}
-                </Badge>
-                <Badge tone="warning">
-                  {copy.memory.provisional}: {facetItems.filter((facet) => facet.state === "provisional").length}
-                </Badge>
-                <Badge tone="neutral">
-                  {copy.memory.candidate}: {facetItems.filter((facet) => facet.state === "candidate").length}
-                </Badge>
-                <Badge tone="danger">
-                  {copy.memory.forgotten}: {facetItems.filter((facet) => facet.user_state === "forgotten" || facet.state === "dropped").length}
-                </Badge>
-                <Badge tone="neutral">
-                  {copy.memory.profileVisible}: {facetItems.filter((facet) => facet.prompt_visible).length}
-                </Badge>
-                <Badge tone={facetItems.some((facet) => facet.source_polluted) ? "warning" : "neutral"}>
-                  {copy.memory.polluted}: {facetItems.filter((facet) => facet.source_polluted).length}
-                </Badge>
-              </div>
-
-              {profilePolicy ? (
-                <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.profilePolicy}</div>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                    <CompactMetric label={copy.memory.active} value={(profilePolicy.active_threshold ?? 0).toFixed(2)} />
-                    <CompactMetric label={copy.memory.provisional} value={(profilePolicy.provisional_threshold ?? 0).toFixed(2)} />
-                    <CompactMetric label={copy.memory.candidate} value={(profilePolicy.candidate_threshold ?? 0).toFixed(2)} />
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge tone="neutral">
-                      {copy.memory.profileBudget}: {Object.entries(profilePolicy.class_budgets ?? {}).map(([key, value]) => `${key}:${value}`).join(", ")}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {copy.memory.profileClass}: {(profilePolicy.require_review_classes ?? []).join(", ") || copy.common.none}
-                    </Badge>
-                  </div>
-                </div>
-              ) : null}
-
-              {!facetItems.length ? <OpsEmptyState text={copy.common.none} /> : null}
-              <div className="space-y-2">
-                {facetItems.slice(0, 10).map((facet) => (
-                  <ProfileFacetCard
-                    key={facet.facet_id}
-                    copy={copy}
-                    facet={facet}
-                    onGovern={governFacet}
-                    pending={governProfileFacet.isPending}
-                  />
-                ))}
-              </div>
-
-              {profileFacetAudit.data?.items?.length ? (
-                <div className="space-y-2 pt-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.facetAudit}</div>
-                  {profileFacetAudit.data.items.slice(0, 4).map((item) => (
-                    <ProfileFacetAuditRow key={item.audit_id} item={item} />
-                  ))}
-                </div>
-              ) : null}
-            </OpsPanelCard>
-            ) : null}
-
-            {benchmarkVisible ? (
-            <OpsPanelCard title={copy.memory.recallBenchmark}>
-              <div className="flex flex-col gap-3">
-                <div className="space-y-2">
-                  <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">{copy.memory.benchmarkSuites}</div>
-                  {!(benchmarkSuites.data?.length ?? 0) ? <OpsEmptyState text={copy.memory.noBenchmarkSuites} /> : null}
-                  {benchmarkSuites.data?.slice(0, 4).map((suite) => (
-                    <BenchmarkSuiteCard
-                      key={suite.suite_id}
-                      copy={copy}
-                      suite={suite}
-                      latestRun={benchmarkRuns.data?.find((run) => run.suite_id === suite.suite_id)}
-                      onRun={runStoredBenchmarkSuite}
-                      isRunning={runBenchmarkSuite.isPending}
-                    />
-                  ))}
-                </div>
-                <div className="grid gap-2">
-                  <CompactMetric label={copy.memory.entries} value={String(benchmarkCases.length)} />
-                  <CompactMetric
-                    label={copy.memory.qualityScore}
-                    value={benchmark.data ? pct(benchmark.data.score) : "--"}
-                    sub={benchmark.data ? (benchmark.data.passed ? copy.memory.benchmarkPassed : copy.memory.benchmarkFailed) : null}
-                  />
-                  <CompactMetric label={copy.memory.hitRate} value={benchmark.data ? pct(benchmark.data.recall_hit_rate) : "--"} />
-                  <CompactMetric label={copy.memory.falsePositiveRate} value={benchmark.data ? pct(benchmark.data.false_positive_rate) : "--"} />
-                  <CompactMetric label={copy.memory.averageEvidence} value={benchmark.data ? String((benchmark.data.average_evidence_count ?? 0).toFixed(1)) : "--"} />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={!benchmarkCases.length || benchmark.isPending}
-                  onClick={() =>
-                    void benchmark.mutateAsync({
-                      suite_id: "ops-memory-smoke",
-                      cases: benchmarkCases,
-                      evidence_limit: 4,
-                    })
-                  }
-                >
-                  <ActivityIcon className={cn("size-4", benchmark.isPending ? "animate-spin" : "")} />
-                  {copy.memory.runBenchmark}
-                </Button>
-                {!benchmarkCases.length ? <OpsEmptyState text={copy.memory.noBenchmarkCases} /> : null}
-                {benchmark.data?.cases?.length ? (
-                  <div className="space-y-2">
-                    {benchmark.data.cases.slice(0, 4).map((item) => (
-                      <BenchmarkCaseCard key={item.case_id} copy={copy} item={item} />
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </OpsPanelCard>
-            ) : null}
-
-            {overviewHealthVisible ? (
-              <OpsPanelCard title={copy.memory.recommendations}>
-                {!recommendations.length ? <OpsEmptyState text={copy.memory.noRecommendations} /> : null}
-                <div className="space-y-2">
-                  {recommendations.map((item) => (
-                    <div key={item} className="flex gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2 text-sm leading-6 text-[var(--muted)]">
-                      <CheckCircle2Icon className="mt-1 size-4 shrink-0 text-[var(--success)]" />
-                      <span>{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </OpsPanelCard>
-            ) : null}
-
-            {reviewVisible ? (
-            <OpsPanelCard title={copy.memory.pendingReview}>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <CompactMetric label={copy.memory.pendingReview} value={String(reviewItems.length)} />
-                <CompactMetric label={copy.memory.conflicts} value={String(conflictItems.length)} />
-                <CompactMetric label={copy.memory.stale} value={String(staleItems.length)} />
-              </div>
-              {reviewItems.length ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" variant="primary" disabled={approveReview.isPending || rejectReview.isPending || batchReview.isPending} onClick={() => batchReviewItems("approve")}>
-                    <ListChecksIcon className="size-4" />
-                    {copy.memory.approveAll}
-                  </Button>
-                  <Button size="sm" variant="secondary" disabled={approveReview.isPending || rejectReview.isPending || batchReview.isPending} onClick={() => batchReviewItems("reject")}>
-                    <XCircleIcon className="size-4" />
-                    {copy.memory.rejectAll}
-                  </Button>
-                </div>
-              ) : null}
-              {reviewItems.length > 0 ? (
-                <div className="mt-3 space-y-3">
-                  {reviewItems.slice(0, 6).map((item) => (
-                    <ReviewItemCard
-                      key={item.review_id}
-                      copy={copy}
-                      item={item}
-                      approvePending={approveReview.isPending || batchReview.isPending}
-                      rejectPending={rejectReview.isPending || batchReview.isPending}
-                      onApprove={approveReviewItem}
-                      onReject={rejectReviewItem}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <OpsEmptyState text={copy.memory.noReviewItems} />
-              )}
-            </OpsPanelCard>
-            ) : null}
-
-            {reviewVisible ? (
-            <OpsPanelCard title={copy.memory.conflicts}>
-              <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                <GitCompareArrowsIcon className="size-4 text-[var(--primary)]" />
-                <span>{copy.memory.conflictHelp}</span>
-              </div>
-              {conflictItems.length ? (
-                <div className="mt-3 space-y-3">
-                  {conflictItems.slice(0, 6).map((item) => (
-                    <ConflictCard
-                      key={item.conflict_id}
-                      copy={copy}
-                      conflict={item}
-                      pending={resolveConflict.isPending}
-                      onResolve={resolveConflictItem}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <OpsEmptyState text={copy.memory.noConflicts} />
-              )}
-            </OpsPanelCard>
-            ) : null}
-
-            {maintenanceVisible ? (
-            <OpsPanelCard title={copy.memory.retention}>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <CompactMetric label={copy.memory.hot} value={String(hotStores)} />
-                <CompactMetric label={copy.memory.warm} value={String(warmStores)} />
-                <CompactMetric label={copy.memory.cold} value={String(coldStores)} />
-              </div>
-              <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-[var(--ink)]">{copy.memory.maintenance}</div>
-                    <div className="mt-1 truncate text-xs text-[var(--muted)]">{copy.memory.maintenanceHint}</div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" disabled={maintenance.isPending} onClick={() => runMaintenance(true)}>
-                      <ListChecksIcon className="size-4" />
-                      {copy.memory.planMaintenance}
-                    </Button>
-                    <Button size="sm" variant="primary" disabled={maintenance.isPending} onClick={() => runMaintenance(false)}>
-                      <RotateCwIcon className={cn("size-4", maintenance.isPending ? "animate-spin" : "")} />
-                      {copy.memory.runMaintenance}
-                    </Button>
-                  </div>
-                </div>
-                <MaintenanceAutomationCard
-                  copy={copy}
-                  status={maintenanceAutomation.data}
-                  latestRun={runMaintenanceAutomation.data}
-                  pending={runMaintenanceAutomation.isPending}
-                  onRunDueCheck={runMaintenanceDueCheck}
-                />
-                {maintenance.data ? <div className="mt-3"><MaintenanceRunCard copy={copy} run={maintenance.data} /></div> : null}
-              </div>
-              <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-[var(--ink)]">{copy.memory.governancePlan}</div>
-                    <div className="mt-1 truncate text-xs text-[var(--muted)]">
-                      {copy.memory.governancePolicy}: balanced · {copy.memory.governanceCandidates}: {batchGovernMemory.data?.candidate_count ?? 0}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" disabled={batchGovernMemory.isPending} onClick={() => runGovernancePlan(true)}>
-                      <ListChecksIcon className="size-4" />
-                      {copy.memory.planGovernance}
-                    </Button>
-                    <Button size="sm" variant="primary" disabled={batchGovernMemory.isPending || !batchGovernMemory.data?.items?.length} onClick={() => runGovernancePlan(false)}>
-                      <CheckCircle2Icon className="size-4" />
-                      {copy.memory.executeGovernance}
-                    </Button>
-                  </div>
-                </div>
-                {batchGovernMemory.data?.errors?.length ? (
-                  <div className="mt-2 space-y-1">
-                    {batchGovernMemory.data.errors.slice(0, 3).map((item) => (
-                      <div key={item} className="text-xs text-[var(--danger)]">{item}</div>
-                    ))}
-                  </div>
-                ) : null}
-                {batchGovernMemory.data?.items?.length ? (
-                  <div className="mt-3 space-y-2">
-                    {batchGovernMemory.data.items.slice(0, 5).map((item) => (
-                      <GovernancePlanItemCard key={`${item.memory_id}-${item.action}`} copy={copy} item={item} />
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              {staleItems.length ? (
-                <div className="mt-3 space-y-3">
-                  {staleItems.slice(0, 8).map((item) => (
-                    <StalenessCard
-                      key={`${item.memory_id}-${item.layer_id}`}
-                      copy={copy}
-                      item={item}
-                      pending={governMemory.isPending}
-                      onGovern={governStaleMemory}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <OpsEmptyState text={copy.memory.noStaleItems} />
-              )}
-            </OpsPanelCard>
-            ) : null}
-
-            {overviewHealthVisible ? (
-              <OpsPanelCard title={copy.memory.health}>
-                <div className="grid gap-3">
-                  <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                    <ShieldCheckIcon className="size-4 text-[var(--primary)]" />
-                    <span>
-                      {copy.memory.qualityScore}: {report ? pct(report.quality_score) : copy.common.loading}
-                    </span>
-                  </div>
-                  <ScoreBar label={copy.memory.qualityScore} value={report?.quality_score} tone={statusTone(report?.status)} />
-                </div>
+            {activeSection !== "versions" ? (
+              <OpsPanelCard title={text.rawScores}>
+                <OpsJsonBlock value={selectedItem?.raw_scores ?? null} emptyLabel={copy.common.none} />
               </OpsPanelCard>
             ) : null}
           </div>
@@ -1494,41 +2524,4 @@ export function MemoryGovernancePanel({ copy }: MemoryGovernancePanelProps) {
       </div>
     </ScrollArea>
   );
-}
-
-function compactBenchmarkPhrase(content: string) {
-  return content
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(/[。！？.!?]/)[0]
-    ?.slice(0, 96)
-    .trim() ?? "";
-}
-
-function memoryGovernanceSectionLabel(copy: OpsCopy, section: MemoryGovernanceSection) {
-  switch (section) {
-    case "profile":
-      return copy.memory.profileFacets;
-    case "review":
-      return copy.memory.pendingReview;
-    case "benchmark":
-      return copy.memory.recallBenchmark;
-    case "maintenance":
-      return copy.memory.retention;
-    case "overview":
-    default:
-      return copy.surfaces.overview;
-  }
-}
-
-function memoryOverviewDrilldownLabel(copy: OpsCopy, section: MemoryOverviewDrilldown) {
-  switch (section) {
-    case "providers":
-      return copy.memory.providers;
-    case "audit":
-      return copy.memory.candidateAudit;
-    case "health":
-    default:
-      return copy.memory.health;
-  }
 }

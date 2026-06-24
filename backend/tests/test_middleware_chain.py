@@ -1,23 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
+import anvil.agents.middlewares.memory_prefetch_middleware as memory_prefetch_module
 from anvil.agents.factory import build_middleware_chain
 from anvil.agents.features import Next, Prev, RuntimeFeatureSet, resolve_feature_set
+from anvil.agents.lead_agent.prompt import PromptSection, PromptSnapshot, PromptSnapshotKey
 from anvil.agents.lead_agent.types import LeadAgentState
 from anvil.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 from anvil.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from anvil.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
 from anvil.agents.middlewares.llm_error_handling_middleware import LLMExecutionError
 from anvil.agents.middlewares.loop_detection_middleware import LoopDetectionMiddleware
+from anvil.agents.middlewares.memory_capture_middleware import MemoryCaptureMiddleware
 from anvil.agents.middlewares.memory_prefetch_middleware import MemoryPrefetchMiddleware
-from anvil.config import ConfigLayer, ConfigLayerKind, EffectiveConfig, MemoryConfig, MemoryPlatformConfig
-from anvil.config.models import CompactionConfig, LoopDetectionConfig, SummarizationConfig
-from anvil.memory_platform.contracts import ArchiveSearchHit, CuratedEntry, RecallEvidence, RecallResult
+from anvil.config import ConfigLayer, ConfigLayerKind, EffectiveConfig, HCMSRuntimeConfig
+from anvil.config.models import LoopDetectionConfig, SummarizationConfig
+from anvil.memory import DebouncedMemoryQueue, FileMemoryStore, HeuristicMemoryUpdater, MemoryService
+from anvil.memory.contracts import MemoryInjectionView
 from anvil.runtime.checkpointers import CheckpointerBackend, create_checkpointer
 from anvil.runtime.context_envelope import ContextAssembler
 from anvil.runtime.runs import RunEngine, RunRequest
@@ -179,7 +182,6 @@ def test_behavior_middlewares_slot_between_safety_and_clarification() -> None:
         "SandboxAuditMiddleware",
         "ToolErrorHandlingMiddleware",
         "ToolOutputBudgetMiddleware",
-        "SummarizationMiddleware",
         "TodoMiddleware",
         "TokenUsageMiddleware",
         "TitleMiddleware",
@@ -332,7 +334,7 @@ def test_run_engine_storage_drops_view_image_model_only_bridge(contract_tmp_path
     assert stored[0].content == "visible"
 
 
-def test_memory_platform_feature_does_not_reenable_legacy_capture_by_default() -> None:
+def test_hcms_feature_uses_prefetch_without_capture_when_capture_not_requested() -> None:
     chain = build_middleware_chain(
         RuntimeFeatureSet(
             memory=True,
@@ -344,22 +346,44 @@ def test_memory_platform_feature_does_not_reenable_legacy_capture_by_default() -
     assert "MemoryCaptureMiddleware" not in [middleware.name for middleware in chain]
 
 
-def test_memory_platform_config_disables_legacy_capture_even_when_legacy_memory_enabled() -> None:
-    config = EffectiveConfig(
-        memory=MemoryConfig(enabled=True),
-        memory_platform=MemoryPlatformConfig(enabled=True),
-    )
+def test_hcms_config_enables_native_capture() -> None:
+    config = EffectiveConfig(hcms=HCMSRuntimeConfig(enabled=True))
     features = resolve_feature_set(RuntimeFeatureSet(), config)
     chain = build_middleware_chain(features)
 
     assert features.memory is True
     assert features.memory_prefetch is True
-    assert features.memory_capture is False
+    assert features.memory_capture is True
     assert "MemoryPrefetchMiddleware" in [middleware.name for middleware in chain]
-    assert "MemoryCaptureMiddleware" not in [middleware.name for middleware in chain]
+    assert "MemoryCaptureMiddleware" in [middleware.name for middleware in chain]
 
 
-def test_default_context_compaction_uses_summarization_middleware_not_legacy_compaction() -> None:
+def test_context_v2_hcms_inserts_prefetch_into_explicit_middleware_chain() -> None:
+    config = EffectiveConfig(hcms=HCMSRuntimeConfig(enabled=True))
+    features = resolve_feature_set(RuntimeFeatureSet(), config)
+    chain = build_middleware_chain(
+        features,
+        middleware=[LLMErrorHandlingMiddleware()],
+        effective_config=config,
+    )
+
+    assert [middleware.name for middleware in chain] == [
+        "LLMErrorHandlingMiddleware",
+        "MemoryPrefetchMiddleware",
+    ]
+
+
+def test_context_v2_hcms_overrides_disabled_memory_prefetch_feature() -> None:
+    config = EffectiveConfig(hcms=HCMSRuntimeConfig(enabled=True))
+    features = resolve_feature_set(RuntimeFeatureSet(memory_prefetch=False), config)
+    chain = build_middleware_chain(features, effective_config=config)
+
+    assert features.memory is True
+    assert features.memory_prefetch is False
+    assert "MemoryPrefetchMiddleware" in [middleware.name for middleware in chain]
+
+
+def test_deleted_context_compaction_middleware_is_not_in_default_chain() -> None:
     config = EffectiveConfig()
     features = resolve_feature_set(RuntimeFeatureSet(), config)
     chain = build_middleware_chain(features, effective_config=config)
@@ -367,35 +391,31 @@ def test_default_context_compaction_uses_summarization_middleware_not_legacy_com
     names = [middleware.name for middleware in chain]
 
     assert features.summarization is False
-    assert features.compaction is False
     assert "SummarizationMiddleware" not in names
     assert "CompactionMiddleware" not in names
 
 
-def test_legacy_compaction_config_does_not_enable_context_compaction_without_summarization() -> None:
-    config = EffectiveConfig(compaction=CompactionConfig(enabled=True))
-    features = resolve_feature_set(RuntimeFeatureSet(), config)
-    chain = build_middleware_chain(features, effective_config=config)
-
-    names = [middleware.name for middleware in chain]
-
-    assert features.summarization is False
-    assert features.compaction is False
-    assert "SummarizationMiddleware" not in names
-    assert "CompactionMiddleware" not in names
-
-
-def test_summarization_config_enables_single_context_compaction_surface() -> None:
+def test_summarization_config_no_longer_enables_deleted_context_compaction_surface() -> None:
     config = EffectiveConfig(summarization=SummarizationConfig(enabled=True))
     features = resolve_feature_set(RuntimeFeatureSet(), config)
     chain = build_middleware_chain(features, effective_config=config)
 
     names = [middleware.name for middleware in chain]
 
-    assert features.summarization is True
-    assert features.compaction is False
-    assert "SummarizationMiddleware" in names
+    assert features.summarization is False
+    assert "SummarizationMiddleware" not in names
     assert "CompactionMiddleware" not in names
+
+
+def test_legacy_context_compaction_package_is_deleted() -> None:
+    import anvil.agents.middlewares as middlewares
+    import anvil.agents.middlewares.compaction as compaction_package
+
+    package_path = Path(compaction_package.__path__[0])
+    assert not any(path.suffix == ".py" for path in package_path.glob("*.py"))
+    assert not hasattr(middlewares, "CompactionMiddleware")
+    assert not hasattr(compaction_package, "CompactionService")
+    assert not hasattr(compaction_package, "CompactionConfig")
 
 
 def test_extra_middlewares_can_anchor_before_clarification_without_breaking_tail() -> None:
@@ -541,47 +561,46 @@ def test_loop_detection_config_keeps_legacy_max_identical_turns_compatible() -> 
     assert config.window_size >= 4
 
 
-def test_memory_prefetch_records_bounded_injection_diagnostics_without_memory_payload() -> None:
+def test_legacy_memory_prefetch_mode_migrates_recall_to_context_v2_blocks() -> None:
     class FakeMemoryManager:
         config = SimpleNamespace(recall=SimpleNamespace(turn_recall_token_budget=80))
 
-        def prefetch_recall(self, *, thread_id: str, query: str) -> RecallResult:
-            return RecallResult(
+        def prefetch_recall(self, *, thread_id: str, query: str):
+            recall = SimpleNamespace(
                 thread_id=thread_id,
                 query=query,
                 snapshot_fingerprint="snapshot-diag",
                 summary="summary " * 80,
-                curated_matches=(
-                    CuratedEntry(
+                memory_matches=(
+                    SimpleNamespace(
                         entry_id="entry-1",
                         store_id="project",
                         content="project memory " * 80,
                     ),
-                    CuratedEntry(
+                    SimpleNamespace(
                         entry_id="entry-2",
                         store_id="user",
                         content="user memory",
                     ),
                 ),
                 archive_hits=(
-                    ArchiveSearchHit(
+                    SimpleNamespace(
                         archive_id="archive-1",
                         thread_id="source-thread",
                         score=0.9,
                         excerpt="archive memory " * 40,
-                        created_at=datetime.now(timezone.utc),
                     ),
                 ),
-                provider_notes=("provider note",),
+                engine_notes=("engine note",),
                 evidence=(
-                    RecallEvidence(
+                    SimpleNamespace(
                         evidence_id="ev-1",
-                        source_kind="curated",
+                        source_kind="memory",
                         source_id="entry-1",
                         score=0.8,
                         reason="matched project preference",
                     ),
-                    RecallEvidence(
+                    SimpleNamespace(
                         evidence_id="ev-2",
                         source_kind="archive",
                         source_id="archive-1",
@@ -590,6 +609,8 @@ def test_memory_prefetch_records_bounded_injection_diagnostics_without_memory_pa
                     ),
                 ),
             )
+            recall.render_turn_block = lambda: f"<memory_recall>\n{recall.summary}\n</memory_recall>"
+            return recall
 
     runtime = SimpleNamespace(
         context=SimpleNamespace(
@@ -597,6 +618,8 @@ def test_memory_prefetch_records_bounded_injection_diagnostics_without_memory_pa
             memory_manager=FakeMemoryManager(),
             memory_service=None,
             memory_context=None,
+            memory_context_mode="legacy_prompt_append",
+            context_v2_memory_blocks=[],
             memory_injection_diagnostics={},
         )
     )
@@ -608,18 +631,598 @@ def test_memory_prefetch_records_bounded_injection_diagnostics_without_memory_pa
 
     assert update is not None
     assert update["memory_snapshot_id"] == "snapshot-diag"
-    assert "memory_context" in update
+    assert "memory_context" not in update
+    blocks = update["context_v2_memory_blocks"]
+    assert len(blocks) == 1
+    assert blocks[0]["source"]["kind"] == "memory"
+    assert blocks[0]["block_type"] == "retrieved_memory"
+    assert blocks[0]["content"].startswith("Dynamic memory recall is bounded fact lookup")
+    assert "<memory_recall>" not in blocks[0]["content"]
+    assert runtime.context.context_v2_memory_blocks == blocks
+    assert runtime.context.memory_context is None
     assert runtime.context.memory_injection_diagnostics["source"] == "memory_manager"
     assert runtime.context.memory_injection_diagnostics["status"] == "injected"
-    assert runtime.context.memory_injection_diagnostics["curated_match_count"] == 2
+    assert runtime.context.memory_injection_diagnostics["memory_match_count"] == 2
     assert runtime.context.memory_injection_diagnostics["archive_hit_count"] == 1
     assert runtime.context.memory_injection_diagnostics["evidence_count"] == 2
-    assert runtime.context.memory_injection_diagnostics["provider_note_count"] == 1
+    assert runtime.context.memory_injection_diagnostics["engine_note_count"] == 1
     assert runtime.context.memory_injection_diagnostics["token_budget"] == 80
     assert runtime.context.memory_injection_diagnostics["truncated"] is True
+    assert runtime.context.memory_injection_diagnostics["injection_mode"] == "context_v2"
+    assert runtime.context.memory_injection_diagnostics["requested_injection_mode"] == "legacy_prompt_append"
+    assert runtime.context.memory_injection_diagnostics["legacy_prompt_append_migrated"] is True
+    assert runtime.context.memory_injection_diagnostics["context_v2_block_count"] == 1
     assert runtime.context.memory_injection_diagnostics["store_counts"] == {"project": 1, "user": 1}
-    assert runtime.context.memory_injection_diagnostics["source_kind_counts"] == {"archive": 1, "curated": 1}
+    assert runtime.context.memory_injection_diagnostics["source_kind_counts"] == {"archive": 1, "memory": 1}
     assert "project memory project memory" not in repr(runtime.context.memory_injection_diagnostics)
+
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+            messages=request.messages,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt",
+        messages=[HumanMessage(content="Use my stored project preference")],
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"].startswith('<runtime_context_v2 version="p0">')
+    assert "base runtime prompt\n\nDynamic memory recall" not in captured["system_prompt"]
+    assert "<memory_context>" not in captured["system_prompt"]
+    assert "<memory_recall>" not in captured["system_prompt"]
+    assert "Dynamic memory recall is bounded fact lookup" in captured["system_prompt"]
+    assert runtime.context.context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert runtime.context.context_v2["trace"]["selected_memory"] == [blocks[0]["block_id"]]
+
+
+def test_legacy_memory_prefetch_strips_attributed_memory_fences_from_fallback_block() -> None:
+    class FakeMemoryManager:
+        config = SimpleNamespace(recall=SimpleNamespace(turn_recall_token_budget=120))
+
+        def prefetch_recall(self, *, thread_id: str, query: str):
+            recall = SimpleNamespace(
+                thread_id=thread_id,
+                query=query,
+                snapshot_fingerprint="snapshot-attributed-fence",
+                summary="",
+                memory_matches=(),
+                archive_hits=(),
+                engine_notes=(),
+                evidence=(),
+            )
+            recall.render_turn_block = (
+                lambda: '<memory_recall source="legacy" priority="high">\n'
+                "Attributed memory fence still migrates to a ContextBlock.\n"
+                "</memory_recall>"
+            )
+            return recall
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-attributed-memory-fence",
+            memory_manager=FakeMemoryManager(),
+            memory_service=None,
+            memory_context=None,
+            memory_context_mode="legacy_prompt_append",
+            context_v2_memory_blocks=[],
+            memory_injection_diagnostics={},
+        )
+    )
+
+    update = MemoryPrefetchMiddleware().before_model(
+        LeadAgentState(messages=[HumanMessage(content="Use stored recall")]),
+        runtime,
+    )
+
+    assert update is not None
+    block_content = update["context_v2_memory_blocks"][0]["content"]
+    assert "Attributed memory fence still migrates to a ContextBlock." in block_content
+    assert "<memory_recall" not in block_content
+    assert "[memory_recall" not in block_content
+    assert "source=\"legacy\"" not in block_content
+
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+            messages=request.messages,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt",
+        messages=[HumanMessage(content="Use stored recall")],
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert "Attributed memory fence still migrates to a ContextBlock." in captured["system_prompt"]
+    assert "<memory_recall" not in captured["system_prompt"]
+    assert "[memory_recall" not in captured["system_prompt"]
+    assert "source=\"legacy\"" not in captured["system_prompt"]
+
+
+def test_legacy_memory_context_is_suppressed_without_context_v2_blocks() -> None:
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-legacy-direct-suppressed",
+            memory_context_mode="legacy_prompt_append",
+            memory_context="LEGACY_DIRECT_APPEND_SENTINEL",
+            context_v2_memory_blocks=[],
+            memory_injection_diagnostics={},
+        )
+    )
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt",
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"] == "base runtime prompt"
+    assert "LEGACY_DIRECT_APPEND_SENTINEL" not in captured["system_prompt"]
+
+
+def test_memory_prefetch_can_emit_context_v2_blocks_without_direct_prompt_append() -> None:
+    injection = MemoryInjectionView(
+        namespace="global/default",
+        summary="Project recall",
+        facts=("User prefers pytest through the repo venv.",),
+        evidence=("Memory captured from thread-memory-v2.",),
+        confidence=0.8,
+    )
+
+    class FakeMemoryManager:
+        config = SimpleNamespace(recall=SimpleNamespace(turn_recall_token_budget=80))
+
+        def prefetch_recall(self, *, thread_id: str, query: str):
+            recall = SimpleNamespace(
+                thread_id=thread_id,
+                query=query,
+                snapshot_fingerprint="snapshot-v2",
+                injection=injection,
+                summary=injection.summary,
+                memory_matches=(),
+                archive_hits=(),
+                engine_notes=("HCMS recall active",),
+                evidence=(),
+            )
+            recall.render_turn_block = injection.render_fenced
+            return recall
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-memory-v2",
+            memory_manager=FakeMemoryManager(),
+            memory_service=None,
+            memory_context=None,
+            memory_context_mode="context_v2",
+            context_v2_memory_blocks=[],
+            memory_injection_diagnostics={},
+        )
+    )
+
+    update = MemoryPrefetchMiddleware().before_model(
+        LeadAgentState(messages=[HumanMessage(content="Use my stored project preference")]),
+        runtime,
+    )
+
+    assert update is not None
+    assert update["memory_snapshot_id"] == "snapshot-v2"
+    assert "memory_context" not in update
+    blocks = update["context_v2_memory_blocks"]
+    assert len(blocks) == 1
+    assert blocks[0]["source"]["kind"] == "memory"
+    assert blocks[0]["block_type"] == "semantic_fact"
+    assert blocks[0]["content"] == "User prefers pytest through the repo venv."
+    assert blocks[0]["evidence_refs"][0]["source_kind"] == "memory_evidence"
+    assert runtime.context.context_v2_memory_blocks == blocks
+    assert runtime.context.memory_context is None
+    assert runtime.context.memory_injection_diagnostics["injection_mode"] == "context_v2"
+    assert runtime.context.memory_injection_diagnostics["context_v2_block_count"] == 1
+
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt",
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"].startswith('<runtime_context_v2 version="p0">')
+    assert "base runtime prompt\n\n<runtime_context_v2" not in captured["system_prompt"]
+    assert "<memory_context>" not in captured["system_prompt"]
+    assert "<memory_recall>" not in captured["system_prompt"]
+    assert "User prefers pytest through the repo venv." in captured["system_prompt"]
+    memory_trace = runtime.context.context_v2["memory_prefetch_trace"]
+    assert memory_trace["selected_memory"] == [blocks[0]["block_id"]]
+    assert memory_trace["layer_token_usage"]["semantic_fact"] > 0
+    assert runtime.context.context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert runtime.context.context_v2["candidate_block_count"] > runtime.context.memory_injection_diagnostics[
+        "context_v2_block_count"
+    ]
+    assert runtime.context.context_v2["trace"]["selected_memory"] == [blocks[0]["block_id"]]
+
+
+def test_memory_prefetch_defaults_missing_mode_to_context_v2_without_direct_prompt_append() -> None:
+    injection = MemoryInjectionView(
+        namespace="global/default",
+        summary="Implicit V2 recall",
+        facts=("Default memory prefetch competes as a ContextBlock.",),
+        evidence=("Memory captured from thread-memory-default.",),
+        confidence=0.82,
+    )
+
+    class FakeMemoryManager:
+        config = SimpleNamespace(recall=SimpleNamespace(turn_recall_token_budget=80))
+
+        def prefetch_recall(self, *, thread_id: str, query: str):
+            recall = SimpleNamespace(
+                thread_id=thread_id,
+                query=query,
+                snapshot_fingerprint="snapshot-default-v2",
+                injection=injection,
+                summary=injection.summary,
+                memory_matches=(),
+                archive_hits=(),
+                engine_notes=("HCMS recall active",),
+                evidence=(),
+            )
+            recall.render_turn_block = injection.render_fenced
+            return recall
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-memory-default-v2",
+            memory_manager=FakeMemoryManager(),
+            memory_service=None,
+            memory_context=None,
+            memory_injection_diagnostics={},
+        )
+    )
+
+    update = MemoryPrefetchMiddleware().before_model(
+        LeadAgentState(messages=[HumanMessage(content="Use default memory injection")]),
+        runtime,
+    )
+
+    assert update is not None
+    assert "memory_context" not in update
+    blocks = update["context_v2_memory_blocks"]
+    assert len(blocks) == 1
+    assert blocks[0]["block_type"] == "semantic_fact"
+    assert blocks[0]["content"] == "Default memory prefetch competes as a ContextBlock."
+    assert runtime.context.memory_context is None
+    assert runtime.context.context_v2_memory_blocks == blocks
+    assert runtime.context.memory_injection_diagnostics["injection_mode"] == "context_v2"
+    assert runtime.context.memory_injection_diagnostics["context_v2_block_count"] == 1
+
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt\n\n<memory_recall>stale legacy recall</memory_recall>",
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"].startswith('<runtime_context_v2 version="p0">')
+    assert "<memory_context>" not in captured["system_prompt"]
+    assert "<memory_recall>" not in captured["system_prompt"]
+    assert "stale legacy recall" not in captured["system_prompt"]
+    assert "Default memory prefetch competes as a ContextBlock." in captured["system_prompt"]
+    assert runtime.context.context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert runtime.context.context_v2["trace"]["selected_memory"] == [blocks[0]["block_id"]]
+
+
+def test_memory_prefetch_assembles_context_v2_from_stable_memory_snapshot_without_recall_blocks() -> None:
+    sentinel_memory = "ROUND41_STABLE_MEMORY_ONLY should be assembled as ContextBlock"
+    prompt_snapshot = PromptSnapshot(
+        snapshot_id="snap-stable-memory-only",
+        snapshot_key=PromptSnapshotKey(
+            config_fingerprint="cfg",
+            capability_bundle_fingerprint="cap",
+            enabled_skill_summary_fingerprint="skills",
+            policy_version="v1",
+            memory_namespace="global/default",
+            memory_snapshot_fingerprint="stable-memory-only-v1",
+        ),
+        stable_sections=[
+            PromptSection(name="role_and_intent", content="Act as the lead runtime."),
+            PromptSection(name="memory_snapshot", content=sentinel_memory),
+        ],
+    )
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-stable-memory-only",
+            run_id="run-stable-memory-only",
+            memory_context_mode="context_v2",
+            context_v2_memory_blocks=[],
+            memory_context=None,
+            memory_injection_diagnostics={},
+            prompt_snapshot=prompt_snapshot,
+            request_context="Use stored project preferences.",
+            promoted_capabilities=(),
+            memory_namespace="global/default",
+        )
+    )
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+            messages=request.messages,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt="base runtime prompt",
+        messages=[HumanMessage(content="Use stored project preferences.")],
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"].startswith('<runtime_context_v2 version="p0">')
+    assert "base runtime prompt" not in captured["system_prompt"]
+    assert "<memory_snapshot>" not in captured["system_prompt"]
+    assert sentinel_memory in captured["system_prompt"]
+    context_v2 = runtime.context.context_v2
+    assert context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert context_v2["hcms_v2_memory_candidate_count"] == 0
+    assert context_v2["stable_memory_block_ids"] == context_v2["trace"]["selected_memory"]
+    assert context_v2["total_memory_candidate_count"] == 1
+    assert context_v2["trace"]["layer_token_usage"]["memory"] > 0
+    assert context_v2["trace"]["selected_memory"]
+
+
+def test_memory_prefetch_context_v2_assembly_failure_uses_structured_emergency_fallback(monkeypatch) -> None:
+    injection = MemoryInjectionView(
+        namespace="global/default",
+        summary="Project recall",
+        facts=("Emergency fallback must not reopen legacy prompt append.",),
+        evidence=("Memory captured from thread-emergency-fallback.",),
+        confidence=0.8,
+    )
+
+    class FakeMemoryManager:
+        config = SimpleNamespace(recall=SimpleNamespace(turn_recall_token_budget=80))
+
+        def prefetch_recall(self, *, thread_id: str, query: str):
+            recall = SimpleNamespace(
+                thread_id=thread_id,
+                query=query,
+                snapshot_fingerprint="snapshot-emergency-v2",
+                injection=injection,
+                summary=injection.summary,
+                memory_matches=(),
+                archive_hits=(),
+                engine_notes=("HCMS recall active",),
+                evidence=(),
+            )
+            recall.render_turn_block = injection.render_fenced
+            return recall
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-emergency-fallback",
+            run_id="run-emergency-fallback",
+            memory_manager=FakeMemoryManager(),
+            memory_service=None,
+            memory_context=None,
+            memory_context_mode="context_v2",
+            context_v2_memory_blocks=[],
+            memory_injection_diagnostics={},
+        ),
+        assembly_snapshot=SimpleNamespace(context_v2={}, memory_injection_diagnostics={}),
+    )
+    update = MemoryPrefetchMiddleware().before_model(
+        LeadAgentState(messages=[HumanMessage(content="Use memory through Runtime Context V2")]),
+        runtime,
+    )
+    assert update is not None
+
+    def broken_prepare_llm_context(self, pipeline_input):
+        raise RuntimeError("forced assembler failure")
+
+    monkeypatch.setattr(
+        memory_prefetch_module.TurnPipeline,
+        "prepare_llm_context",
+        broken_prepare_llm_context,
+    )
+
+    captured: dict[str, str] = {}
+
+    def override_request(**updates):
+        system_message = updates.get("system_message")
+        return SimpleNamespace(
+            runtime=runtime,
+            system_prompt=system_message.content if system_message is not None else request.system_prompt,
+            override=override_request,
+            messages=request.messages,
+        )
+
+    request = SimpleNamespace(
+        runtime=runtime,
+        system_prompt=(
+            "base runtime prompt\n\n"
+            "<memory_recall>STALE_LEGACY_MEMORY_SHOULD_NOT_SURVIVE</memory_recall>"
+        ),
+        messages=[HumanMessage(content="Use memory through Runtime Context V2")],
+        override=override_request,
+    )
+
+    def handler(patched_request):
+        captured["system_prompt"] = patched_request.system_prompt
+        return "ok"
+
+    assert MemoryPrefetchMiddleware().wrap_model_call(request, handler) == "ok"
+    assert captured["system_prompt"].startswith('<runtime_context_v2 version="p0">')
+    assert 'mode="emergency_fallback"' in captured["system_prompt"]
+    assert "base runtime prompt" in captured["system_prompt"]
+    assert "STALE_LEGACY_MEMORY_SHOULD_NOT_SURVIVE" not in captured["system_prompt"]
+    assert "<memory_recall>" not in captured["system_prompt"]
+    assert runtime.context.memory_injection_diagnostics["context_v2_emergency_fallback"] is True
+    assert runtime.context.context_v2["actual_prompt_mode"] == "runtime_context_v2_emergency_fallback"
+    assert runtime.context.context_v2["trace"]["selected_block_ids"]
+    assert runtime.assembly_snapshot.context_v2["emergency_fallback_used"] is True
+
+
+def test_memory_capture_middleware_processes_hcms_queue_without_engine_fallback(contract_tmp_path) -> None:
+    memory_service = MemoryService(
+        store=FileMemoryStore(contract_tmp_path / "hcms-store"),
+        queue=DebouncedMemoryQueue(),
+        updater=HeuristicMemoryUpdater(max_facts=5),
+        max_facts=5,
+        injection_token_budget=200,
+    )
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-capture-direct",
+            memory_namespace="global/default",
+            memory_service=memory_service,
+            memory_capture_processed=False,
+            memory_capture_processed_count=0,
+        )
+    )
+
+    update = MemoryCaptureMiddleware().after_agent(
+        LeadAgentState(
+            messages=[
+                HumanMessage(content="Remember: User prefers concise updates instead of verbose status reports."),
+                AIMessage(content="I will keep future updates concise."),
+            ]
+        ),
+        runtime,
+    )
+
+    assert update is not None
+    assert update["memory_snapshot_id"] == "global/default"
+    assert update["memory_capture_diagnostics"] == {
+        "source": "memory_service",
+        "status": "processed",
+        "phase": "after_agent",
+        "processed_count": 1,
+    }
+    assert runtime.context.memory_capture_processed is True
+    assert runtime.context.memory_capture_processed_count == 1
+    assert runtime.context.memory_capture_diagnostics == update["memory_capture_diagnostics"]
+    assert memory_service.queue.pending_count() == 0
+    stored = memory_service.store.load("global/default")
+    assert any("concise updates" in memory.content for memory in stored.memories)
+
+
+def test_memory_capture_middleware_keeps_low_signal_capture_pending_until_debounce_window(contract_tmp_path) -> None:
+    memory_service = MemoryService(
+        store=FileMemoryStore(contract_tmp_path / "hcms-store"),
+        queue=DebouncedMemoryQueue(),
+        updater=HeuristicMemoryUpdater(max_facts=5),
+        max_facts=5,
+        injection_token_budget=200,
+    )
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            thread_id="thread-capture-low-signal",
+            memory_namespace="global/default",
+            memory_service=memory_service,
+            memory_capture_processed=False,
+            memory_capture_processed_count=0,
+        )
+    )
+
+    update = MemoryCaptureMiddleware().after_agent(
+        LeadAgentState(
+            messages=[
+                HumanMessage(content="Low signal continuity detail about the build output."),
+                AIMessage(content="Acknowledged."),
+            ]
+        ),
+        runtime,
+    )
+
+    assert update is not None
+    assert update["memory_snapshot_id"] == "global/default"
+    assert update["memory_capture_diagnostics"] == {
+        "source": "memory_service",
+        "status": "queued",
+        "phase": "after_agent",
+        "processed_count": 0,
+    }
+    assert runtime.context.memory_capture_processed is False
+    assert runtime.context.memory_capture_processed_count == 0
+    assert runtime.context.memory_capture_diagnostics == update["memory_capture_diagnostics"]
+    assert memory_service.queue.pending_count() == 1
+    assert memory_service.store.load("global/default").memories == []
+
+    assert memory_service.process_pending("global/default", force=True) == 1
+    stored = memory_service.store.load("global/default")
+    assert any("Low signal continuity detail" in memory.content for memory in stored.memories)
 
 
 def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_path) -> None:
@@ -635,7 +1238,6 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
         MemoryPrefetchMiddleware,
         SandboxAuditMiddleware,
         SandboxMiddleware,
-        SummarizationMiddleware,
         ThreadDataMiddleware,
         TodoMiddleware,
         ToolErrorHandlingMiddleware,
@@ -669,7 +1271,6 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
     wrap_method(DanglingToolCallMiddleware, "wrap_model_call", "dangling_tool_calls")
     wrap_method(LLMErrorHandlingMiddleware, "wrap_model_call", "llm_error")
     wrap_method(SandboxAuditMiddleware, "wrap_tool_call", "sandbox_audit")
-    wrap_method(SummarizationMiddleware, "before_model", "summarization")
     wrap_method(TodoMiddleware, "before_model", "todo")
     wrap_method(TokenUsageMiddleware, "after_model", "token_usage")
     wrap_method(TitleMiddleware, "after_model", "title")
@@ -698,7 +1299,7 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
                         "model_name": "gpt-5.4",
                     }
                 },
-                "memory": {"enabled": True, "prefetch_once_per_turn": True, "store_path": str(contract_tmp_path / "memory")},
+                "hcms": {"enabled": True},
                 "guardrails": {"enabled": True},
                 "summarization": {"enabled": True},
                 "plan_mode": {"enabled": True, "default": True},
@@ -752,8 +1353,8 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
         "thread_data",
         "uploads",
         "sandbox",
-        "summarization",
         "todo",
+        "memory_prefetch",
     ]
     assert "memory_prefetch" in trace
     assert "view_image" in trace
@@ -768,7 +1369,6 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
     assert "clarification" in trace
     assert trace[-1] == "memory_capture"
 
-    first_summarization = trace.index("summarization")
     first_todo = trace.index("todo")
     first_prefetch = trace.index("memory_prefetch")
     first_view_image = trace.index("view_image")
@@ -782,7 +1382,7 @@ def test_runtime_call_order_matches_protocol_phases(monkeypatch, contract_tmp_pa
     token_usage_index = trace.index("token_usage")
     last_clarification = len(trace) - 1 - trace[::-1].index("clarification")
 
-    assert first_summarization < first_todo < first_prefetch < first_view_image < first_visibility < first_filter
+    assert first_todo < first_prefetch < first_view_image < first_visibility < first_filter
     assert first_guardrail < first_filter
     assert first_audit < tool_error_index
     assert tool_error_index < tool_output_budget_index

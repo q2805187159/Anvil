@@ -325,17 +325,16 @@ def test_evaluation_report_summarizes_runtime_tools_memory_and_risks() -> None:
             "status": "injected",
             "snapshot_id": "memory-snapshot-1",
             "query_tokens": 12,
-            "curated_match_count": 2,
+            "memory_match_count": 2,
             "archive_hit_count": 1,
             "evidence_count": 3,
-            "provider_note_count": 1,
-            "summary_present": True,
+            "engine_note_count": 1,
             "rendered_tokens_before_truncation": 1200,
             "rendered_tokens": 900,
             "token_budget": 900,
             "truncated": True,
             "store_counts": {"project": 2},
-            "source_kind_counts": {"curated": 2, "archive": 1},
+            "source_kind_counts": {"memory": 2, "archive": 1},
         },
         "compaction_diagnostics": {
             "compaction_level": 2,
@@ -355,6 +354,198 @@ def test_evaluation_report_summarizes_runtime_tools_memory_and_risks() -> None:
             "compaction_summary_tokens": 280,
             "keep_recent_turns": 2,
         },
+        "context_v2": {
+            "enabled": True,
+            "diagnostic_only": True,
+            "fallback_used": False,
+            "actual_prompt_mode": "runtime_context_v2",
+            "actual_system_prompt_hash": "system-hash-1",
+            "trace": {
+                "trace_id": "ctx_trace_eval",
+                "prompt_hash": "context-hash-1",
+                "candidate_block_ids": ["prompt:role", "memory:fact", "capability:read_file", "memory:stale"],
+                "selected_block_ids": ["prompt:role", "memory:fact", "capability:read_file"],
+                "compressed_block_ids": ["capability:read_file"],
+                "deferred_block_ids": [],
+                "dropped_block_ids": ["memory:stale"],
+                "layer_token_usage": {"prompt": 120, "semantic_fact": 24, "capability": 40},
+                "selected_tools": ["read_file"],
+                "selected_mcp_tools": [],
+                "selected_skills": ["skill://coding"],
+                "selected_memory": ["claim-1"],
+                "selected_workspace": ["workspace:root"],
+                "selected_events": ["evt-1"],
+                "selected_tool_results": ["tc1"],
+                "selected_tool_result_refs": ["artifact://thread-traj/tool-results/tc1.txt"],
+                "block_traces": [
+                    {
+                        "block_id": "prompt:role",
+                        "block_type": "prompt",
+                        "source_kind": "prompt",
+                        "token_cost": 120,
+                        "selected": True,
+                    },
+                    {
+                        "block_id": "memory:fact",
+                        "block_type": "semantic_fact",
+                        "source_kind": "memory",
+                        "token_cost": 24,
+                        "selected": True,
+                    },
+                    {
+                        "block_id": "capability:read_file",
+                        "block_type": "capability",
+                        "source_kind": "capability",
+                        "token_cost": 40,
+                        "selected": True,
+                    },
+                    {
+                        "block_id": "memory:stale",
+                        "block_type": "semantic_fact",
+                        "source_kind": "memory",
+                        "token_cost": 16,
+                        "selected": False,
+                    },
+                ],
+                "drop_decisions": [{"block_id": "memory:stale", "reason": "low_salience"}],
+                "total_tokens": 184,
+                "budget": {
+                    "max_context_tokens": 8192,
+                    "reserved_response_tokens": 1024,
+                    "soft_limit_ratio": 0.9,
+                    "per_layer_token_budget": {},
+                },
+                "metadata": {"actual_system_prompt_hash": "system-hash-1"},
+            },
+            "diagnostics": {
+                "retrieval_scores": [0.92, 0.73],
+                "llm_output_ref": "artifact://thread-traj/llm/output.txt",
+                "llm_output_tokens": 64,
+                "llm_output_status": "completed",
+                "llm_output": "never export raw llm output",
+                "user_satisfaction_proxy": "positive",
+            },
+            "runtime_state": {
+                "event_log": {
+                    "event_types": [
+                        "user_message_received",
+                        "context_assembled",
+                        "action_dispatch",
+                        "tool_result",
+                        "observation_handling",
+                        "state_update",
+                        "maintenance_scheduling",
+                    ],
+                    "events": [
+                        {
+                            "event_id": "evt-ctx-1",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 1,
+                            "event_type": "user_message_received",
+                            "source_kind": "user",
+                            "source_ref": "u1",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "raw request should not become evaluation replay content",
+                            "tool_result_refs": [],
+                            "workspace_refs": [],
+                            "memory_refs": [],
+                            "metadata": {"phase": "intake", "raw_prompt": "never export this raw prompt"},
+                            "created_at": "2026-06-08T00:00:00Z",
+                        },
+                        {
+                            "event_id": "evt-ctx-2",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 2,
+                            "event_type": "context_assembled",
+                            "source_kind": "runtime_context_v2",
+                            "source_ref": "ctx_trace_eval",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "assembled context",
+                            "tool_result_refs": ["tc1"],
+                            "workspace_refs": ["workspace:root"],
+                            "memory_refs": ["claim-1"],
+                            "metadata": {"phase": "context_assembly"},
+                            "created_at": "2026-06-08T00:00:01Z",
+                        },
+                        {
+                            "event_id": "evt-ctx-3",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 3,
+                            "event_type": "action_dispatch",
+                            "source_kind": "tool",
+                            "source_ref": "tc1",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "dispatch write_file",
+                            "tool_result_refs": [],
+                            "workspace_refs": [],
+                            "memory_refs": [],
+                            "metadata": {
+                                "phase": "action_dispatch",
+                                "tool_name": "write_file",
+                                "outcome": "success",
+                                "raw_result": "never export raw tool outcome",
+                            },
+                            "created_at": "2026-06-08T00:00:02Z",
+                        },
+                        {
+                            "event_id": "evt-ctx-4",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 4,
+                            "event_type": "observation_handling",
+                            "source_kind": "tool",
+                            "source_ref": "tc1",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "observed summarized tool result",
+                            "tool_result_refs": ["tc1"],
+                            "workspace_refs": ["workspace:root"],
+                            "memory_refs": [],
+                            "metadata": {"phase": "observation_handling", "raw_output": "never export raw tool output"},
+                            "created_at": "2026-06-08T00:00:03Z",
+                        },
+                        {
+                            "event_id": "evt-ctx-5",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 5,
+                            "event_type": "state_update",
+                            "source_kind": "workspace_state",
+                            "source_ref": "workspace:root",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "workspace updated",
+                            "tool_result_refs": [],
+                            "workspace_refs": ["workspace:root"],
+                            "memory_refs": [],
+                            "metadata": {
+                                "phase": "state_update",
+                                "user_correction": True,
+                                "user_satisfaction_proxy": "positive",
+                            },
+                            "created_at": "2026-06-08T00:00:04Z",
+                        },
+                        {
+                            "event_id": "evt-ctx-6",
+                            "thread_id": "thread-traj",
+                            "turn_id": "run-1",
+                            "sequence": 6,
+                            "event_type": "maintenance_scheduling",
+                            "source_kind": "runtime",
+                            "source_ref": "run-1",
+                            "trace_id": "ctx_trace_eval",
+                            "payload_summary": "maintenance scheduled",
+                            "tool_result_refs": [],
+                            "workspace_refs": [],
+                            "memory_refs": [],
+                            "metadata": {"phase": "maintenance_scheduling"},
+                            "created_at": "2026-06-08T00:00:05Z",
+                        },
+                    ],
+                },
+            },
+        },
     }
     state.execution.runtime_assembly_diff = {
         "baseline": "previous_run",
@@ -373,7 +564,10 @@ def test_evaluation_report_summarizes_runtime_tools_memory_and_risks() -> None:
     state.memory.memory_namespace = "default/thread-traj"
     state.memory.injected_memory_snapshot_id = "memory-snapshot-1"
 
-    report = ThreadEvaluationReportBuilder().build_thread_report(state)
+    report = ThreadEvaluationReportBuilder().build_thread_report(
+        state,
+        options=EvaluationReportOptions(include_markdown=True),
+    )
 
     assert report.thread_id == "thread-traj"
     assert report.runtime.runtime_phase_timings["total_elapsed_ms"] == 42_000
@@ -382,8 +576,93 @@ def test_evaluation_report_summarizes_runtime_tools_memory_and_risks() -> None:
     assert report.runtime.runtime_phase_diagnostics["first_content_wait_ms"] == 40_600
     assert report.runtime.runtime_assembly_snapshot["prompt"]["cache_delta"]["hits"] == 1
     assert report.runtime.runtime_assembly_snapshot["capabilities"]["assembly_diagnostics"]["schema_deferred_tool_count"] == 1
-    assert report.runtime.runtime_assembly_snapshot["memory_injection_diagnostics"]["curated_match_count"] == 2
+    assert report.runtime.runtime_assembly_snapshot["memory_injection_diagnostics"]["memory_match_count"] == 2
     assert report.runtime.runtime_assembly_snapshot["compaction_diagnostics"]["tool_call_count"] == 3
+    assert report.runtime.context_v2_evaluation["trace_id"] == "ctx_trace_eval"
+    assert report.runtime.context_v2_evaluation["selected_tools"] == ["read_file"]
+    assert report.runtime.context_v2_evaluation["selected_memory"] == ["claim-1"]
+    assert report.runtime.context_v2_evaluation["selected_tool_result_refs"] == [
+        "artifact://thread-traj/tool-results/tc1.txt"
+    ]
+    assert report.runtime.context_v2_evaluation["evaluation_run"]["trace_replay_ready"] is True
+    assert report.runtime.context_v2_evaluation["evaluation_run"]["runtime_event_counts"]["action_dispatch"] == 1
+    assert report.runtime.context_v2_evaluation["evaluation_run"]["replay_phase_coverage"] == {
+        "action_dispatch": True,
+        "maintenance_scheduling": True,
+        "observation_handling": True,
+        "state_update": True,
+    }
+    replay_matrix = report.runtime.context_v2_evaluation["evaluation_run"]["trace_replay_matrix"]
+    assert replay_matrix == [
+        {
+            "case_id": "run-1:1",
+            "trace_id": "ctx_trace_eval",
+            "prompt_hash": "context-hash-1",
+            "trace_replay_ready": True,
+            "runtime_event_count": 6,
+            "runtime_event_counts": {
+                "action_dispatch": 1,
+                "context_assembled": 1,
+                "maintenance_scheduling": 1,
+                "observation_handling": 1,
+                "state_update": 1,
+                "user_message_received": 1,
+            },
+            "runtime_event_refs": [
+                "evt-ctx-1",
+                "evt-ctx-2",
+                "evt-ctx-3",
+                "evt-ctx-4",
+                "evt-ctx-5",
+                "evt-ctx-6",
+            ],
+            "runtime_event_trace_ids": ["ctx_trace_eval"],
+            "runtime_tool_result_refs": ["tc1"],
+            "runtime_workspace_refs": ["workspace:root"],
+            "runtime_memory_refs": ["claim-1"],
+            "replay_phase_coverage": {
+                "action_dispatch": True,
+                "maintenance_scheduling": True,
+                "observation_handling": True,
+                "state_update": True,
+            },
+        }
+    ]
+    event_log_replay = report.runtime.context_v2_evaluation["evaluation_run"]["ablation_variant_metrics"][
+        "event_log_replay"
+    ]
+    assert event_log_replay["enabled"] is True
+    assert event_log_replay["trace_count"] == 1
+    assert event_log_replay["token_overhead_ratio"] == 0.0257
+    observability = report.runtime.context_v2_evaluation["runtime_observability"]
+    assert observability["trace_id"] == "ctx_trace_eval"
+    assert observability["prompt_hash"] == "context-hash-1"
+    assert observability["actual_system_prompt_hash"] == "system-hash-1"
+    assert observability["block_counts"] == {
+        "candidate": 4,
+        "selected": 3,
+        "compressed": 1,
+        "deferred": 0,
+        "dropped": 1,
+    }
+    assert observability["total_tokens"] == 184
+    assert observability["hard_context_tokens"] == 7168
+    assert observability["selected_tools"] == ["read_file"]
+    assert observability["selected_memory"] == ["claim-1"]
+    assert observability["selected_tool_result_refs"] == ["artifact://thread-traj/tool-results/tc1.txt"]
+    assert observability["tool_outcome_counts"] == {"success": 1}
+    assert observability["tool_outcome_refs"] == ["evt-ctx-3"]
+    assert observability["user_correction_count"] == 1
+    assert observability["user_satisfaction_proxy"] == "positive"
+    assert observability["llm_output_ref"] == "artifact://thread-traj/llm/output.txt"
+    assert observability["llm_output_tokens"] == 64
+    assert observability["llm_output_status"] == "completed"
+    assert observability["retrieval_score_summary"] == {
+        "count": 2,
+        "min": 0.73,
+        "max": 0.92,
+        "average": 0.825,
+    }
     assert report.runtime.runtime_assembly_diff["changed_paths"] == ["middleware_names", "enabled_feature_flags"]
     assert report.tool_calls[0].name == "write_file"
     assert report.memory.injected_memory_snapshot_id == "memory-snapshot-1"
@@ -394,7 +673,78 @@ def test_evaluation_report_summarizes_runtime_tools_memory_and_risks() -> None:
     assert any("summarization model routing" in item for item in report.recommendations)
     assert any("compacted tool/message evidence" in item for item in report.recommendations)
     assert any("Compaction diagnostics include summary/source counters only" in item for item in report.notes)
+    assert "Context V2 evaluation" in report.markdown
+    assert "trace=ctx_trace_eval" in report.markdown
+    assert "prompt_hash=context-hash-1" in report.markdown
+    assert "replay_ready=True" in report.markdown
+    assert "runtime_events=action_dispatch:1" in report.markdown
+    assert "tools=read_file" in report.markdown
+    assert "memory=claim-1" in report.markdown
+    assert "never export this raw prompt" not in str(report.model_dump(mode="json"))
+    assert "never export raw tool output" not in str(report.model_dump(mode="json"))
+    assert "never export raw llm output" not in str(report.model_dump(mode="json"))
+    assert "never export raw tool outcome" not in str(report.model_dump(mode="json"))
     assert report.score < 1.0
+
+
+def test_evaluation_report_scrubs_raw_memory_context_from_default_v2_diagnostics() -> None:
+    state = make_state()
+    raw_memory_context = "<memory_context>never export raw v2 memory prompt</memory_context>"
+    state.execution.runtime_assembly_snapshot = {
+        "memory_injection_diagnostics": {
+            "source": "runtime_context_v2",
+            "status": "injected",
+            "injection_mode": "context_v2",
+            "memory_match_count": 1,
+            "archive_hit_count": 0,
+            "evidence_count": 1,
+            "engine_note_count": 0,
+            "rendered_tokens": 24,
+            "token_budget": 256,
+            "truncated": False,
+            "context_v2_block_count": 1,
+            "context_v2_memory_block_ids": ["memory:block:fact"],
+            "memory_context": raw_memory_context,
+            "rendered_memory_context": raw_memory_context,
+            "raw_memory_context": raw_memory_context,
+            "recall_payload": {"memory_context": raw_memory_context},
+        },
+        "context_v2": {
+            "enabled": True,
+            "diagnostic_only": False,
+            "fallback_used": False,
+            "actual_prompt_mode": "runtime_context_v2",
+            "trace": {
+                "trace_id": "ctx-memory-scrub",
+                "selected_block_ids": ["prompt:role", "memory:block:fact"],
+                "selected_memory": ["claim-1"],
+                "total_tokens": 48,
+                "budget": {
+                    "max_context_tokens": 8192,
+                    "reserved_response_tokens": 1024,
+                },
+            },
+        },
+    }
+
+    report = ThreadEvaluationReportBuilder().build_thread_report(
+        state,
+        options=EvaluationReportOptions(include_markdown=True),
+    )
+
+    dumped = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+    assert "never export raw v2 memory prompt" not in dumped
+    assert "<memory_context>" not in dumped
+    assert "never export raw v2 memory prompt" not in report.markdown
+    diagnostics = report.runtime.runtime_assembly_snapshot["memory_injection_diagnostics"]
+    assert diagnostics["injection_mode"] == "context_v2"
+    assert diagnostics["context_v2_block_count"] == 1
+    assert diagnostics["context_v2_memory_block_ids"] == ["memory:block:fact"]
+    assert "memory_context" not in diagnostics
+    assert "recall_payload" not in diagnostics
+    assert "Memory injection diagnostics" in report.markdown
+    assert "mode=context_v2" in report.markdown
+    assert "blocks=1" in report.markdown
 
 
 def test_evaluation_report_classifies_runtime_phase_diagnostics_markdown() -> None:
@@ -677,15 +1027,15 @@ def test_evaluation_report_accepts_external_evaluator_and_renders_markdown(contr
         "memory_injection_diagnostics": {
             "source": "memory_manager",
             "status": "injected",
-            "curated_match_count": 2,
+            "memory_match_count": 2,
             "archive_hit_count": 1,
             "evidence_count": 3,
-            "provider_note_count": 1,
+            "engine_note_count": 1,
             "rendered_tokens": 900,
             "token_budget": 900,
             "truncated": True,
             "store_counts": {"project": 2},
-            "source_kind_counts": {"curated": 2, "archive": 1},
+            "source_kind_counts": {"memory": 2, "archive": 1},
         },
         "compaction_diagnostics": {
             "compaction_level": 1,
@@ -757,7 +1107,7 @@ def test_evaluation_report_accepts_external_evaluator_and_renders_markdown(contr
     assert "skills_slowest=loader_discover" in report.markdown
     assert "skills_stages=loader_discover:30" in report.markdown
     assert "Memory injection diagnostics" in report.markdown
-    assert "curated=2 archive=1 evidence=3" in report.markdown
+    assert "memory=2 archive=1 evidence=3" in report.markdown
     assert "Compaction diagnostics" in report.markdown
     assert "level=1 label=summary" in report.markdown
     assert "source=model" in report.markdown

@@ -4,17 +4,21 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from threading import RLock
 from pathlib import Path
 from time import monotonic
+from typing import Any
 
 from anvil.config import EffectiveConfig
 
 from .cache import SkillsCache
 from .contracts import (
+    SkillCandidate,
     SkillContentView,
     SkillDiscoveryDiagnostics,
     SkillDiscoveryResult,
@@ -23,6 +27,7 @@ from .contracts import (
     SkillFileReadView,
     SkillManifest,
     SkillPackage,
+    SkillRetrievalPlan,
     SkillSummary,
 )
 from .curator import SkillCuratorService
@@ -197,6 +202,141 @@ class SkillsService:
         )
         self.cache.put(cache_key, result)
         return result
+
+    def retrieve(
+        self,
+        *,
+        config: EffectiveConfig,
+        fingerprint: str,
+        query: str | None = None,
+        top_k: int = 4,
+        feedback_by_skill_id: dict[str, dict[str, object]] | None = None,
+        graph_neighbors_by_skill_id: dict[str, tuple[str, ...] | list[str]] | None = None,
+        salience_boost_terms: dict[str, float] | None = None,
+        prefetch_terms: tuple[str, ...] | list[str] | None = None,
+        discovery_result: SkillDiscoveryResult | None = None,
+    ) -> SkillRetrievalPlan:
+        """Return L0-L6 skill retrieval candidates without loading full skill bodies."""
+
+        result = discovery_result or self.discover(config=config, fingerprint=fingerprint)
+        query_text = str(query or "").strip()
+        query_terms = _retrieval_terms(query_text)
+        normalized_salience_terms = _normalize_salience_boost_terms(salience_boost_terms)
+        prefetch_query_terms = _retrieval_terms(" ".join(str(term) for term in (prefetch_terms or ())))
+        hyde_triggered = _skill_hyde_should_expand(
+            query_terms=query_terms,
+            enabled_count=len(result.enabled_ids),
+            salience_boost_terms=normalized_salience_terms,
+        )
+        expanded_query_terms = (
+            _skill_hyde_expanded_terms(
+                query_terms=query_terms,
+                salience_boost_terms=normalized_salience_terms,
+            )
+            if hyde_triggered
+            else query_terms
+        )
+        normalized_feedback = {
+            normalize_skill_id(skill_id): dict(value)
+            for skill_id, value in (feedback_by_skill_id or {}).items()
+        }
+        normalized_neighbors = {
+            normalize_skill_id(skill_id): tuple(str(item) for item in value if str(item).strip())
+            for skill_id, value in (graph_neighbors_by_skill_id or {}).items()
+        }
+        l0_summary = _skill_l0_summary(result)
+        scored: list[dict[str, Any]] = []
+        for manifest in result.enabled_manifests:
+            fields = _skill_retrieval_fields(manifest)
+            bm25_score, matched_terms, matched_fields = _skill_bm25_score(fields, expanded_query_terms)
+            vector_score = _skill_lexical_vector_score(fields, expanded_query_terms)
+            feedback = normalized_feedback.get(manifest.skill_id, {})
+            history_score = _skill_history_score(feedback)
+            graph_neighbors = _skill_graph_neighbors(manifest, normalized_neighbors.get(manifest.skill_id, ()))
+            graph_score = _skill_graph_score(graph_neighbors, expanded_query_terms, matched_terms)
+            salience_score = _skill_salience_score(fields, normalized_salience_terms)
+            hyde_score = _skill_hyde_score(fields, expanded_query_terms, query_terms)
+            prefetch_score = _skill_prefetch_score(fields, prefetch_query_terms)
+            scored.append(
+                {
+                    "manifest": manifest,
+                    "fields": fields,
+                    "bm25": bm25_score,
+                    "vector": vector_score,
+                    "history": history_score,
+                    "graph": graph_score,
+                    "salience": salience_score,
+                    "hyde": hyde_score,
+                    "prefetch": prefetch_score,
+                    "matched_terms": matched_terms,
+                    "matched_fields": matched_fields,
+                    "graph_neighbors": graph_neighbors,
+                    "feedback": feedback,
+                }
+            )
+
+        fusion_scores = _skill_rrf_fusion(scored)
+        for item in scored:
+            item["fusion"] = fusion_scores.get(item["manifest"].skill_id, 0.0)
+            item["rerank"] = 0.0
+        rerank_triggered, rerank_reasons = _skill_l4_should_rerank(scored)
+        if rerank_triggered:
+            for item in scored:
+                item["rerank"] = _skill_l4_rerank_score(item)
+                item["fusion"] = round(float(item["fusion"]) + float(item["rerank"]) * 0.12, 6)
+        scored.sort(key=lambda item: (-float(item["fusion"]), item["manifest"].skill_id))
+        limit = max(int(top_k or 0), 0)
+        selected_ids = tuple(item["manifest"].skill_id for item in scored[:limit] if float(item["fusion"]) > 0.0)
+        selected_set = set(selected_ids)
+        rank_by_id = {skill_id: index for index, skill_id in enumerate(selected_ids, start=1)}
+        prefetch_ids = _skill_l6_prefetch_ids(scored, exclude_skill_ids=selected_set)
+        candidates = tuple(
+            _skill_candidate_from_score(
+                item,
+                selected=item["manifest"].skill_id in selected_set,
+                selection_rank=rank_by_id.get(item["manifest"].skill_id),
+                prefetch_candidate=item["manifest"].skill_id in prefetch_ids,
+            )
+            for item in scored
+        )
+        tiers_used = ("L0", "L1", "L2", "L3")
+        if rerank_triggered:
+            tiers_used = (*tiers_used, "L4")
+        if hyde_triggered:
+            tiers_used = (*tiers_used, "L5")
+        if prefetch_ids:
+            tiers_used = (*tiers_used, "L6")
+        return SkillRetrievalPlan(
+            query=query_text,
+            top_k=limit,
+            selected_skill_ids=selected_ids,
+            l0_summary=l0_summary,
+            tiers_used=tiers_used,
+            candidates=candidates,
+            diagnostics={
+                "loaded_full_skill_content": False,
+                "embedding_mode": "lexical_fallback",
+                "candidate_count": len(candidates),
+                "query_terms": query_terms,
+                "expanded_query_terms": expanded_query_terms,
+                "selected_count": len(selected_ids),
+                "cache_hit": result.discovery_diagnostics.cache_hit,
+                "l4_rerank_triggered": rerank_triggered,
+                "l4_trigger_reasons": rerank_reasons,
+                "l5_hyde_triggered": hyde_triggered,
+                "l6_prefetch_triggered": bool(prefetch_ids),
+                "prefetch_skill_ids": prefetch_ids,
+                "candidates_per_tier": {
+                    "L0": len(result.enabled_ids),
+                    "L1": len(tuple(item for item in scored if item["bm25"] > 0)),
+                    "L2": len(tuple(item for item in scored if item["vector"] > 0)),
+                    "L3": len(tuple(item for item in scored if item["fusion"] > 0)),
+                    "L4": len(tuple(item for item in scored if item["rerank"] > 0)),
+                    "L5": len(tuple(item for item in scored if item["hyde"] > 0)),
+                    "L6": len(prefetch_ids),
+                },
+            },
+        )
 
     def _cache_key(self, *, config: EffectiveConfig, fingerprint: str, roots: list[Path]) -> str | None:
         if not config.skills_config.watch_enabled:
@@ -643,6 +783,398 @@ class SkillsService:
             force=force,
             source=source,
         )
+
+
+_RETRIEVAL_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]+", re.IGNORECASE)
+_RETRIEVAL_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "for",
+    "id",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+_SKILL_FIELD_WEIGHTS = {
+    "skill_id": 3.5,
+    "title": 3.2,
+    "summary": 2.8,
+    "tags": 2.4,
+    "task_type": 2.0,
+    "domain": 1.8,
+    "allowed_tools": 1.2,
+    "input_requirements": 1.2,
+    "related_skills": 1.4,
+    "description": 1.0,
+    "body_preview": 0.8,
+}
+
+
+def _retrieval_terms(text: str) -> tuple[str, ...]:
+    terms: list[str] = []
+    for match in _RETRIEVAL_TOKEN_RE.finditer(_normalize_retrieval_text(text)):
+        term = match.group(0)
+        if len(term) <= 1 or term in _RETRIEVAL_STOPWORDS:
+            continue
+        if term not in terms:
+            terms.append(term)
+    return tuple(terms[:32])
+
+
+def _normalize_salience_boost_terms(terms: dict[str, float] | None) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    for raw_term, raw_weight in (terms or {}).items():
+        weight = _float_from_object(raw_weight)
+        if weight is None or weight <= 0:
+            continue
+        for term in _retrieval_terms(str(raw_term)):
+            normalized[term] = max(normalized.get(term, 0.0), min(weight, 1.0))
+    return dict(sorted(normalized.items()))
+
+
+def _normalize_retrieval_text(text: str) -> str:
+    return str(text or "").casefold().replace("-", " ").replace("_", " ").replace("/", " ")
+
+
+def _skill_l0_summary(result: SkillDiscoveryResult) -> dict[str, object]:
+    domains = Counter(str(manifest.domain or "unspecified") for manifest in result.enabled_manifests)
+    task_types = Counter(str(manifest.task_type or "unspecified") for manifest in result.enabled_manifests)
+    tags = Counter(tag for manifest in result.enabled_manifests for tag in manifest.tags)
+    source_roots = Counter(manifest.source_root for manifest in result.enabled_manifests)
+    return {
+        "root_count": result.discovery_diagnostics.root_count,
+        "manifest_count": len(result.all_manifests),
+        "enabled_count": len(result.enabled_ids),
+        "domain_counts": dict(sorted(domains.items())),
+        "task_type_counts": dict(sorted(task_types.items())),
+        "tag_counts": dict(sorted(tags.items())),
+        "source_root_count": len(source_roots),
+    }
+
+
+def _skill_retrieval_fields(manifest: SkillManifest) -> dict[str, str]:
+    return {
+        "skill_id": manifest.skill_id,
+        "title": manifest.title,
+        "summary": manifest.summary,
+        "description": manifest.description or "",
+        "tags": " ".join(manifest.tags),
+        "domain": manifest.domain or "",
+        "task_type": manifest.task_type or "",
+        "allowed_tools": " ".join(manifest.allowed_tools),
+        "input_requirements": " ".join(manifest.input_requirements),
+        "related_skills": " ".join(manifest.related_skills),
+        "body_preview": manifest.body_preview,
+    }
+
+
+def _skill_bm25_score(fields: dict[str, str], query_terms: tuple[str, ...]) -> tuple[float, tuple[str, ...], tuple[str, ...]]:
+    if not query_terms:
+        return 0.0, (), ()
+    score = 0.0
+    matched_terms: list[str] = []
+    matched_fields: list[str] = []
+    for field_name, raw_text in fields.items():
+        haystack = _normalize_retrieval_text(raw_text)
+        if not haystack:
+            continue
+        weight = _SKILL_FIELD_WEIGHTS.get(field_name, 1.0)
+        field_matched = False
+        for term in query_terms:
+            if _term_matches_text(term, haystack):
+                score += weight
+                field_matched = True
+                if term not in matched_terms:
+                    matched_terms.append(term)
+        if field_matched and field_name not in matched_fields:
+            matched_fields.append(field_name)
+    return round(score, 4), tuple(matched_terms), tuple(matched_fields)
+
+
+def _skill_lexical_vector_score(fields: dict[str, str], query_terms: tuple[str, ...]) -> float:
+    if not query_terms:
+        return 0.0
+    haystack = _normalize_retrieval_text(" ".join(fields.values()))
+    field_terms = set(_retrieval_terms(haystack))
+    if not field_terms:
+        return 0.0
+    overlap = sum(1 for term in query_terms if term in field_terms or _term_matches_text(term, haystack))
+    denominator = (len(query_terms) * len(field_terms)) ** 0.5
+    return round(overlap / denominator, 4) if denominator else 0.0
+
+
+def _skill_history_score(feedback: dict[str, object]) -> float:
+    if not feedback:
+        return 0.0
+    utility = _float_from_object(feedback.get("utility_score"))
+    usage_count = _int_from_object(feedback.get("usage_count") or feedback.get("feedback_count"))
+    success_count = _int_from_object(feedback.get("success_count"))
+    failure_count = _int_from_object(feedback.get("failure_count"))
+    correction_count = _int_from_object(feedback.get("correction_count") or feedback.get("user_correction_count"))
+    success_rate = success_count / usage_count if usage_count else 0.0
+    score = (utility or 0.0) * 0.55 + success_rate * 0.35 + min(usage_count, 10) / 10 * 0.1
+    score -= min(failure_count + correction_count, 5) * 0.04
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
+def _skill_graph_neighbors(manifest: SkillManifest, configured_neighbors: tuple[str, ...]) -> tuple[str, ...]:
+    neighbors: list[str] = []
+    for item in (*manifest.related_skills, *configured_neighbors):
+        normalized = normalize_skill_id(str(item))
+        if normalized and normalized != manifest.skill_id and normalized not in neighbors:
+            neighbors.append(normalized)
+    return tuple(neighbors[:16])
+
+
+def _skill_graph_score(
+    graph_neighbors: tuple[str, ...],
+    query_terms: tuple[str, ...],
+    matched_terms: tuple[str, ...],
+) -> float:
+    if not graph_neighbors:
+        return 0.0
+    neighbor_text = _normalize_retrieval_text(" ".join(graph_neighbors))
+    query_hits = sum(1 for term in query_terms if _term_matches_text(term, neighbor_text))
+    matched_boost = min(len(matched_terms), 3) * 0.08
+    score = query_hits * 0.18 + matched_boost + min(len(graph_neighbors), 6) * 0.02
+    return round(min(score, 1.0), 4)
+
+
+def _skill_salience_score(fields: dict[str, str], salience_boost_terms: dict[str, float]) -> float:
+    if not salience_boost_terms:
+        return 0.0
+    haystack = _normalize_retrieval_text(" ".join(fields.values()))
+    score = 0.0
+    for term, weight in salience_boost_terms.items():
+        if _term_matches_text(term, haystack):
+            score += min(max(weight, 0.0), 1.0)
+    return round(min(score / max(len(salience_boost_terms), 1), 1.0), 4)
+
+
+def _skill_hyde_should_expand(
+    *,
+    query_terms: tuple[str, ...],
+    enabled_count: int,
+    salience_boost_terms: dict[str, float],
+) -> bool:
+    return enabled_count > 0 and (len(query_terms) <= 2 or bool(salience_boost_terms))
+
+
+def _skill_hyde_expanded_terms(
+    *,
+    query_terms: tuple[str, ...],
+    salience_boost_terms: dict[str, float],
+) -> tuple[str, ...]:
+    terms: list[str] = list(query_terms)
+    for term in salience_boost_terms:
+        if term not in terms:
+            terms.append(term)
+    return tuple(terms[:32])
+
+
+def _skill_hyde_score(
+    fields: dict[str, str],
+    expanded_query_terms: tuple[str, ...],
+    original_query_terms: tuple[str, ...],
+) -> float:
+    expanded_only = tuple(term for term in expanded_query_terms if term not in set(original_query_terms))
+    if not expanded_only:
+        return 0.0
+    haystack = _normalize_retrieval_text(" ".join(fields.values()))
+    hits = sum(1 for term in expanded_only if _term_matches_text(term, haystack))
+    return round(min(hits / max(len(expanded_only), 1), 1.0), 4)
+
+
+def _skill_l4_should_rerank(scored: list[dict[str, Any]]) -> tuple[bool, tuple[str, ...]]:
+    reasons: list[str] = []
+    if len(scored) >= 4:
+        reasons.append("high_candidate_count")
+    if any(_skill_risk_rank(str(item["manifest"].risk_level or "")) >= 2 for item in scored):
+        reasons.append("high_risk_candidate")
+    return bool(reasons), tuple(reasons)
+
+
+def _skill_l4_rerank_score(item: dict[str, Any]) -> float:
+    manifest: SkillManifest = item["manifest"]
+    base = (
+        min(float(item["bm25"]) / 20.0, 1.0) * 0.3
+        + float(item["vector"]) * 0.2
+        + float(item["history"]) * 0.18
+        + float(item["graph"]) * 0.08
+        + float(item.get("salience") or 0.0) * 0.18
+        + float(item.get("hyde") or 0.0) * 0.12
+    )
+    risk_penalty = _skill_risk_rank(str(manifest.risk_level or "")) * 0.08
+    return round(min(max(base - risk_penalty, 0.0), 1.0), 4)
+
+
+def _skill_risk_rank(risk_level: str) -> int:
+    normalized = str(risk_level or "").casefold().strip()
+    if normalized in {"critical", "danger", "dangerous", "high"}:
+        return 2
+    if normalized in {"medium", "moderate", "normal"}:
+        return 1
+    return 0
+
+
+def _skill_prefetch_score(fields: dict[str, str], prefetch_terms: tuple[str, ...]) -> float:
+    if not prefetch_terms:
+        return 0.0
+    haystack = _normalize_retrieval_text(" ".join(fields.values()))
+    hits = sum(1 for term in prefetch_terms if _term_matches_text(term, haystack))
+    return round(min(hits / max(len(prefetch_terms), 1), 1.0), 4)
+
+
+def _skill_l6_prefetch_ids(
+    scored: list[dict[str, Any]],
+    *,
+    exclude_skill_ids: set[str],
+    limit: int = 3,
+    min_score: float = 0.25,
+) -> tuple[str, ...]:
+    ranked = [
+        item
+        for item in sorted(
+            scored,
+            key=lambda candidate: (-float(candidate.get("prefetch") or 0.0), candidate["manifest"].skill_id),
+        )
+        if float(item.get("prefetch") or 0.0) >= min_score
+        and item["manifest"].skill_id not in exclude_skill_ids
+        and _skill_risk_rank(str(item["manifest"].risk_level or "")) < 2
+    ]
+    return tuple(item["manifest"].skill_id for item in ranked[:limit])
+
+
+def _skill_rrf_fusion(scored: list[dict[str, Any]], *, rank_constant: int = 60) -> dict[str, float]:
+    fusion: dict[str, float] = {item["manifest"].skill_id: 0.0 for item in scored}
+    for score_key in ("bm25", "vector", "history", "graph", "salience", "hyde"):
+        ranked = [
+            item
+            for item in sorted(
+                scored,
+                key=lambda candidate: (-float(candidate[score_key]), candidate["manifest"].skill_id),
+            )
+            if float(item[score_key]) > 0.0
+        ]
+        for rank, item in enumerate(ranked, start=1):
+            fusion[item["manifest"].skill_id] += 1.0 / (rank_constant + rank)
+    for item in scored:
+        direct_score = (
+            min(float(item["bm25"]) / 20.0, 1.0) * 0.3
+            + float(item["vector"]) * 0.2
+            + float(item["history"]) * 0.22
+            + float(item["graph"]) * 0.07
+            + float(item.get("salience") or 0.0) * 0.16
+            + float(item.get("hyde") or 0.0) * 0.05
+        )
+        fusion[item["manifest"].skill_id] += direct_score
+    return {skill_id: round(score, 6) for skill_id, score in fusion.items()}
+
+
+def _skill_candidate_from_score(
+    item: dict[str, Any],
+    *,
+    selected: bool,
+    selection_rank: int | None,
+    prefetch_candidate: bool = False,
+) -> SkillCandidate:
+    manifest: SkillManifest = item["manifest"]
+    feedback = dict(item["feedback"])
+    tier_scores = {
+        "bm25": round(float(item["bm25"]), 4),
+        "vector": round(float(item["vector"]), 4),
+        "history": round(float(item["history"]), 4),
+        "graph": round(float(item["graph"]), 4),
+        "salience": round(float(item.get("salience") or 0.0), 4),
+        "hyde": round(float(item.get("hyde") or 0.0), 4),
+        "rerank": round(float(item.get("rerank") or 0.0), 4),
+        "prefetch": round(float(item.get("prefetch") or 0.0), 4),
+        "fusion": round(float(item["fusion"]), 6),
+    }
+    metadata = {
+        "source_kind": "skill",
+        "source_id": manifest.skill_id,
+        "path": manifest.path,
+        "source_root": manifest.source_root,
+        "trust": manifest.trust,
+        "version": manifest.version,
+        "domain": manifest.domain,
+        "task_type": manifest.task_type,
+        "tags": manifest.tags,
+        "allowed_tools": manifest.allowed_tools,
+        "input_requirements": manifest.input_requirements,
+        "risk_level": manifest.risk_level or "normal",
+        "readiness": manifest.readiness.model_dump(mode="json"),
+        "feedback": feedback,
+        "loaded_full_skill_content": False,
+    }
+    if prefetch_candidate:
+        metadata.update(
+            {
+                "prefetch_candidate": True,
+                "prefetch_reason": "L6_goal_prefetch",
+            }
+        )
+    return SkillCandidate(
+        skill_id=manifest.skill_id,
+        title=manifest.title,
+        summary=manifest.summary,
+        selection_rank=selection_rank,
+        selected=selected,
+        tier_scores=tier_scores,
+        fusion_score=tier_scores["fusion"],
+        matched_terms=tuple(item["matched_terms"]),
+        matched_fields=tuple(item["matched_fields"]),
+        graph_neighbors=tuple(item["graph_neighbors"]),
+        source_ref=f"skill://{manifest.skill_id}",
+        token_cost=_skill_candidate_token_cost(manifest),
+        metadata=metadata,
+    )
+
+
+def _skill_candidate_token_cost(manifest: SkillManifest) -> int:
+    payload = " ".join(
+        (
+            manifest.skill_id,
+            manifest.title,
+            manifest.summary,
+            " ".join(manifest.tags),
+            manifest.domain or "",
+            manifest.task_type or "",
+        )
+    )
+    return max(len(_retrieval_terms(payload)), 1)
+
+
+def _term_matches_text(term: str, haystack: str) -> bool:
+    if term in haystack:
+        return True
+    if term.endswith("s") and term[:-1] in haystack:
+        return True
+    return f"{term}s" in haystack
+
+
+def _int_from_object(value: object) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_from_object(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _file_kind(relative_path: str) -> str:

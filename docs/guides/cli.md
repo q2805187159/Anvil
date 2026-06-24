@@ -23,6 +23,7 @@ Initialize or update local configuration.
 ```bash
 anvil setup --provider openai --model gpt-5.4 --api-key-env OPENAI_API_KEY
 anvil setup --provider minimax --api-key-env MINIMAX_API_KEY
+anvil setup --git-token-env GITHUB_TOKEN --git-token <token>
 anvil setup --non-interactive --force
 ```
 
@@ -35,6 +36,12 @@ Important options:
 | `--api-key` | Secret value to write into `.env`. Use carefully. |
 | `--api-key-env` | Environment variable used by config. |
 | `--base-url` | OpenAI-compatible base URL override. |
+| `--git-token` | Git token value to write into `.env` for HCMS version control. |
+| `--git-token-env` | Environment variable that stores the Git token, default `GITHUB_TOKEN`. |
+| `--git-provider` | Git provider id, default `github`. |
+| `--git-user-name` | Optional Git author name for HCMS version metadata. |
+| `--git-user-email` | Optional Git author email for HCMS version metadata. |
+| `--git-remote-url` | Optional remote repository URL for operator metadata. |
 | `--non-interactive` | Do not prompt for missing values. |
 | `--force` | Replace existing config with a minimal config first. |
 
@@ -119,8 +126,10 @@ anvil plugins list
 ```bash
 anvil memory overview
 anvil memory stores
-anvil memory providers
+anvil memory engines
 anvil memory search "release checklist" --limit 5
+anvil memory migrate --from agentmemory --source-file ./agentmemory.json --target-dir ./.anvil/hcms-migration --validate
+anvil memory migrate --from anvil --source-db ./curated.db --target-dir ./.anvil/hcms-migration --namespace global/default
 anvil memory reflections
 ```
 

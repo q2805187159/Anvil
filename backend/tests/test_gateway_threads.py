@@ -1357,8 +1357,8 @@ def test_thread_state_view_projects_context_cache_diagnostics_without_context_te
                             "content": "sensitive project context text should never be projected",
                         },
                         {
-                            "virtual_path": "/mnt/user-data/workspace/docs/CODEX.md",
-                            "relative_path": "docs/CODEX.md",
+                            "virtual_path": "/mnt/user-data/workspace/docs/PROJECT_RULES.md",
+                            "relative_path": "docs/PROJECT_RULES.md",
                             "applies_to": "/mnt/user-data/workspace/docs",
                             "scope": "docs",
                             "truncated": True,
@@ -1478,19 +1478,27 @@ def test_thread_state_view_projects_memory_injection_diagnostics_without_memory_
                 "memory_injection_diagnostics": {
                     "source": "memory_manager",
                     "status": "injected",
+                    "injection_mode": "context_v2",
+                    "requested_injection_mode": "legacy_prompt_append",
+                    "legacy_prompt_append_migrated": True,
+                    "legacy_prompt_append_suppressed": True,
                     "snapshot_id": "memory-snapshot-123",
                     "query_tokens": 9,
-                    "curated_match_count": 3,
+                    "memory_match_count": 3,
                     "archive_hit_count": 2,
                     "evidence_count": 4,
-                    "provider_note_count": 1,
-                    "summary_present": True,
+                    "engine_note_count": 1,
+                    "context_v2_block_count": 1,
+                    "context_v2_candidate_block_count": 5,
+                    "context_v2_selected_memory_count": 2,
+                    "context_v2_memory_block_ids": ["memory:block:semantic"],
+                    "hcms_v2_memory_block_ids": ["memory:block:hcms-v2"],
                     "rendered_tokens_before_truncation": 1200,
                     "rendered_tokens": 900,
                     "token_budget": 900,
                     "truncated": True,
                     "store_counts": {"project": 2, "user": 1},
-                    "source_kind_counts": {"curated": 3, "archive": 1},
+                    "source_kind_counts": {"memory": 3, "archive": 1},
                     "memory_context": "sensitive memory content should never be projected",
                 },
             }
@@ -1503,17 +1511,156 @@ def test_thread_state_view_projects_memory_injection_diagnostics_without_memory_
     assert view.memory_injection_diagnostics is not None
     assert view.memory_injection_diagnostics.source == "memory_manager"
     assert view.memory_injection_diagnostics.status == "injected"
+    assert view.memory_injection_diagnostics.injection_mode == "context_v2"
+    assert view.memory_injection_diagnostics.requested_injection_mode == "legacy_prompt_append"
+    assert view.memory_injection_diagnostics.legacy_prompt_append_migrated is True
+    assert view.memory_injection_diagnostics.legacy_prompt_append_suppressed is True
     assert view.memory_injection_diagnostics.snapshot_id == "memory-snapshot-123"
-    assert view.memory_injection_diagnostics.curated_match_count == 3
+    assert view.memory_injection_diagnostics.memory_match_count == 3
     assert view.memory_injection_diagnostics.archive_hit_count == 2
     assert view.memory_injection_diagnostics.evidence_count == 4
-    assert view.memory_injection_diagnostics.provider_note_count == 1
+    assert view.memory_injection_diagnostics.engine_note_count == 1
+    assert view.memory_injection_diagnostics.context_v2_block_count == 1
+    assert view.memory_injection_diagnostics.context_v2_candidate_block_count == 5
+    assert view.memory_injection_diagnostics.context_v2_selected_memory_count == 2
+    assert view.memory_injection_diagnostics.context_v2_memory_block_ids == ["memory:block:semantic"]
+    assert view.memory_injection_diagnostics.hcms_v2_memory_block_ids == ["memory:block:hcms-v2"]
     assert view.memory_injection_diagnostics.rendered_tokens == 900
     assert view.memory_injection_diagnostics.token_budget == 900
     assert view.memory_injection_diagnostics.truncated is True
     assert view.memory_injection_diagnostics.store_counts == {"project": 2, "user": 1}
-    assert view.memory_injection_diagnostics.source_kind_counts == {"curated": 3, "archive": 1}
+    assert view.memory_injection_diagnostics.source_kind_counts == {"memory": 3, "archive": 1}
     assert "sensitive memory content" not in repr(payload)
+    assert not hasattr(view, "runtime_assembly_snapshot")
+
+
+def test_thread_state_view_projects_runtime_context_v2_diagnostics_without_raw_payload() -> None:
+    state = ThreadState(
+        identity={"thread_id": "thread-runtime-context-v2-diagnostics-view"},
+        execution={
+            "runtime_assembly_snapshot": {
+                "context_v2": {
+                    "enabled": True,
+                    "actual_prompt_mode": "runtime_context_v2",
+                    "actual_system_prompt_hash": "actual-system-prompt-hash-1",
+                    "rendered_context": "raw system prompt should never be projected",
+                    "trace": {
+                        "trace_id": "ctx-trace-live-1",
+                        "prompt_hash": "prompt-hash-live-1",
+                        "candidate_block_ids": [
+                            "memory:block:claim-live",
+                            "capability:block:read_file",
+                            "tool-result:block:large",
+                            "memory:block:poisoned",
+                        ],
+                        "selected_block_ids": ["memory:block:claim-live", "capability:block:read_file"],
+                        "compressed_block_ids": ["workspace:block:old"],
+                        "deferred_block_ids": ["tool-result:block:large"],
+                        "dropped_block_ids": ["memory:block:poisoned"],
+                        "selected_capabilities": ["tool:read_file", "skill:python"],
+                        "selected_tools": ["read_file"],
+                        "selected_skills": ["skill.python"],
+                        "selected_mcp_tools": ["browser_mcp"],
+                        "selected_memory": ["claim-live"],
+                        "selected_tool_result_refs": ["artifact://thread-live/tool-results/call-read.txt"],
+                        "block_counts": {"memory": 1, "capability": 2, "tool_result_ref": 1},
+                        "block_traces": [
+                            {
+                                "block_id": "memory:block:claim-live",
+                                "source_kind": "memory",
+                                "raw_content": "sensitive memory should never be projected",
+                            }
+                        ],
+                    },
+                    "runtime_state": {
+                        "review_inbox": {
+                            "item_count": 1,
+                            "open_item_count": 1,
+                            "items": [
+                                {
+                                    "review_inbox_id": "review-conflict-live-1",
+                                    "alert_id": "alert-live-1",
+                                    "conflict_id": "conflict-live-1",
+                                    "unresolved_reason": "raw conflict detail should never be projected",
+                                }
+                            ],
+                            "warning_blocks": [
+                                {
+                                    "block_id": "runtime-warning:block-live-1",
+                                    "content": "raw warning detail should never be projected",
+                                }
+                            ],
+                        },
+                        "event_log": {
+                            "event_types": [
+                                "user_message_received",
+                                "context_assembled",
+                                "action_dispatch",
+                                "observation_handling",
+                                "state_update",
+                                "maintenance_scheduling",
+                            ],
+                            "events": [
+                                {
+                                    "event_id": "evt-live-1",
+                                    "event_type": "action_dispatch",
+                                    "payload_summary": "raw tool call should never be projected",
+                                }
+                            ],
+                        },
+                    },
+                },
+            }
+        },
+    )
+
+    view = services.thread_state_to_view(state, state_scope="chat")
+    payload = view.model_dump(mode="json")
+
+    assert view.runtime_context_v2_diagnostics is not None
+    diagnostics = view.runtime_context_v2_diagnostics
+    assert diagnostics.actual_prompt_mode == "runtime_context_v2"
+    assert diagnostics.trace_id == "ctx-trace-live-1"
+    assert diagnostics.prompt_hash == "prompt-hash-live-1"
+    assert diagnostics.actual_system_prompt_hash == "actual-system-prompt-hash-1"
+    assert diagnostics.selected_capabilities == ["tool:read_file", "skill:python"]
+    assert diagnostics.selected_tools == ["read_file"]
+    assert diagnostics.selected_skills == ["skill.python"]
+    assert diagnostics.selected_mcp_tools == ["browser_mcp"]
+    assert diagnostics.selected_memory == ["claim-live"]
+    assert diagnostics.selected_tool_result_refs == ["artifact://thread-live/tool-results/call-read.txt"]
+    assert diagnostics.selected_conflict_warnings == [
+        "runtime-warning:block-live-1",
+        "review-conflict-live-1",
+    ]
+    assert diagnostics.block_counts == {
+        "memory": 1,
+        "capability": 2,
+        "tool_result_ref": 1,
+        "candidate": 4,
+        "selected": 2,
+        "compressed": 1,
+        "deferred": 1,
+        "dropped": 1,
+    }
+    assert diagnostics.compressed_block_count == 1
+    assert diagnostics.deferred_block_count == 1
+    assert diagnostics.dropped_block_count == 1
+    assert diagnostics.runtime_event_counts["action_dispatch"] == 1
+    assert diagnostics.runtime_event_counts["maintenance_scheduling"] == 1
+    assert diagnostics.replay_phase_coverage == {
+        "action_dispatch": True,
+        "observation_handling": True,
+        "state_update": True,
+        "maintenance_scheduling": True,
+    }
+    assert diagnostics.trace_replay_ready is True
+    assert diagnostics.conflict_warning_count == 1
+    assert "raw system prompt" not in repr(payload)
+    assert "sensitive memory" not in repr(payload)
+    assert "raw conflict detail" not in repr(payload)
+    assert "raw warning detail" not in repr(payload)
+    assert "raw tool call" not in repr(payload)
     assert not hasattr(view, "runtime_assembly_snapshot")
 
 

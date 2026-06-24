@@ -1,5 +1,6 @@
 from .cache import SkillsCache
 from .contracts import (
+    SkillCandidate,
     SkillCollisionRecord,
     SkillContentView,
     SkillDependency,
@@ -12,6 +13,7 @@ from .contracts import (
     SkillManifest,
     SkillPackage,
     SkillReadiness,
+    SkillRetrievalPlan,
     SkillSummary,
     SkillValidationIssue,
     SkillValidationSeverity,
@@ -30,6 +32,7 @@ from .service import SkillsService
 
 __all__ = [
     "SkillDependency",
+    "SkillCandidate",
     "SkillDiscoveryDiagnostics",
     "SkillDiscoveryResult",
     "SkillFileEntry",
@@ -43,6 +46,7 @@ __all__ = [
     "ProcedureLearningResult",
     "ProcedureLearningService",
     "SkillReadiness",
+    "SkillRetrievalPlan",
     "SkillSummary",
     "SkillCollisionRecord",
     "SkillContentView",

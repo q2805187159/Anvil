@@ -362,11 +362,25 @@ class SubagentService:
             self._pending_runners.pop(task_id, None)
             self._pending_max_concurrency.pop(task_id, None)
 
-    def close(self) -> None:
-        self._live_futures.clear()
+    def close(self, *, wait: bool = True, cancel_futures: bool = True) -> None:
         with self._scheduler_lock:
+            pending_task_ids = tuple(self._pending_runners)
             self._pending_runners.clear()
             self._pending_max_concurrency.clear()
+
+        for task_id in pending_task_ids:
+            self._interrupt_task_for_close(task_id)
+
+        close_executor = getattr(self.executor, "close", None)
+        if callable(close_executor):
+            close_executor(wait=wait, cancel_futures=cancel_futures)
+
+        with self._scheduler_lock:
+            live_task_ids = tuple(self._live_futures)
+            self._live_futures.clear()
+        for task_id in live_task_ids:
+            self._interrupt_task_for_close(task_id)
+
         if hasattr(self.registry, "close"):
             self.registry.close()
 
@@ -496,6 +510,34 @@ class SubagentService:
                 )
             interrupted.append(task.task_id)
         return tuple(sorted(interrupted))
+
+    def _interrupt_task_for_close(self, task_id: str) -> SubagentTaskRecord | None:
+        task = self.registry.get_task(task_id)
+        if task is None or task.status not in {SubagentTaskStatus.QUEUED, SubagentTaskStatus.RUNNING}:
+            return task
+        interrupted = self.registry.terminalize_task(
+            task.task_id,
+            status=SubagentTaskStatus.INTERRUPTED,
+            summary="",
+            error="subagent service closed before worker completed",
+            completed_at=datetime.now(timezone.utc),
+        )
+        self._publish_event(
+            interrupted,
+            event_type=SubagentEventType.JOB_INTERRUPTED,
+            payload={
+                "status": interrupted.status.value,
+                "error": interrupted.error or "subagent service closed before worker completed",
+            },
+        )
+        if self.tracing_service is not None:
+            self.tracing_service.subagent_finished(
+                parent_trace_id=interrupted.trace_id,
+                task_id=interrupted.task_id,
+                status=interrupted.status.value,
+                error=interrupted.error,
+            )
+        return interrupted
 
     def delete_for_parent_thread(self, parent_thread_id: str) -> int:
         for task in self.list_active_tasks(parent_thread_id=parent_thread_id):

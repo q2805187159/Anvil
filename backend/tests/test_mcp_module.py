@@ -41,7 +41,7 @@ def test_mcp_visibility_and_redaction_are_harness_owned() -> None:
     assert redacted["env"]["OPENAI_API_KEY"] == "[REDACTED]"
 
 
-def test_mcp_normalizer_accepts_deerflow_and_hermes_shapes() -> None:
+def test_mcp_normalizer_accepts_legacy_server_shapes() -> None:
     normalized = normalize_loaded_config(
         {
             "mcpServers": {

@@ -15,6 +15,7 @@ export const DEFAULT_OPS_URL_STATE: OpsUrlState = {
 function normalizeSurface(value: string | null): OpsSurface {
   if (
     value === "overview" ||
+    value === "basics" ||
     value === "models" ||
     value === "tools" ||
     value === "skills" ||

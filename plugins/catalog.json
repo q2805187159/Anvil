@@ -1,15 +1,15 @@
 {
   "plugins": [
     {
-      "plugin_id": "memory-http-provider-plugin",
-      "name": "Memory HTTP Provider",
-      "description": "Registers a generic HTTP memory provider with recall, sync, session-end, compact, and delegation hooks.",
-      "source": "./memory-http-provider-plugin",
+      "plugin_id": "memory-http-integration-notes",
+      "name": "Memory HTTP Integration Notes",
+      "description": "Documentation-only memory integration notes that keep HCMS as the active engine.",
+      "source": "./memory-http-integration-notes",
       "version": "0.1.0",
       "author": "Anvil",
-      "tags": ["memory", "provider", "http"],
+      "tags": ["memory", "hcms", "integration"],
       "trust_level": "curated",
-      "permissions": ["sends memory lifecycle JSON payloads to the configured provider endpoint"]
+      "permissions": ["documentation only; does not activate an external memory engine"]
     }
   ]
 }

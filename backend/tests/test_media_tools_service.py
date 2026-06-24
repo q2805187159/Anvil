@@ -298,6 +298,7 @@ def test_image_generation_tool_is_route_gated_and_returns_artifact_url(contract_
                             "model": "mock-image",
                             "supports_image_generation": True,
                             "image_generation": {
+                                "endpoint": "mock://image-generation",
                                 "providers": ["mock"],
                                 "mock_image_bytes": "generated-image",
                                 "model": "mock-image",
@@ -383,6 +384,7 @@ def test_image_generation_tool_uses_auxiliary_image_model_for_tool_calling_route
                             "supports_tool_calling": False,
                             "supports_image_generation": True,
                             "image_generation": {
+                                "endpoint": "mock://image-generation",
                                 "providers": ["mock"],
                                 "mock_image_bytes": "aux-generated-image",
                                 "model": "mock-image",

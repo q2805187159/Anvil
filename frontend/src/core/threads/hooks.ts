@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   ApprovalResumeRequest,
+  EvaluationThreadReportView,
   MessageEditResendRequest,
   QueuedFollowUpCreateRequest,
   QueuedFollowUpUpdateRequest,
@@ -22,7 +23,7 @@ import type {
 } from "@/src/core/contracts";
 import { ApiError } from "@/src/core/api/client";
 
-import { approveThread, cancelApproval, cancelSubagentTask, closeProcessStdin, createThread, deleteThread, deleteThreadFollowup, editLatestMessageAndResend, enqueueThreadFollowup, getProcessCapabilities, getProcessLog, getScheduledTaskAutomation, getThreadDetail, getThreadSettings, getThreadState, interruptProcessSession, interruptThreadRun, killProcessSession, listScheduledTasks, listThreadRunEvents, listThreads, pauseScheduledTask, popNextThreadFollowup, resizeProcessSession, resumeScheduledTask, runScheduledTask, runScheduledTaskAutomation, streamEditLatestMessageAndResendWithSignal, streamThreadApprovalWithSignal, streamThreadRunWithSignal, streamThreadUserInteractionWithSignal, updateThreadFollowup, updateThreadSettings, waitProcessSession, waitSubagentTask, writeProcessStdin } from "./api";
+import { approveThread, cancelApproval, cancelSubagentTask, closeProcessStdin, createThread, deleteThread, deleteThreadFollowup, editLatestMessageAndResend, enqueueThreadFollowup, getProcessCapabilities, getProcessLog, getScheduledTaskAutomation, getThreadDetail, getThreadEvaluationReport, getThreadSettings, getThreadState, interruptProcessSession, interruptThreadRun, killProcessSession, listScheduledTasks, listThreadRunEvents, listThreads, pauseScheduledTask, popNextThreadFollowup, resizeProcessSession, resumeScheduledTask, runScheduledTask, runScheduledTaskAutomation, streamEditLatestMessageAndResendWithSignal, streamThreadApprovalWithSignal, streamThreadRunWithSignal, streamThreadUserInteractionWithSignal, updateThreadFollowup, updateThreadSettings, waitProcessSession, waitSubagentTask, writeProcessStdin } from "./api";
 import { sortThreadsByRecency, threadActivityAtMillis } from "./recency";
 
 type ClientRunStreamEvent = RunStreamEvent & {
@@ -274,6 +275,7 @@ export function useDeleteThread() {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
       queryClient.removeQueries({ queryKey: ["thread-state", deleted.thread_id] });
       queryClient.removeQueries({ queryKey: ["thread-detail", deleted.thread_id] });
+      queryClient.removeQueries({ queryKey: ["thread-evaluation-report", deleted.thread_id] });
       queryClient.removeQueries({ queryKey: ["thread-settings", deleted.thread_id] });
       queryClient.removeQueries({ queryKey: ["uploads", deleted.thread_id] });
     },
@@ -334,6 +336,16 @@ export function useThreadDetail(threadId: string | null, options: QueryGateOptio
     refetchInterval: (query) => {
       return getThreadDetailRefetchInterval(query.state.data);
     },
+  });
+}
+
+export function useThreadEvaluationReport(threadId: string | null, options: QueryGateOptions = {}) {
+  return useQuery<EvaluationThreadReportView>({
+    queryKey: ["thread-evaluation-report", threadId],
+    queryFn: () => getThreadEvaluationReport(threadId!),
+    enabled: Boolean(threadId) && (options.enabled ?? true),
+    staleTime: THREAD_STATE_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -514,6 +526,7 @@ export function useThreadRunStream(threadId: string | null) {
       queryClient.invalidateQueries({ queryKey: ["threads"] }),
       queryClient.invalidateQueries({ queryKey: ["thread-state", effectiveThreadId] }),
       queryClient.invalidateQueries({ queryKey: ["thread-detail", effectiveThreadId] }),
+      queryClient.invalidateQueries({ queryKey: ["thread-evaluation-report", effectiveThreadId] }),
     ]);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("anvil:thread-list-post-run-refresh"));
@@ -813,6 +826,7 @@ export function useThreadRunStream(threadId: string | null) {
           queryClient.invalidateQueries({ queryKey: ["threads"] }),
           queryClient.invalidateQueries({ queryKey: ["thread-state", threadId] }),
           queryClient.invalidateQueries({ queryKey: ["thread-detail", threadId] }),
+          queryClient.invalidateQueries({ queryKey: ["thread-evaluation-report", threadId] }),
         ]);
       })
       .catch(() => undefined);

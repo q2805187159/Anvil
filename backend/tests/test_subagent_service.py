@@ -102,9 +102,11 @@ def test_subagent_worker_transitions_to_terminal_result() -> None:
 def test_subagent_service_can_cancel_task_without_late_overwrite() -> None:
     service = SubagentService()
     blocker = threading.Event()
+    completed = threading.Event()
 
     def blocking_runner():
-        blocker.wait(timeout=2)
+        blocker.wait(timeout=5)
+        completed.set()
         return "too late"
 
     task = service.submit(
@@ -115,13 +117,21 @@ def test_subagent_service_can_cancel_task_without_late_overwrite() -> None:
         runner=blocking_runner,
     )
 
-    cancelled = service.cancel(task.task_id)
-    blocker.set()
+    try:
+        cancelled = service.cancel(task.task_id)
+        blocker.set()
+        assert completed.wait(timeout=2) is True
+    finally:
+        blocker.set()
 
     assert cancelled.status is SubagentTaskStatus.CANCELLED
+    current = service.get_task(task.task_id)
+    assert current is not None
+    assert current.status is SubagentTaskStatus.CANCELLED
     result = service.get_result(task.task_id)
     assert result is not None
     assert result.status is SubagentTaskStatus.CANCELLED
+    assert result.summary == ""
 
 
 def test_subagent_service_reconciles_timeouts() -> None:
@@ -161,6 +171,35 @@ def test_subagent_service_wait_returns_terminal_result() -> None:
 
     assert result.summary == "waited"
     assert result.status is SubagentTaskStatus.COMPLETED
+
+
+def test_subagent_service_close_waits_for_live_worker_before_returning() -> None:
+    service = SubagentService()
+    started = threading.Event()
+    completed = threading.Event()
+
+    def slow_runner():
+        started.set()
+        time.sleep(0.15)
+        completed.set()
+        return "closed cleanly"
+
+    task = service.submit(
+        parent_thread_id="thread-close",
+        prompt="close waits",
+        parent_visible_tool_names=("read_file",),
+        config_result=make_config(),
+        runner=slow_runner,
+    )
+    assert started.wait(timeout=1) is True
+
+    service.close()
+
+    assert completed.is_set() is True
+    result = service.get_result(task.task_id)
+    assert result is not None
+    assert result.status is SubagentTaskStatus.COMPLETED
+    assert result.summary == "closed cleanly"
 
 
 def test_subagent_service_join_waits_current_active_tasks_without_task_id() -> None:

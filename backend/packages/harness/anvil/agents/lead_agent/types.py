@@ -12,7 +12,20 @@ from langgraph.graph import add_messages
 from anvil.agents import SandboxState, ThreadDataState
 from anvil.agents.user_interaction import UserInteractionRequest
 from anvil.runtime.approvals import ApprovalDecision, ApprovalRequest
-from anvil.runtime.tool_registry.contracts import CapabilityBundle
+from anvil.runtime.state_v2 import (
+    EventLog,
+    GoalStack,
+    ReviewInbox,
+    RuntimeEventBus,
+    SalienceRoute,
+    ToolResultStore,
+    WorkspaceState,
+)
+from anvil.runtime.tool_registry.contracts import (
+    CapabilityBundle,
+    CapabilityFeedbackDecision,
+    SkillSelectionFeedback,
+)
 
 if TYPE_CHECKING:
     from anvil.sandbox.path_service import PathService
@@ -38,13 +51,17 @@ class MemoryInjectionDiagnostics(BaseModel):
 
     source: str = "none"
     status: str = "not_used"
+    injection_mode: str = "context_v2"
+    requested_injection_mode: str | None = None
+    legacy_prompt_append_migrated: bool = False
+    legacy_prompt_append_suppressed: bool = False
     snapshot_id: str | None = None
     query_tokens: int = 0
-    curated_match_count: int = 0
+    memory_match_count: int = 0
     archive_hit_count: int = 0
     evidence_count: int = 0
-    provider_note_count: int = 0
-    summary_present: bool = False
+    engine_note_count: int = 0
+    context_v2_block_count: int = 0
     rendered_tokens_before_truncation: int = 0
     rendered_tokens: int = 0
     token_budget: int | None = None
@@ -73,7 +90,10 @@ class LeadAgentState(BaseModel):
     prompt_snapshot_id: str | None = None
     memory_snapshot_id: str | None = None
     memory_context: str | None = None
+    memory_context_mode: str = "context_v2"
+    context_v2_memory_blocks: list[dict[str, Any]] = Field(default_factory=list)
     memory_injection_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    memory_capture_diagnostics: dict[str, Any] = Field(default_factory=dict)
     upload_context: str | None = None
     uploaded_files: list[dict[str, Any]] = Field(default_factory=list)
     token_usage: dict[str, Any] = Field(default_factory=dict)
@@ -114,7 +134,23 @@ class LeadAgentContext:
     execution_mode: str = "agent"
     upload_context: str | None = None
     memory_context: str | None = None
+    memory_context_mode: str = "context_v2"
+    context_v2_memory_blocks: list[dict[str, Any]] = field(default_factory=list)
+    context_v2: dict[str, Any] = field(default_factory=dict)
+    tool_result_store: ToolResultStore | None = None
+    workspace_state: WorkspaceState | None = None
+    goal_stack: GoalStack | None = None
+    salience_route: SalienceRoute | None = None
+    review_inbox: ReviewInbox | None = None
+    event_log: EventLog | None = None
+    runtime_event_bus: RuntimeEventBus | None = None
+    skill_selection_feedback_decisions: list[CapabilityFeedbackDecision] = field(default_factory=list)
     memory_injection_diagnostics: dict[str, Any] = field(default_factory=dict)
+    memory_capture_diagnostics: dict[str, Any] = field(default_factory=dict)
+    workspace_memory_sync_diagnostics: dict[str, Any] = field(default_factory=dict)
+    conflict_alert_sync_diagnostics: dict[str, Any] = field(default_factory=dict)
+    memory_capture_processed: bool = False
+    memory_capture_processed_count: int = 0
     todo_context: str | None = None
     summary_context: str | None = None
     view_image_context: str | None = None
@@ -167,3 +203,23 @@ class LeadAgentContext:
     stream_partial_content: str | None = None
     run_phase_timings: dict[str, Any] = field(default_factory=dict)
     runtime_assembly_diff: dict[str, Any] = field(default_factory=dict)
+
+    def record_skill_selection_feedback(
+        self,
+        feedback: SkillSelectionFeedback,
+    ) -> CapabilityFeedbackDecision:
+        recorder = getattr(self.tool_registry, "record_skill_selection_feedback", None)
+        if callable(recorder):
+            decision = recorder(feedback)
+        else:
+            decision = CapabilityFeedbackDecision(
+                skill_id=feedback.skill_id,
+                updated=False,
+                last_outcome=feedback.outcome,
+                diagnostics={"reason": "capability_registry_unavailable"},
+            )
+
+        self.skill_selection_feedback_decisions.append(decision)
+        if len(self.skill_selection_feedback_decisions) > 64:
+            del self.skill_selection_feedback_decisions[:-64]
+        return decision

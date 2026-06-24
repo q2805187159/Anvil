@@ -8,6 +8,7 @@ import pytest
 
 from anvil.config import (
     bootstrap_anvil_profile_home,
+    ConfigLayer,
     ConfigLayerKind,
     ConfigService,
     build_config_layers_from_file,
@@ -235,7 +236,7 @@ llm:
     assert custom.when_thinking_enabled == {"extra_body": {"thinking": {"type": "enabled"}}}
 
 
-def test_hermes_style_curator_config_aliases_are_normalized(contract_tmp_path: Path) -> None:
+def test_curator_config_aliases_are_normalized(contract_tmp_path: Path) -> None:
     config_path = contract_tmp_path / "config.yaml"
     config_path.write_text(
         """
@@ -363,11 +364,11 @@ scheduled_tasks:
     assert scheduled_tasks.prompt_safety_scan_enabled is False
 
 
-def test_memory_platform_maintenance_config_is_typed(contract_tmp_path: Path) -> None:
+def test_hcms_maintenance_config_is_typed(contract_tmp_path: Path) -> None:
     config_path = contract_tmp_path / "config.yaml"
     config_path.write_text(
         """
-memory_platform:
+hcms:
   enabled: true
   maintenance:
     enabled: true
@@ -380,10 +381,10 @@ memory_platform:
     interval_hours: 2
     min_idle_seconds: 90
     max_archive_per_run: 1
-    max_review_per_run: 6
+    max_quality_inspections_per_run: 6
     max_reinforce_per_run: 4
     min_quality_score_for_execute: 0.66
-    max_pending_review_for_execute: 18
+    max_quality_issues_for_execute: 18
     run_reflection_due_jobs: false
     include_health: false
         """.strip(),
@@ -391,7 +392,7 @@ memory_platform:
     )
 
     result = ConfigService().resolve(build_config_layers_from_file(config_path))
-    maintenance = result.effective_config.memory_platform.maintenance
+    maintenance = result.effective_config.hcms.maintenance
 
     assert maintenance.enabled is True
     assert maintenance.policy == "review"
@@ -403,19 +404,180 @@ memory_platform:
     assert maintenance.interval_seconds == 7200
     assert maintenance.min_idle_seconds == 90
     assert maintenance.max_archive_per_run == 1
-    assert maintenance.max_review_per_run == 6
+    assert maintenance.max_quality_inspections_per_run == 6
     assert maintenance.max_reinforce_per_run == 4
     assert maintenance.min_quality_score_for_execute == 0.66
-    assert maintenance.max_pending_review_for_execute == 18
+    assert maintenance.max_quality_issues_for_execute == 18
     assert maintenance.run_reflection_due_jobs is False
     assert maintenance.include_health is False
+
+
+def test_git_config_is_required_and_typed_for_hcms_version_control(contract_tmp_path: Path) -> None:
+    config_path = contract_tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+git:
+  enabled: true
+  required: true
+  provider: gitlab
+  token_env: CUSTOM_GIT_TOKEN
+  user_name: Anvil Operator
+  user_email: operator@example.test
+  remote_url: https://gitlab.example.test/team/repo.git
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    result = ConfigService().resolve(build_config_layers_from_file(config_path))
+    git = result.effective_config.git
+
+    assert git.enabled is True
+    assert git.required is True
+    assert git.provider == "gitlab"
+    assert git.token_env == "CUSTOM_GIT_TOKEN"
+    assert git.user_name == "Anvil Operator"
+    assert git.user_email == "operator@example.test"
+    assert git.remote_url == "https://gitlab.example.test/team/repo.git"
+
+
+def test_git_config_defaults_to_required_github_token_for_hcms() -> None:
+    result = ConfigService().resolve([])
+    git = result.effective_config.git
+
+    assert git.enabled is True
+    assert git.required is True
+    assert git.provider == "github"
+    assert git.token_env == "GITHUB_TOKEN"
+
+
+def test_hcms_storage_backend_config_is_typed_and_bounded(contract_tmp_path: Path) -> None:
+    config_path = contract_tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+hcms:
+  enabled: true
+  storage_backend: markdown
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    result = ConfigService().resolve(build_config_layers_from_file(config_path))
+
+    assert result.effective_config.hcms.storage_backend == "hybrid"
+
+    invalid_path = contract_tmp_path / "invalid-config.yaml"
+    invalid_path.write_text(
+        """
+hcms:
+  enabled: true
+  storage_backend: remote_magic
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="storage_backend"):
+        ConfigService().resolve(build_config_layers_from_file(invalid_path))
+
+
+def test_hcms_recall_cache_and_mmr_config_is_typed_and_bounded(contract_tmp_path: Path) -> None:
+    config_path = contract_tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+hcms:
+  enabled: true
+  recall:
+    max_candidates: 7
+    turn_recall_token_budget: 320
+    bm25_weight: 1.7
+    vector_weight: -0.2
+    graph_weight: 0.3
+    temporal_weight: 0.2
+    rrf_k: 0
+    enable_adaptive_weights: false
+    enable_cache: true
+    cache_ttl: 9
+    cache_max_entries: 2
+    enable_mmr: false
+    mmr_lambda: 2.5
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    result = ConfigService().resolve(build_config_layers_from_file(config_path))
+    recall = result.effective_config.hcms.recall
+
+    assert recall.max_candidates == 7
+    assert recall.turn_recall_token_budget == 320
+    assert recall.bm25_weight == 1.0
+    assert recall.vector_weight == 0.0
+    assert recall.graph_weight == 0.3
+    assert recall.temporal_weight == 0.2
+    assert recall.rrf_k == 1
+    assert recall.enable_adaptive_weights is False
+    assert recall.enable_cache is True
+    assert recall.cache_ttl == 9
+    assert recall.cache_max_entries == 2
+    assert recall.enable_mmr is False
+    assert recall.mmr_lambda == 1.0
+
+
+def test_hcms_update_queue_config_is_typed_and_bounded(contract_tmp_path: Path) -> None:
+    config_path = contract_tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+hcms:
+  enabled: true
+  update_queue:
+    enabled: false
+    debounce_seconds: -4
+    min_window_seconds: 3
+    default_window_seconds: 1
+    max_window_seconds: 2
+    min_batch_turns: 0
+    max_batch_turns: 0
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    result = ConfigService().resolve(build_config_layers_from_file(config_path))
+    queue = result.effective_config.hcms.update_queue
+
+    assert queue.enabled is False
+    assert queue.debounce_seconds == 0.0
+    assert queue.min_window_seconds == 3.0
+    assert queue.default_window_seconds == 3.0
+    assert queue.max_window_seconds == 3.0
+    assert queue.min_batch_turns == 1
+    assert queue.max_batch_turns == 1
+
+
+def test_hcms_updater_config_accepts_structured_mode_and_bounds_threshold(contract_tmp_path: Path) -> None:
+    config_path = contract_tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+hcms:
+  enabled: true
+  updater:
+    mode: json-plan
+    fact_confidence_threshold: 1.5
+    fail_open: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    result = ConfigService().resolve(build_config_layers_from_file(config_path))
+    updater = result.effective_config.hcms.updater
+
+    assert updater.mode == "structured"
+    assert updater.fact_confidence_threshold == 1.0
+    assert updater.fail_open is True
 
 
 def test_self_upgrade_defaults_are_automatic_but_bounded(contract_tmp_path: Path) -> None:
     config_path = contract_tmp_path / "config.yaml"
     config_path.write_text(
         """
-memory_platform:
+hcms:
   enabled: true
 skills_config:
   enabled: true
@@ -424,14 +586,14 @@ skills_config:
     )
 
     result = ConfigService().resolve(build_config_layers_from_file(config_path))
-    memory_maintenance = result.effective_config.memory_platform.maintenance
+    memory_maintenance = result.effective_config.hcms.maintenance
     curator = result.effective_config.skills_config.curator
 
     assert memory_maintenance.automation_enabled is True
     assert memory_maintenance.execute is True
     assert memory_maintenance.max_archive_per_run == 2
-    assert memory_maintenance.max_review_per_run == 8
-    assert memory_maintenance.max_pending_review_for_execute == 30
+    assert memory_maintenance.max_quality_inspections_per_run == 8
+    assert memory_maintenance.max_quality_issues_for_execute == 30
     assert curator.automation_enabled is True
     assert curator.dry_run is False
     assert curator.auto_review is True
@@ -546,11 +708,11 @@ def test_context_files_config_is_typed(contract_tmp_path: Path) -> None:
         """
 context_files:
   enabled: true
-  filenames: [AGENTS.md, CODEX.md]
+  filenames: [AGENTS.md, PROJECT_RULES.md]
   rule_globs: [.cursor/rules/*.md]
   include_readme: true
   recursive_agents: true
-  recursive_names: [AGENTS.md, CODEX.md]
+  recursive_names: [AGENTS.md, PROJECT_RULES.md]
   max_files: 4
   max_chars: 5000
   max_chars_per_file: 1200
@@ -563,10 +725,10 @@ context_files:
     context_files = result.effective_config.context_files
 
     assert context_files.enabled is True
-    assert context_files.filenames == ["AGENTS.md", "CODEX.md"]
+    assert context_files.filenames == ["AGENTS.md", "PROJECT_RULES.md"]
     assert context_files.include_readme is True
     assert context_files.recursive_agents is True
-    assert context_files.recursive_names == ["AGENTS.md", "CODEX.md"]
+    assert context_files.recursive_names == ["AGENTS.md", "PROJECT_RULES.md"]
     assert context_files.max_files == 4
     assert context_files.max_chars == 5000
     assert context_files.max_chars_per_file == 1200
@@ -936,10 +1098,8 @@ def test_build_default_config_layers_bootstraps_home_config_once(contract_tmp_pa
     servers = seeded["extensions"]["mcp_servers"]
     assert sorted(servers) == ["filesystem", "github", "postgres", "prompts.chat"]
     assert all(server["enabled"] is True for server in servers.values())
-    assert seeded["memory"]["enabled"] is True
-    assert seeded["memory_platform"]["enabled"] is True
-    assert result.effective_config.memory.enabled is True
-    assert result.effective_config.memory_platform.enabled is True
+    assert seeded["hcms"]["enabled"] is True
+    assert result.effective_config.hcms.enabled is True
     assert any(layer.source == str(config_path.resolve()) for layer in layers)
 
     config_path.write_text(
@@ -964,7 +1124,7 @@ def test_build_default_config_layers_bootstraps_home_config_once(contract_tmp_pa
     assert "github" not in current["extensions"]["mcp_servers"]
 
 
-def test_build_default_config_layers_backfills_memory_platform_for_existing_home_config(
+def test_build_default_config_layers_backfills_hcms_for_existing_home_config(
     contract_tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -977,25 +1137,117 @@ def test_build_default_config_layers_backfills_memory_platform_for_existing_home
 
     result = ConfigService().resolve(build_default_config_layers())
 
-    assert result.effective_config.memory.enabled is True
-    assert result.effective_config.memory_platform.enabled is True
+    assert result.effective_config.hcms.enabled is True
 
 
-def test_build_default_config_layers_respects_explicit_memory_platform_disable(
+def test_config_service_drops_legacy_memory_platform_config() -> None:
+    result = ConfigService().resolve(
+        [
+            ConfigLayer(
+                name="project",
+                kind=ConfigLayerKind.PROJECT,
+                data={
+                    "memory_platform": {"enabled": True},
+                    "hcms": {"enabled": True},
+                    "web_tools": {"enabled": True},
+                },
+            )
+        ]
+    )
+
+    assert "memory_platform" not in result.effective_config.additional_settings
+    assert "web_tools" in result.effective_config.additional_settings
+    assert result.effective_config.hcms.enabled is True
+
+
+def test_config_service_migrates_legacy_memory_config_to_hcms_recall() -> None:
+    result = ConfigService().resolve(
+        [
+            ConfigLayer(
+                name="project",
+                kind=ConfigLayerKind.PROJECT,
+                data={
+                    "memory": {
+                        "enabled": True,
+                        "max_facts": 12,
+                        "injection_token_budget": 1200,
+                        "transcript_context_tokens": 4000,
+                    },
+                    "hcms": {
+                        "recall": {
+                            "max_candidates": 6,
+                        },
+                    },
+                },
+            )
+        ]
+    )
+
+    assert "memory" not in result.effective_config.additional_settings
+    assert result.effective_config.hcms.enabled is True
+    assert result.effective_config.hcms.recall.max_candidates == 6
+    assert result.effective_config.hcms.recall.turn_recall_token_budget == 1200
+    assert result.effective_config.hcms.transcript.transcript_context_tokens == 4000
+
+
+def test_build_default_config_layers_respects_explicit_hcms_disable(
     contract_tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     anvil_home = contract_tmp_path / ".anvil-home"
     config_path = anvil_home / "config.yaml"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text("memory_platform:\n  enabled: false\n", encoding="utf-8")
+    config_path.write_text("hcms:\n  enabled: false\n", encoding="utf-8")
     monkeypatch.setenv("ANVIL_HOME", str(anvil_home))
     monkeypatch.delenv("ANVIL_CONFIG_PATH", raising=False)
 
     result = ConfigService().resolve(build_default_config_layers())
 
-    assert result.effective_config.memory.enabled is True
-    assert result.effective_config.memory_platform.enabled is False
+    assert result.effective_config.hcms.enabled is False
+
+
+def test_default_anvil_config_dir_uses_repo_local_root_without_env(
+    contract_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anvil.config import default_anvil_config_dir
+
+    repo_root = contract_tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.delenv("ANVIL_HOME", raising=False)
+
+    assert default_anvil_config_dir(repo_root) == (repo_root / ".anvil").resolve()
+
+
+def test_build_default_config_layers_uses_repo_local_home_when_repo_root_is_explicit(
+    contract_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = contract_tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "config.yaml").write_text("hcms:\n  enabled: false\n", encoding="utf-8")
+    monkeypatch.delenv("ANVIL_HOME", raising=False)
+    monkeypatch.delenv("ANVIL_CONFIG_PATH", raising=False)
+
+    result = ConfigService().resolve(build_default_config_layers(repo_root=repo_root))
+
+    assert (repo_root / ".anvil" / "config.yaml").exists()
+    assert (repo_root / ".anvil" / "sessions").is_dir()
+    assert result.effective_config.hcms.enabled is True
+
+
+def test_default_anvil_config_dir_keeps_anvil_home_env_override(
+    contract_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anvil.config import default_anvil_config_dir
+
+    repo_root = contract_tmp_path / "repo"
+    anvil_home = contract_tmp_path / "explicit-home"
+    repo_root.mkdir()
+    monkeypatch.setenv("ANVIL_HOME", str(anvil_home))
+
+    assert default_anvil_config_dir(repo_root) == anvil_home.resolve()
 
 
 def test_home_config_mcp_is_runtime_source(contract_tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1101,7 +1353,7 @@ def test_config_example_resolves_as_complete_field_reference() -> None:
     assert "tracing" in result.effective_config.additional_settings
 
 
-def test_nested_extensions_mcp_servers_accept_codex_style_aliases(contract_tmp_path: Path) -> None:
+def test_nested_extensions_mcp_servers_accept_nested_aliases(contract_tmp_path: Path) -> None:
     config_path = contract_tmp_path / "config.yaml"
     config_path.write_text(
         """

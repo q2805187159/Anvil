@@ -22,7 +22,7 @@ from .contracts import ExtensionMaterialization, ExternalCapabilityStatus
 
 LEGACY_AGENT_SKILL_DOWNLOAD_NEEDLES = (
     "get an agent skill by id",
-    ".claude/skills",
+    "third-party skill directories",
 )
 
 

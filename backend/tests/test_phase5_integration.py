@@ -36,11 +36,7 @@ def config_layers(contract_tmp_path):
                         "model_name": "gpt-5.4",
                     }
                 },
-                "memory": {
-                    "enabled": True,
-                    "prefetch_once_per_turn": True,
-                    "store_path": str(contract_tmp_path / "memory-store"),
-                },
+                "hcms": {"enabled": True},
                 "skills_config": {
                     "enabled": True,
                     "external_dirs": [str(skills_root)],
@@ -109,20 +105,20 @@ def test_phase5_runtime_integration_supports_memory_skills_and_typed_approval(co
         )
     )
 
-    assert result.runtime.context.memory_context is not None
+    assert result.runtime.context.memory_context is None
+    assert result.runtime.context.memory_context_mode == "context_v2"
     assert result.runtime.capability_bundle.enabled_skill_ids == ("demo-skill",)
     assert "delegated_task" in [entry.name for entry in result.runtime.capability_bundle.visible_tools]
     assert "ext_search" in [entry.name for entry in result.runtime.capability_bundle.visible_tools]
     assert "capability_search" in [entry.name for entry in result.runtime.capability_bundle.visible_tools]
     assert result.thread_state.lifecycle.status.value == "awaiting_approval"
     assert result.thread_state.approvals.pending_approval is not None
-    pending = result.runtime.context.memory_service.queue.get_pending()
-    assert len(pending) == 1
-    assert pending[0].user_messages
-    assert pending[0].final_assistant_messages == []
+    assert result.runtime.context.memory_service.queue.pending_count() == 0
+    stored = result.runtime.context.memory_service.store.load("global/default")
+    assert any(memory.source_thread_id == "thread-5" for memory in stored.memories)
 
 
-def test_phase5_memory_capture_enqueues_without_processing_on_success(contract_tmp_path) -> None:
+def test_phase5_memory_capture_processes_default_hcms_manager_on_success(contract_tmp_path) -> None:
     engine = RunEngine()
     result = engine.run(
         RunRequest(
@@ -148,10 +144,83 @@ def test_phase5_memory_capture_enqueues_without_processing_on_success(contract_t
         )
     )
 
-    pending = result.runtime.context.memory_service.queue.get_pending()
-    assert len(pending) == 1
-    assert pending[0].thread_id == "thread-6"
-    assert result.runtime.context.memory_service.store.list_namespaces() == []
+    assert result.runtime.context.memory_namespace == "global/default"
+    assert "global/default" in result.runtime.context.memory_service.store.list_namespaces()
+    assert result.runtime.context.memory_service.queue.pending_count() == 0
+    stored = result.runtime.context.memory_service.store.load("global/default")
+    assert any("remember this preference" in memory.content for memory in stored.memories)
+
+
+def test_phase5_hcms_default_manager_records_and_prefetches_between_turns(contract_tmp_path) -> None:
+    engine = RunEngine()
+    path_service = PathService(contract_tmp_path / "threads")
+    checkpointer = create_checkpointer(CheckpointerBackend.IN_MEMORY)
+    store = create_store(StoreBackend.IN_MEMORY)
+    features = RuntimeFeatureSet(
+        memory=True,
+        memory_prefetch=True,
+        memory_capture=True,
+        skills=False,
+        capability_mentions=False,
+        extensions=False,
+        subagents=False,
+        guardrails=False,
+    )
+
+    first = engine.run(
+        RunRequest(
+            thread_id="thread-hcms-default-e2e",
+            user_message="Remember: Northstar deploys with canary verification because full rollouts failed.",
+            config_layers=config_layers(contract_tmp_path),
+            feature_set=features,
+            path_service=path_service,
+            checkpointer=checkpointer,
+            store=store,
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[AIMessage(content="Recorded the Northstar deployment memory.")]
+            ),
+        )
+    )
+
+    stored = first.runtime.context.memory_service.store.load("global/default")
+    assert any("Northstar" in memory.content for memory in stored.memories)
+    assert sum(1 for memory in stored.memories if "Northstar" in memory.content) == 1
+    assert first.runtime.context.memory_service.queue.pending_count() == 0
+    assert first.runtime.context.memory_capture_processed is True
+    assert first.runtime.context.memory_capture_processed_count == 1
+
+    second = engine.run(
+        RunRequest(
+            thread_id="thread-hcms-default-e2e",
+            user_message="Why does Northstar use canary verification?",
+            config_layers=config_layers(contract_tmp_path),
+            feature_set=features,
+            path_service=path_service,
+            checkpointer=checkpointer,
+            store=store,
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[AIMessage(content="Because prior full rollouts failed.")]
+            ),
+        )
+    )
+
+    assert second.runtime.context.memory_context is None
+    assert second.runtime.context.memory_context_mode == "context_v2"
+    blocks = second.runtime.context.context_v2_memory_blocks
+    assert blocks
+    block_text = "\n".join(block["content"] for block in blocks)
+    assert "Northstar" in block_text
+    assert "canary verification" in block_text
+    diagnostics = second.runtime.context.memory_injection_diagnostics
+    assert diagnostics["source"] == "memory_manager"
+    assert diagnostics["status"] == "injected"
+    assert diagnostics["injection_mode"] == "context_v2"
+    assert diagnostics["evidence_count"] >= 1
+    assert diagnostics["context_v2_block_count"] == len(blocks)
+    context_v2 = second.runtime.context.context_v2
+    assert context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert context_v2["hcms_v2_memory_candidate_count"] == len(blocks)
+    assert context_v2["trace"]["selected_memory"]
 
 
 def test_phase5_memory_capture_enqueues_on_failed_turn(contract_tmp_path) -> None:
@@ -186,6 +255,6 @@ def test_phase5_memory_capture_enqueues_on_failed_turn(contract_tmp_path) -> Non
     )
 
     assert result.thread_state.lifecycle.status.value == "failed"
-    pending = result.runtime.context.memory_service.queue.get_pending()
-    assert len(pending) == 1
-    assert pending[0].user_messages[-1] == "remember that concise summaries are preferred"
+    assert result.runtime.context.memory_service.queue.pending_count() == 0
+    stored = result.runtime.context.memory_service.store.load("global/default")
+    assert any("concise summaries are preferred" in memory.content for memory in stored.memories)

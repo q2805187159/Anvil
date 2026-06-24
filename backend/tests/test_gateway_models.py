@@ -149,7 +149,7 @@ summarization:
 title:
   enabled: true
   model_name: openai
-memory_platform:
+hcms:
   enabled: true
   session_search:
     model_name: openai
@@ -194,9 +194,9 @@ memory_platform:
         assert subsystems[subsystem] == "minimax"
     assert payload["summarization"]["model_name"] == "minimax"
     assert payload["title"]["model_name"] == "minimax"
-    assert payload["memory_platform"]["session_search"]["model_name"] == "minimax"
-    assert payload["memory_platform"]["recall"]["rerank_model_name"] == "minimax"
-    assert payload["memory_platform"]["updater"]["model_name"] == "minimax"
+    assert payload["hcms"]["session_search"]["model_name"] == "minimax"
+    assert payload["hcms"]["recall"]["rerank_model_name"] == "minimax"
+    assert payload["hcms"]["updater"]["model_name"] == "minimax"
     assert payload["scheduled_tasks"]["default_model"] == "minimax"
 
 

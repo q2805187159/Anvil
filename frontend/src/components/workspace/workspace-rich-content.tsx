@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useId, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -152,64 +152,19 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
 }
 
 function MermaidBlock({ chart }: { chart: string }) {
-  const id = useId().replace(/:/g, "-");
-  const [svg, setSvg] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    async function renderChart() {
-      try {
-        const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: "base",
-          securityLevel: "loose",
-          fontFamily: "var(--body-font)",
-          themeVariables: {
-            primaryColor: "#10a37f",
-            primaryTextColor: "#111827",
-            primaryBorderColor: "#10a37f",
-            lineColor: "#6b7280",
-            secondaryColor: "#f9fafb",
-            tertiaryColor: "#ffffff",
-          },
-        });
-        const rendered = await mermaid.render(`mermaid-${id}`, chart);
-        if (active) {
-          setSvg(rendered.svg);
-        }
-      } catch {
-        if (active) {
-          setSvg(null);
-        }
-      }
-    }
-
-    void renderChart();
-    return () => {
-      active = false;
-    };
-  }, [chart, id]);
-
   return (
     <div className="my-3 max-w-full overflow-hidden rounded-[0.75rem] border border-[var(--line)] bg-[var(--panel-strong)] shadow-[0_4px_6px_-2px_rgba(0,0,0,0.05),0_2px_4px_-1px_rgba(0,0,0,0.03)]">
       <div className="flex items-center justify-between border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_84%,white_16%)] px-3 py-1.5">
         <span className="text-[13px] font-semibold text-[var(--ink)]">Mermaid diagram</span>
       </div>
       <div className="max-w-full overflow-auto px-3 py-3">
-        {svg ? (
-          <div className="mermaid-output" dangerouslySetInnerHTML={{ __html: svg }} />
-        ) : (
-          <pre className="max-w-full overflow-auto whitespace-pre-wrap break-all rounded-xl bg-[var(--panel-muted)] p-4 font-[var(--mono-font)] text-sm text-[var(--muted)]">
-            {chart}
-          </pre>
-        )}
+        <pre className="max-w-full overflow-auto whitespace-pre-wrap break-all rounded-xl bg-[var(--panel-muted)] p-4 font-[var(--mono-font)] text-sm text-[var(--muted)]">
+          {chart}
+        </pre>
       </div>
     </div>
   );
 }
-
 function highlightLine(line: string, language: string) {
   if (!line) {
     return "&nbsp;";

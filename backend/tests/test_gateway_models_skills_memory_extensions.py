@@ -23,7 +23,7 @@ def test_models_skills_memory_and_extensions_endpoints(gateway_client) -> None:
 
     stores = gateway_client.get("/memory/stores")
     assert stores.status_code == 200
-    assert {item["store_id"] for item in stores.json()} == {"runtime_memory", "user_profile"}
+    assert {item["store_id"] for item in stores.json()} == {"hcms_workspace", "hcms_user"}
 
     extensions = gateway_client.get("/extensions")
     assert extensions.status_code == 200
@@ -157,7 +157,7 @@ def test_skill_curator_maintenance_endpoint_runs_bounded_plan(gateway_app_factor
                         "enabled": True,
                         "governance_root": str(contract_tmp_path / "governance"),
                         "curator": {
-                            "max_review_plan_per_run": 1,
+                            "max_quality_plan_per_run": 1,
                             "max_actions_per_run": 1,
                         },
                     },
@@ -199,11 +199,11 @@ def test_skill_curator_maintenance_endpoint_runs_bounded_plan(gateway_app_factor
     planned_payload = planned.json()
     assert planned_payload["status"] == "planned"
     assert planned_payload["selected_count"] == 1
-    assert planned_payload["skipped_actions"]["review_plan"] == 1
+    assert planned_payload["skipped_actions"]["quality_plan"] == 1
     assert executed.status_code == 200
     executed_payload = executed.json()
     assert executed_payload["status"] == "completed"
-    assert executed_payload["actions_executed"]["review_plan"] == 1
+    assert executed_payload["actions_executed"]["quality_plan"] == 1
 
 
 def test_skill_curator_automation_endpoint_exposes_status_and_force_run(gateway_app_factory, contract_tmp_path, monkeypatch) -> None:
@@ -227,7 +227,7 @@ def test_skill_curator_automation_endpoint_exposes_status_and_force_run(gateway_
                             "interval_seconds": 3600,
                             "tick_seconds": 10,
                             "max_actions_per_run": 1,
-                            "max_review_plan_per_run": 1,
+                            "max_quality_plan_per_run": 1,
                         },
                     },
                 },
@@ -280,7 +280,7 @@ def test_skill_curator_automation_endpoint_exposes_status_and_force_run(gateway_
     assert after_payload["last_run_id"] == forced_payload["report"]["run_id"]
     assert after_payload["last_status"] == "completed"
     assert after_payload["last_recommendation_count"] >= 1
-    assert after_payload["last_recommendations"][0]["next_tool_call"]["action"] == "review_plan"
+    assert after_payload["last_recommendations"][0]["next_tool_call"]["action"] == "quality_plan"
 
 
 def test_models_endpoint_reports_braced_secret_env_diagnostics(gateway_app_factory) -> None:
@@ -452,11 +452,12 @@ def test_memory_endpoint_reflects_captured_turns_after_run(gateway_app_factory) 
         )
 
         assert run.status_code == 200
+        app.state.runtime_deps.run_engine.wait_for_background_tasks(timeout_seconds=5)
 
         stores = client.get("/memory/stores")
         assert stores.status_code == 200
-        user_store = next(item for item in stores.json() if item["store_id"] == "user_profile")
+        user_store = next(item for item in stores.json() if item["store_id"] == "hcms_user")
         assert user_store["entry_count"] >= 1
-        entries = client.get("/memory/stores/user_profile/entries")
+        entries = client.get("/memory/stores/hcms_user/entries")
         assert entries.status_code == 200
         assert any("Actually, prefer concise project updates." in item["content"] for item in entries.json())

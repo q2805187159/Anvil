@@ -27,9 +27,6 @@ def test_phase9_docs_and_examples_exist() -> None:
         REPO_ROOT / "examples" / "tracing" / "langsmith.env.example",
         REPO_ROOT / "examples" / "skills" / "minimal-operator-skill" / "SKILL.md",
         REPO_ROOT / "skills" / "README.md",
-        REPO_ROOT / "docs" / "assets" / "screenshots" / "home-page.png",
-        REPO_ROOT / "docs" / "assets" / "screenshots" / "ops-console.png",
-        REPO_ROOT / "docs" / "assets" / "screenshots" / "session-details.png",
     ]
     missing = [str(path) for path in required_paths if not path.exists()]
     assert missing == [], f"missing Phase 9 docs or examples: {missing}"
@@ -71,17 +68,15 @@ def test_release_checklists_include_mount_safety_gate() -> None:
 
 def test_release_verification_documents_readiness_runner() -> None:
     release_verification = (REPO_ROOT / "docs" / "guides" / "release-verification.md").read_text(encoding="utf-8")
-    testing_future = (REPO_ROOT / "docs" / "future" / "10-testing-evaluation-and-regression.md").read_text(
-        encoding="utf-8"
-    )
+    open_source_release = (REPO_ROOT / "docs" / "guides" / "open-source-release.md").read_text(encoding="utf-8")
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "python scripts/run-release-readiness.py --profile quick" in release_verification
     assert "python scripts/run-release-readiness.py --profile full --dry-run --json" in release_verification
     assert "node scripts/frontend-process-preflight.cjs" in release_verification
     assert "make release-readiness" in release_verification
-    assert "scripts/run-release-readiness.py" in testing_future
-    assert "frontend-process-preflight" in testing_future
+    assert "docs/future/" in open_source_release
+    assert "docs/assets/screenshots/" in open_source_release
     assert "release-readiness:" in makefile
     assert "release-readiness-full:" in makefile
 

@@ -59,41 +59,29 @@ The `Install` button calls the same guarded backend installer as advanced manual
 - zip or `.skill` archives are extracted into the active Anvil Home `plugins/{plugin_id}`
 - Git URLs and `owner/repo` shorthand are cloned with depth 1
 - bundled `.mcp.json` / `mcp.json` entries are merged into Home `config.yaml` under `mcp_servers`
-- `memory_providers` entries are merged into Home `plugins.json` and appear in Ops Console / Memory Workspace
+- plugin metadata is recorded in Home `plugins.json` and runtime capabilities are reloaded
 - Home `plugins.json` is updated and runtime capabilities are reloaded
 
 Registry deletion only removes the registry source from the Home plugin registry. It does not remove already installed plugins.
 
-## Memory Provider Plugins
+## Memory Plugins
 
-Plugins can register memory providers without adding Python dependencies. A provider is declarative and handled by the Anvil memory platform:
+HCMS is the active memory engine for this release. Plugins may add tools,
+prompts, resources, MCP servers, or documentation that integrate with external
+memory services, but they do not replace the active HCMS engine or define
+memory lifecycle truth.
+
+The curated HTTP memory integration example is a documentation/resource plugin:
 
 ```yaml
-plugin_id: memory-http-provider-plugin
-name: Memory HTTP Provider
+plugin_id: memory-http-integration-notes
+name: Memory HTTP Integration Notes
 version: 0.1.0
-memory_providers:
-  - provider_id: http_memory
-    display_name: HTTP Memory Provider
-    kind: http
-    enabled: true
-    roles:
-      - prefetch
-      - sync_turn
-      - session_end
-      - pre_compact
-      - delegation
-      - shutdown
-    settings:
-      endpoint: http://127.0.0.1:8787/memory
-      timeout_seconds: 2
+resources:
+  - resource_id: memory-http-integration-notes-readme
+    title: HTTP Memory Integration Notes
+    path: README.md
 ```
 
-Supported provider kinds:
-
-- `local_curated`: built-in Anvil curated/archive provider, always available.
-- `http`: JSON lifecycle provider using stdlib HTTP.
-
-HTTP providers receive JSON payloads for supported lifecycle actions. Failures, timeouts, and invalid JSON are recorded as diagnostics and fail open; they do not block local memory writes or the active agent turn. External active recall providers are exclusive, but passive providers can still receive declared lifecycle hooks.
-
-The curated catalog includes `Memory HTTP Provider` in `plugins/memory-http-provider-plugin` so the Ops Console plugin market starts with a valid provider package instead of test/demo content.
+Memory engine administration is exposed through `/memory/engines` and
+`/memory/admin/engines`; plugins do not define memory engine metadata.

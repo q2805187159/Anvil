@@ -82,8 +82,8 @@ def run_local_smoke(
                             "model_name": "gpt-5.4",
                         }
                     },
-                    "memory": {"enabled": False},
-                    "memory_platform": {"enabled": False, "archive": {"fts_enabled": False}},
+                    "hcms": {"enabled": False},
+                    "hcms": {"enabled": False, "archive": {"fts_enabled": False}},
                 },
             )
         ]
@@ -373,15 +373,14 @@ def _with_smoke_storage_layers(config_layers: list[ConfigLayer]) -> list[ConfigL
         ConfigLayer(
             name="smoke_storage",
             kind=ConfigLayerKind.REQUEST,
-            data={"memory": {"enabled": False}, "memory_platform": {"enabled": False, "archive": {"fts_enabled": False}}},
+            data={"hcms": {"enabled": False, "archive": {"fts_enabled": False}}},
             source="smoke",
         ),
         ConfigLayer(
             name="smoke_storage_paths",
             kind=ConfigLayerKind.REQUIREMENTS,
             data={
-                "memory": {"store_path": str(Path(os.environ.get("ANVIL_BACKEND_TEST_TMP") or tempfile.gettempdir()) / "anvil-smoke-memory")},
-                "memory_platform": {
+                "hcms": {
                     "archive": {"sqlite_path": None},
                     "transcript": {"sqlite_path": None},
                     "prompt_snapshot": {"store_path": None},

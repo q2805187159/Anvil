@@ -33,19 +33,14 @@ import type {
   MemoryRecallBenchmarkSuiteView,
   MemoryTraceResponse,
   MemoryOverviewView,
-  MemoryProviderView,
-  MemoryProviderTestResponse,
-  ProfileFacetAuditResponse,
-  ProfileFacetGovernanceRequest,
-  ProfileFacetGovernanceResponse,
-  ProfileFacetListResponse,
-  ProfileFacetRebuildRequest,
-  ProfileFacetRebuildResponse,
-  MemoryReviewBatchRequest,
-  MemoryReviewBatchResponse,
-  MemoryReviewDecisionRequest,
-  MemoryReviewItemView,
-  MemoryReviewResponse,
+  HCMSRecallResponse,
+  HCMSWhyResponse,
+  HCMSMemoryResponse,
+  HCMSMemoryListResponse,
+  HCMSMemoryDeleteResponse,
+  HCMSMemoryRelationsResponse,
+  HCMSMemoryHistoryResponse,
+  HCMSMemoryDiffResponse,
   MemoryStoreView,
   MemoryStalenessResponse,
   SessionSearchMode,
@@ -129,28 +124,6 @@ export function deleteMemoryLayerEntry(layerId: Exclude<MemoryLayerId, "session"
   });
 }
 
-export function listMemoryProviders() {
-  return apiRequest<{ items: MemoryProviderView[] }>("/memory/admin/providers").then((payload) => payload.items);
-}
-
-export function activateMemoryProvider(providerId: string) {
-  return apiRequest<MemoryProviderView>(`/memory/providers/${providerId}/activate`, {
-    method: "POST",
-  });
-}
-
-export function reloadMemoryProviders() {
-  return apiRequest<MemoryProviderView[]>("/memory/providers/reload", {
-    method: "POST",
-  });
-}
-
-export function testMemoryProvider(providerId: string) {
-  return apiRequest<MemoryProviderTestResponse>(`/memory/providers/${providerId}/test`, {
-    method: "POST",
-  });
-}
-
 export function searchMemoryArchive(query: string, limit = 5) {
   return apiRequest<MemoryArchiveSearchResultView>("/memory/archive/search", {
     method: "POST",
@@ -223,10 +196,6 @@ export function flushMemory(body: MemoryFlushRequest = {}) {
   });
 }
 
-export function listMemoryReview() {
-  return apiRequest<MemoryReviewResponse>("/memory/admin/review").then((payload) => payload.items);
-}
-
 export function exportMemoryAdmin() {
   return apiRequest<MemoryAdminExportView>("/memory/admin/export");
 }
@@ -240,50 +209,6 @@ export function importMemoryAdmin(body: MemoryAdminImportRequest) {
 
 export function auditMemoryAdmin() {
   return apiRequest<MemoryAdminAuditView>("/memory/admin/audit");
-}
-
-export function listProfileFacets() {
-  return apiRequest<ProfileFacetListResponse>("/memory/admin/profile/facets");
-}
-
-export function governProfileFacet(facetId: string, body: ProfileFacetGovernanceRequest) {
-  return apiRequest<ProfileFacetGovernanceResponse>(`/memory/admin/profile/facets/${encodeURIComponent(facetId)}/govern`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export function rebuildProfileFacets(body: ProfileFacetRebuildRequest = {}) {
-  return apiRequest<ProfileFacetRebuildResponse>("/memory/admin/profile/facets/rebuild", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export function listProfileFacetAudit(limit = 20) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  return apiRequest<ProfileFacetAuditResponse>(`/memory/admin/profile/facets/audit?${params.toString()}`);
-}
-
-export function approveMemoryReview(reviewId: string, body: MemoryReviewDecisionRequest = {}) {
-  return apiRequest<MemoryEntryView>(`/memory/admin/review/${reviewId}/approve`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export function rejectMemoryReview(reviewId: string, body: MemoryReviewDecisionRequest = {}) {
-  return apiRequest<MemoryReviewItemView>(`/memory/admin/review/${reviewId}/reject`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export function batchMemoryReview(body: MemoryReviewBatchRequest) {
-  return apiRequest<MemoryReviewBatchResponse>("/memory/admin/review/batch", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }
 
 export function governMemory(memoryId: string, body: MemoryGovernanceActionRequest) {
@@ -358,4 +283,126 @@ export function getMemoryTrace(threadId: string | null, targetId: string | null 
     method: "POST",
     body: JSON.stringify({ thread_id: threadId, target_id: targetId, limit }),
   });
+}
+
+export function hcmsRecall(query: string, limit = 10) {
+  return apiRequest<HCMSRecallResponse>("/memory/hcms/recall", {
+    method: "POST",
+    body: JSON.stringify({ query, limit }),
+  });
+}
+
+export function hcmsSearch(query: string, limit = 10) {
+  return apiRequest<HCMSRecallResponse>("/memory/hcms/search", {
+    method: "POST",
+    body: JSON.stringify({ query, limit }),
+  });
+}
+
+export function hcmsWhy(query: string, limit = 3) {
+  return apiRequest<HCMSWhyResponse>("/memory/hcms/why", {
+    method: "POST",
+    body: JSON.stringify({ query, limit }),
+  });
+}
+
+export type HCMSMemoryListParams = {
+  query?: string | null;
+  state?: string | null;
+  category?: string | null;
+  layerId?: string | null;
+  limit?: number;
+  offset?: number;
+};
+
+export function listHcmsMemories(params: HCMSMemoryListParams = {}) {
+  const search = new URLSearchParams();
+  if (params.query?.trim()) {
+    search.set("query", params.query.trim());
+  }
+  if (params.state && params.state !== "all") {
+    search.set("state", params.state);
+  }
+  if (params.category?.trim()) {
+    search.set("category", params.category.trim());
+  }
+  if (params.layerId && params.layerId !== "all") {
+    search.set("layer_id", params.layerId);
+  }
+  if (params.limit !== undefined) {
+    search.set("limit", String(params.limit));
+  }
+  if (params.offset !== undefined) {
+    search.set("offset", String(params.offset));
+  }
+  const suffix = search.toString();
+  return apiRequest<HCMSMemoryListResponse>(`/memory/hcms/memories${suffix ? `?${suffix}` : ""}`);
+}
+
+export function listPublicHcmsMemories(params: HCMSMemoryListParams = {}) {
+  const search = new URLSearchParams();
+  if (params.query?.trim()) {
+    search.set("query", params.query.trim());
+  }
+  if (params.state && params.state !== "all") {
+    search.set("state", params.state);
+  }
+  if (params.category?.trim()) {
+    search.set("category", params.category.trim());
+  }
+  if (params.layerId && params.layerId !== "all") {
+    search.set("layer_id", params.layerId);
+  }
+  if (params.limit !== undefined) {
+    search.set("limit", String(params.limit));
+  }
+  if (params.offset !== undefined) {
+    search.set("offset", String(params.offset));
+  }
+  const suffix = search.toString();
+  return apiRequest<HCMSMemoryListResponse>(`/memory/list${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getHcmsMemory(memoryId: string) {
+  return apiRequest<HCMSMemoryResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}`);
+}
+
+export function getPublicHcmsMemory(memoryId: string) {
+  return apiRequest<HCMSMemoryResponse>(`/memory/${encodeURIComponent(memoryId)}`);
+}
+
+export function deleteHcmsMemory(memoryId: string) {
+  return apiRequest<HCMSMemoryDeleteResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function deletePublicHcmsMemory(memoryId: string) {
+  return apiRequest<HCMSMemoryDeleteResponse>(`/memory/${encodeURIComponent(memoryId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function getHcmsMemoryHistory(memoryId: string) {
+  return apiRequest<HCMSMemoryHistoryResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}/history`);
+}
+
+export function getHcmsMemoryVersions(memoryId: string) {
+  return apiRequest<HCMSMemoryHistoryResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}/versions`);
+}
+
+export function getPublicHcmsMemoryVersions(memoryId: string) {
+  return apiRequest<HCMSMemoryHistoryResponse>(`/memory/${encodeURIComponent(memoryId)}/versions`);
+}
+
+export function getHcmsMemoryRelations(memoryId: string) {
+  return apiRequest<HCMSMemoryRelationsResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}/relations`);
+}
+
+export function getPublicHcmsMemoryRelations(memoryId: string) {
+  return apiRequest<HCMSMemoryRelationsResponse>(`/memory/${encodeURIComponent(memoryId)}/relations`);
+}
+
+export function getHcmsMemoryDiff(memoryId: string) {
+  return apiRequest<HCMSMemoryDiffResponse>(`/memory/hcms/memories/${encodeURIComponent(memoryId)}/diff`);
 }

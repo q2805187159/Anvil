@@ -3,7 +3,7 @@
 Anvil uses two local files:
 
 - `.env` stores secrets and machine-specific values.
-- `config.yaml` stores model routing, runtime behavior, tools, memory,
+- `config.yaml` stores model routing, runtime behavior, tools, HCMS memory,
   guardrails, terminal backends, MCP servers, and extensions.
 
 Create both from examples:
@@ -24,7 +24,7 @@ Common `.env` values:
 | `OPENAI_BASE_URL` | OpenAI-compatible base URL. |
 | `ANTHROPIC_API_KEY` | Anthropic-compatible provider secret. |
 | `MINIMAX_API_KEY` | MiniMax provider secret. |
-| `GITHUB_TOKEN` | Optional GitHub MCP token. |
+| `GITHUB_TOKEN` | Required default Git token for HCMS Git-like memory version control; also usable by GitHub MCP. |
 | `TAVILY_API_KEY` | Optional web search provider. |
 | `EXA_API_KEY` | Optional web search provider. |
 | `FIRECRAWL_API_KEY` | Optional fetch/crawl provider. |
@@ -48,6 +48,7 @@ secret stores.
 | `summarization` | Transcript and compaction summary behavior. |
 | `scheduled_tasks` | Generic scheduled automation runtime settings. |
 | `loop_detection` | Repeated-turn loop guard settings. |
+| `git` | Required Git provider/token settings used by HCMS memory version metadata. |
 
 ## Model Providers
 
@@ -72,16 +73,61 @@ See [Model Provider Configuration](./model-provider-configuration.md).
 
 | Field | Purpose |
 | --- | --- |
-| `memory.enabled` | Enables legacy memory prefetch. |
-| `memory.injection_token_budget` | Token budget for memory injection. |
-| `memory_platform.enabled` | Enables the structured memory platform. |
-| `memory_platform.stores` | Runtime memory and user profile store budgets. |
-| `memory_platform.archive` | Session archive SQLite and FTS settings. |
-| `memory_platform.providers` | Memory provider catalog and active provider. |
-| `memory_platform.recall` | Candidate, evidence, rerank, and token budgets. |
-| `memory_platform.review` | Review and auto-accept thresholds. |
-| `memory_platform.maintenance` | Bounded automatic maintenance policy. |
-| `memory_platform.onboarding` | Workspace bootstrap extraction policy. |
+| `hcms.enabled` | Enables the structured HCMS memory control plane. |
+| `hcms.storage_backend` | HCMS storage backend: `hybrid` by default, or `filesystem` for JSON state storage. |
+| `hcms.stores` | HCMS workspace and user layer budgets. |
+| `hcms.archive` | Session archive SQLite and FTS settings. |
+| `hcms.engines` | HCMS engine catalog and active engine. |
+| `hcms.recall` | Candidate, evidence, stream weights, RRF, adaptive weights, cache, MMR diversity, rerank, and token budgets. |
+| `hcms.update_queue` | Adaptive capture debounce windows, turn batch bounds, and queue enablement. |
+| `hcms.updater` | HCMS memory update mode, confidence thresholds, provider budgets, timeout, and fail-open behavior. |
+| `hcms.quality` | Review and auto-accept thresholds. |
+| `hcms.maintenance` | Bounded automatic maintenance policy. |
+| `hcms.onboarding` | Workspace bootstrap extraction policy. |
+
+`memory_platform` is a removed legacy configuration surface. The config
+resolver drops that key during normalization; use `hcms` for all memory
+runtime settings.
+
+`hcms.updater.mode` defaults to `heuristic`, which compiles observations through
+the deterministic zero-LLM path. `rule_based` applies structured rule-extracted
+`MemoryUpdatePlan` updates directly. `structured` enables the structured JSON
+update planner contract and falls back to the rule-based path when no valid
+provider response is available and `fail_open=true`. When
+`hcms.updater.model_name` is set, the agent factory composition root builds that
+configured internal task model as the structured update provider; the reusable
+memory package still consumes only the provider callback and does not import
+agent or gateway adapters.
+
+`hcms.recall.injection_mode` defaults to `context_v2`, so runtime recall enters
+Runtime Context V2 as budgeted `ContextBlock` candidates with assembly trace
+diagnostics. Legacy aliases such as `legacy_prompt_append` remain accepted as
+compatibility inputs, but runtime recall is migrated into Context V2 blocks and
+direct prompt append is retired.
+
+## Git Fields
+
+HCMS memory version control requires a Git token. By default Anvil reads
+`git.token_env=GITHUB_TOKEN`; the token value belongs in `.env`.
+
+| Field | Purpose |
+| --- | --- |
+| `git.enabled` | Enables Git configuration for HCMS version metadata. |
+| `git.required` | Marks the Git token as a required base configuration item. |
+| `git.provider` | Git provider id, `github` by default. |
+| `git.token_env` | Environment variable that stores the Git token. |
+| `git.user_name` | Optional author name for local HCMS version metadata. |
+| `git.user_email` | Optional author email for local HCMS version metadata. |
+| `git.remote_url` | Optional remote repository URL for operator metadata. |
+
+The browser Configuration Center exposes **Basic Configuration** for editing
+these values and testing each required or extension item.
+
+First-run CLI and TUI setup both write the same required Git base
+configuration. Use `anvil setup --git-token-env GITHUB_TOKEN --git-token
+<token>` from scripts, or `/setup --git-token-env GITHUB_TOKEN --git-token
+<token>` in the TUI for the active profile. The token is stored in `.env`; the
+YAML file stores only `git.token_env` and optional author/remote metadata.
 
 ## Tool Budget Fields
 
@@ -106,8 +152,9 @@ See [Model Provider Configuration](./model-provider-configuration.md).
 | `skills_config.governance_root` | Optional governance state root. |
 | `skills_config.curator` | Skill review, merge, archive, and procedure promotion policy. |
 
-Public releases exclude unreviewed local `skills/` packs. Install local skills
-into Anvil Home or configure reviewed external directories.
+The root `skills/` directory contains Anvil's bundled starter skills and is
+published with the repository. Install user-local skills into Anvil Home or
+configure reviewed external directories.
 
 ## Guardrails and Approvals
 
@@ -164,7 +211,6 @@ limits, mounts, and workspace sync behavior.
 | `extensions.skills` | Reserved skill extension config. |
 | `extensions.plugins` | Local plugin package config. |
 | `extensions.plugins.<id>.source_path` | Plugin source path. |
-| `extensions.plugins.<id>.memory_providers` | Memory providers contributed by a plugin. |
 | `extensions.plugins.<id>.inline_tools` | Inline tool descriptors. |
 | `extensions.plugins.<id>.resources` | Plugin resources. |
 | `extensions.plugins.<id>.prompts` | Plugin prompts. |

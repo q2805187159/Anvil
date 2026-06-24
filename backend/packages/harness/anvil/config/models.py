@@ -260,17 +260,6 @@ class ProfileConfig(BaseModel):
     subsystem_models: dict[str, str] = Field(default_factory=dict)
 
 
-class PluginMemoryProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    provider_id: str
-    display_name: str | None = None
-    kind: str = "http"
-    roles: list[str] = Field(default_factory=lambda: ["recall", "sync"])
-    settings: dict[str, Any] = Field(default_factory=dict)
-    enabled: bool = True
-
-
 class PluginConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -280,7 +269,6 @@ class PluginConfig(BaseModel):
     inline_tools: list[dict[str, Any]] = Field(default_factory=list)
     resources: list[dict[str, Any]] = Field(default_factory=list)
     prompts: list[dict[str, Any]] = Field(default_factory=list)
-    memory_providers: list[PluginMemoryProviderConfig] = Field(default_factory=list)
     catalog_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -308,18 +296,6 @@ class McpServerConfig(BaseModel):
     healthcheck: dict[str, Any] = Field(default_factory=dict)
 
 
-class MemoryConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    prefetch_once_per_turn: bool = False
-    store_path: str | None = None
-    namespace: str = "global/default"
-    max_facts: int = 12
-    injection_token_budget: int = 1200
-    transcript_context_tokens: int = 4000
-
-
 class PromptSnapshotRetentionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -341,8 +317,21 @@ class MemoryUpdateQueueConfig(BaseModel):
 
     enabled: bool = True
     debounce_seconds: float = 1.5
+    min_window_seconds: float = 5.0
+    default_window_seconds: float = 30.0
+    max_window_seconds: float = 60.0
     min_batch_turns: int = 4
     max_batch_turns: int = 8
+
+    @model_validator(mode="after")
+    def normalize_window_bounds(self) -> "MemoryUpdateQueueConfig":
+        self.debounce_seconds = max(0.0, float(self.debounce_seconds))
+        self.min_window_seconds = max(0.0, float(self.min_window_seconds))
+        self.default_window_seconds = max(self.min_window_seconds, float(self.default_window_seconds))
+        self.max_window_seconds = max(self.default_window_seconds, float(self.max_window_seconds))
+        self.min_batch_turns = max(1, int(self.min_batch_turns))
+        self.max_batch_turns = max(self.min_batch_turns, int(self.max_batch_turns))
+        return self
 
 
 class TranscriptConfig(BaseModel):
@@ -354,7 +343,7 @@ class TranscriptConfig(BaseModel):
     transcript_context_tokens: int = 4000
 
 
-class MemoryPlatformStoreConfig(BaseModel):
+class HCMSStoreConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -366,7 +355,7 @@ class MemoryPlatformStoreConfig(BaseModel):
     category_bias: str = "general"
 
 
-class MemoryPlatformArchiveConfig(BaseModel):
+class HCMSArchiveConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -375,7 +364,7 @@ class MemoryPlatformArchiveConfig(BaseModel):
     max_hits: int = 8
 
 
-class MemoryPlatformProviderConfig(BaseModel):
+class HCMSEngineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -384,14 +373,14 @@ class MemoryPlatformProviderConfig(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class MemoryPlatformProvidersConfig(BaseModel):
+class HCMSEnginesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    active_provider_id: str | None = None
-    catalog: dict[str, MemoryPlatformProviderConfig] = Field(default_factory=dict)
+    active_engine_id: str | None = None
+    catalog: dict[str, HCMSEngineConfig] = Field(default_factory=dict)
 
 
-class MemoryPlatformReflectionJobConfig(BaseModel):
+class HCMSReflectionJobConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -399,29 +388,29 @@ class MemoryPlatformReflectionJobConfig(BaseModel):
     cron: str | None = None
     interval_seconds: int | None = None
     template: str = "custom"
-    target_store_id: str = "runtime_memory"
+    target_store_id: str = "hcms_workspace"
     instructions: str | None = None
     source_query: str | None = None
 
 
-class MemoryPlatformReflectionConfig(BaseModel):
+class HCMSReflectionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     tick_seconds: int = 60
     auto_register_defaults: bool = True
-    jobs: dict[str, MemoryPlatformReflectionJobConfig] = Field(default_factory=dict)
+    jobs: dict[str, HCMSReflectionJobConfig] = Field(default_factory=dict)
 
 
-class MemoryPlatformCompactionHooksConfig(BaseModel):
+class HCMSCompactionHooksConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     include_archive: bool = True
-    include_provider_notes: bool = True
+    include_engine_notes: bool = True
 
 
-class MemoryPlatformSessionSearchConfig(BaseModel):
+class HCMSSessionSearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -432,18 +421,62 @@ class MemoryPlatformSessionSearchConfig(BaseModel):
     summary_timeout_seconds: float = 60.0
 
 
-class MemoryPlatformRecallConfig(BaseModel):
+class HCMSRecallConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    injection_mode: str = "context_v2"
     max_candidates: int = 16
     max_evidence: int = 8
     min_relevance_score: float = 0.05
     turn_recall_token_budget: int = 900
     enable_model_rerank: bool = False
     rerank_model_name: str | None = None
+    bm25_weight: float = 0.3
+    vector_weight: float = 0.4
+    graph_weight: float = 0.2
+    temporal_weight: float = 0.1
+    rrf_k: int = 60
+    enable_adaptive_weights: bool = True
+    enable_cache: bool = True
+    cache_ttl: int = 300
+    cache_max_entries: int = 100
+    enable_mmr: bool = True
+    mmr_lambda: float = 0.72
+
+    @model_validator(mode="after")
+    def normalize_recall_bounds(self) -> "HCMSRecallConfig":
+        normalized_injection_mode = str(self.injection_mode or "context_v2").strip().lower().replace("-", "_")
+        injection_mode_aliases = {
+            "legacy": "legacy_prompt_append",
+            "legacy_append": "legacy_prompt_append",
+            "prompt_append": "legacy_prompt_append",
+            "memory_context": "legacy_prompt_append",
+            "memory_prompt": "legacy_prompt_append",
+            "v1": "legacy_prompt_append",
+            "context_v2": "context_v2",
+            "runtime_context_v2": "context_v2",
+            "block_assembly": "context_v2",
+            "v2": "context_v2",
+        }
+        self.injection_mode = injection_mode_aliases.get(normalized_injection_mode, normalized_injection_mode)
+        if self.injection_mode not in {"legacy_prompt_append", "context_v2"}:
+            raise ValueError("hcms.recall.injection_mode must be one of: legacy_prompt_append, context_v2")
+        self.max_candidates = max(1, int(self.max_candidates))
+        self.max_evidence = max(1, int(self.max_evidence))
+        self.min_relevance_score = max(0.0, min(float(self.min_relevance_score), 1.0))
+        self.turn_recall_token_budget = max(1, int(self.turn_recall_token_budget))
+        self.bm25_weight = max(0.0, min(float(self.bm25_weight), 1.0))
+        self.vector_weight = max(0.0, min(float(self.vector_weight), 1.0))
+        self.graph_weight = max(0.0, min(float(self.graph_weight), 1.0))
+        self.temporal_weight = max(0.0, min(float(self.temporal_weight), 1.0))
+        self.rrf_k = max(1, int(self.rrf_k))
+        self.cache_ttl = max(0, int(self.cache_ttl))
+        self.cache_max_entries = max(0, int(self.cache_max_entries))
+        self.mmr_lambda = max(0.0, min(float(self.mmr_lambda), 1.0))
+        return self
 
 
-class MemoryPlatformReviewConfig(BaseModel):
+class HCMSQualityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     auto_accept_confidence: float = 0.82
@@ -451,69 +484,11 @@ class MemoryPlatformReviewConfig(BaseModel):
     max_direct_content_chars: int = 360
 
 
-def _normalize_profile_facet_class(value: Any) -> str:
-    normalized = "".join(char.lower() if char.isalnum() else "_" for char in str(value or "").strip())
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
-    return normalized.strip("_")
-
-
-class MemoryPlatformProfileFacetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    active_threshold: float = 1.5
-    provisional_threshold: float = 0.7
-    candidate_threshold: float = 0.4
-    require_review_classes: tuple[str, ...] = ("identity", "veto")
-    class_budgets: dict[str, int] = Field(
-        default_factory=lambda: {
-            "style": 4,
-            "identity": 4,
-            "tooling": 5,
-            "veto": 3,
-            "goal": 3,
-            "channel": 1,
-            "workflow": 5,
-            "environment": 5,
-            "project_fact": 5,
-            "overflow": 5,
-        }
-    )
-    default_class_budget: int = 5
-    max_facets: int = 80
-    pollution_requires_review: bool = True
-
-    @model_validator(mode="after")
-    def normalize_policy(self) -> "MemoryPlatformProfileFacetConfig":
-        self.active_threshold = max(0.0, float(self.active_threshold))
-        self.provisional_threshold = max(0.0, min(float(self.provisional_threshold), self.active_threshold))
-        self.candidate_threshold = max(0.0, min(float(self.candidate_threshold), self.provisional_threshold))
-        self.require_review_classes = tuple(
-            item
-            for item in dict.fromkeys(_normalize_profile_facet_class(value) for value in self.require_review_classes)
-            if item
-        )
-        budgets: dict[str, int] = {}
-        for raw_key, raw_value in self.class_budgets.items():
-            key = _normalize_profile_facet_class(raw_key)
-            if not key:
-                continue
-            try:
-                value = int(raw_value)
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                budgets[key] = min(value, 100)
-        self.class_budgets = budgets
-        self.default_class_budget = max(1, min(int(self.default_class_budget), 100))
-        self.max_facets = max(1, min(int(self.max_facets), 500))
-        return self
-
-
-class MemoryPlatformUpdaterConfig(BaseModel):
+class HCMSUpdaterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
+    mode: str = "heuristic"
     model_name: str | None = None
     max_input_tokens: int = 6000
     max_output_tokens: int = 1800
@@ -522,8 +497,37 @@ class MemoryPlatformUpdaterConfig(BaseModel):
     timeout_seconds: float = 60.0
     fail_open: bool = True
 
+    @model_validator(mode="after")
+    def normalize_updater(self) -> "HCMSUpdaterConfig":
+        normalized = str(self.mode or "heuristic").strip().lower().replace("-", "_")
+        aliases = {
+            "default": "heuristic",
+            "compiler": "heuristic",
+            "zero_llm": "heuristic",
+            "zero_llm_compiler": "heuristic",
+            "rule": "rule_based",
+            "rules": "rule_based",
+            "rulebased": "rule_based",
+            "rule_based": "rule_based",
+            "structured_json": "structured",
+            "json": "structured",
+            "json_plan": "structured",
+            "llm": "structured",
+            "llm_json": "structured",
+            "structured": "structured",
+        }
+        self.mode = aliases.get(normalized, normalized)
+        if self.mode not in {"heuristic", "rule_based", "structured"}:
+            raise ValueError("hcms.updater.mode must be one of: heuristic, rule_based, structured")
+        self.max_input_tokens = max(256, min(int(self.max_input_tokens), 128_000))
+        self.max_output_tokens = max(128, min(int(self.max_output_tokens), 32_000))
+        self.fact_confidence_threshold = max(0.0, min(float(self.fact_confidence_threshold), 1.0))
+        self.outcome_confidence_threshold = max(0.0, min(float(self.outcome_confidence_threshold), 1.0))
+        self.timeout_seconds = max(0.1, min(float(self.timeout_seconds), 600.0))
+        return self
 
-class MemoryPlatformMaintenanceConfig(BaseModel):
+
+class HCMSMaintenanceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -537,15 +541,15 @@ class MemoryPlatformMaintenanceConfig(BaseModel):
     interval_hours: float | None = None
     min_idle_seconds: int = 0
     max_archive_per_run: int = 2
-    max_review_per_run: int = 8
+    max_quality_inspections_per_run: int = 8
     max_reinforce_per_run: int = 6
     min_quality_score_for_execute: float = 0.55
-    max_pending_review_for_execute: int = 30
+    max_quality_issues_for_execute: int = 30
     run_reflection_due_jobs: bool = True
     include_health: bool = True
 
     @model_validator(mode="after")
-    def normalize_schedule_aliases(self) -> "MemoryPlatformMaintenanceConfig":
+    def normalize_schedule_aliases(self) -> "HCMSMaintenanceConfig":
         if self.interval_hours is not None:
             self.interval_seconds = max(int(float(self.interval_hours) * 60 * 60), 60)
         self.tick_seconds = max(int(self.tick_seconds), 10)
@@ -554,13 +558,13 @@ class MemoryPlatformMaintenanceConfig(BaseModel):
         return self
 
 
-class MemoryPlatformOnboardingConfig(BaseModel):
+class HCMSOnboardingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     trigger_when_project_memory_empty: bool = True
-    review_first: bool = True
-    target_store_id: str = "runtime_memory"
+    quality_first: bool = True
+    target_store_id: str = "hcms_workspace"
     target_layer_id: str = "workspace"
     category: str = "project_context"
     max_files: int = 8
@@ -587,9 +591,9 @@ class MemoryPlatformOnboardingConfig(BaseModel):
             "pytest.ini",
             "setup.cfg",
             "requirements*.txt",
-            "docs/architecture/*.md",
+            "docs/guides/*.md",
             "docs/adr/*.md",
-            "docs/guides/quickstart*.md",
+            "docs/memory/*.md",
         )
     )
     exclude_patterns: tuple[str, ...] = Field(
@@ -616,14 +620,14 @@ class MemoryPlatformOnboardingConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def normalize_bounds(self) -> "MemoryPlatformOnboardingConfig":
+    def normalize_bounds(self) -> "HCMSOnboardingConfig":
         self.max_files = max(1, min(int(self.max_files), 32))
         self.max_total_chars = max(400, min(int(self.max_total_chars), 80_000))
         self.max_file_chars = max(200, min(int(self.max_file_chars), self.max_total_chars))
         self.priority = min(max(float(self.priority), 0.0), 1.0)
         self.confidence = min(max(float(self.confidence), 0.0), 1.0)
         self.salience = min(max(float(self.salience), 0.0), 1.0)
-        self.target_store_id = (self.target_store_id or "runtime_memory").strip() or "runtime_memory"
+        self.target_store_id = (self.target_store_id or "hcms_workspace").strip() or "hcms_workspace"
         self.target_layer_id = (self.target_layer_id or "workspace").strip() or "workspace"
         self.category = (self.category or "project_context").strip() or "project_context"
         return self
@@ -672,31 +676,6 @@ class JITContextConfig(BaseModel):
     collect_metrics: bool = True
 
 
-class CompactionConfig(BaseModel):
-    """Configuration for the legacy priority compaction service.
-
-    The production conversation compaction surface is SummarizationConfig and
-    SummarizationMiddleware, because they persist durable summary text and
-    compaction-level telemetry. This legacy priority compactor is kept opt-in
-    for focused experiments and must not become the default runtime truth.
-
-    Design principles:
-    - Priority-based retention (HIGH/MEDIUM/LOW)
-    - LLM-powered semantic compression
-    - Critical fact preservation
-    - Metrics-driven optimization
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    trigger_threshold: float = 0.7  # Compact when context reaches 70% of max
-    summary_token_budget: int = 800  # Max tokens for compressed summary
-    min_recent_messages: int = 10  # Always keep last N messages
-    compression_model_name: str | None = None  # Model for compression (None = use default)
-    compression_timeout_seconds: float = 30.0  # Timeout for LLM compression
-    collect_metrics: bool = True  # Enable metrics collection
-
-
 class ToolOutputBudgetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -743,40 +722,40 @@ class ToolVisibilityBudgetConfig(BaseModel):
     action_prefilter_min_score: float = 0.25
 
 
-class MemoryPlatformConfig(BaseModel):
+class HCMSRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    stores: dict[str, MemoryPlatformStoreConfig] = Field(default_factory=dict)
-    archive: MemoryPlatformArchiveConfig = Field(default_factory=MemoryPlatformArchiveConfig)
-    providers: MemoryPlatformProvidersConfig = Field(default_factory=MemoryPlatformProvidersConfig)
-    reflection: MemoryPlatformReflectionConfig = Field(default_factory=MemoryPlatformReflectionConfig)
-    compaction_hooks: MemoryPlatformCompactionHooksConfig = Field(default_factory=MemoryPlatformCompactionHooksConfig)
-    session_search: MemoryPlatformSessionSearchConfig = Field(default_factory=MemoryPlatformSessionSearchConfig)
-    recall: MemoryPlatformRecallConfig = Field(default_factory=MemoryPlatformRecallConfig)
-    review: MemoryPlatformReviewConfig = Field(default_factory=MemoryPlatformReviewConfig)
-    profile_facets: MemoryPlatformProfileFacetConfig = Field(default_factory=MemoryPlatformProfileFacetConfig)
-    updater: MemoryPlatformUpdaterConfig = Field(default_factory=MemoryPlatformUpdaterConfig)
-    maintenance: MemoryPlatformMaintenanceConfig = Field(default_factory=MemoryPlatformMaintenanceConfig)
-    onboarding: MemoryPlatformOnboardingConfig = Field(default_factory=MemoryPlatformOnboardingConfig)
+    storage_backend: str = "hybrid"
+    stores: dict[str, HCMSStoreConfig] = Field(default_factory=dict)
+    archive: HCMSArchiveConfig = Field(default_factory=HCMSArchiveConfig)
+    engines: HCMSEnginesConfig = Field(default_factory=HCMSEnginesConfig)
+    reflection: HCMSReflectionConfig = Field(default_factory=HCMSReflectionConfig)
+    compaction_hooks: HCMSCompactionHooksConfig = Field(default_factory=HCMSCompactionHooksConfig)
+    session_search: HCMSSessionSearchConfig = Field(default_factory=HCMSSessionSearchConfig)
+    recall: HCMSRecallConfig = Field(default_factory=HCMSRecallConfig)
+    quality: HCMSQualityConfig = Field(default_factory=HCMSQualityConfig)
+    updater: HCMSUpdaterConfig = Field(default_factory=HCMSUpdaterConfig)
+    maintenance: HCMSMaintenanceConfig = Field(default_factory=HCMSMaintenanceConfig)
+    onboarding: HCMSOnboardingConfig = Field(default_factory=HCMSOnboardingConfig)
     transcript: TranscriptConfig = Field(default_factory=TranscriptConfig)
     prompt_snapshot: PromptSnapshotRetentionConfig = Field(default_factory=PromptSnapshotRetentionConfig)
     session_snapshot: MemorySessionSnapshotConfig = Field(default_factory=MemorySessionSnapshotConfig)
     update_queue: MemoryUpdateQueueConfig = Field(default_factory=MemoryUpdateQueueConfig)
 
     @model_validator(mode="after")
-    def ensure_default_stores(self) -> "MemoryPlatformConfig":
+    def ensure_default_stores(self) -> "HCMSRuntimeConfig":
         default_stores = {
-            "runtime_memory": MemoryPlatformStoreConfig(
-                display_name="Runtime Memory",
+            "hcms_workspace": HCMSStoreConfig(
+                display_name="HCMS Workspace Layer",
                 max_chars=2800,
                 injection_chars=1400,
                 max_tokens=700,
                 injection_tokens=350,
-                category_bias="runtime",
+                category_bias="workspace",
             ),
-            "user_profile": MemoryPlatformStoreConfig(
-                display_name="User Profile",
+            "hcms_user": HCMSStoreConfig(
+                display_name="HCMS User Layer",
                 max_chars=1800,
                 injection_chars=1000,
                 max_tokens=450,
@@ -801,32 +780,52 @@ class MemoryPlatformConfig(BaseModel):
         self.stores = merged
         return self
 
-    @classmethod
-    def from_legacy_memory(cls, legacy: MemoryConfig) -> "MemoryPlatformConfig":
-        if not legacy.enabled:
-            return cls()
-        return cls(
-            enabled=True,
-            stores={
-                "runtime_memory": MemoryPlatformStoreConfig(
-                    display_name="Runtime Memory",
-                    max_chars=max(2200, legacy.max_facts * 220),
-                    injection_chars=max(1200, legacy.injection_token_budget * 4),
-                    category_bias="runtime",
-                ),
-                "user_profile": MemoryPlatformStoreConfig(
-                    display_name="User Profile",
-                    max_chars=1800,
-                    injection_chars=1000,
-                    category_bias="preference",
-                ),
-            },
-            archive=MemoryPlatformArchiveConfig(enabled=True),
-            providers=MemoryPlatformProvidersConfig(),
-            reflection=MemoryPlatformReflectionConfig(enabled=False),
-            compaction_hooks=MemoryPlatformCompactionHooksConfig(enabled=True),
-            session_search=MemoryPlatformSessionSearchConfig(enabled=True),
-        )
+    @model_validator(mode="after")
+    def normalize_storage_backend(self) -> "HCMSRuntimeConfig":
+        backend = str(self.storage_backend or "hybrid").strip().lower().replace("-", "_")
+        aliases = {
+            "file": "filesystem",
+            "files": "filesystem",
+            "json": "filesystem",
+            "local": "filesystem",
+            "markdown": "hybrid",
+        }
+        backend = aliases.get(backend, backend)
+        if backend not in {"filesystem", "hybrid"}:
+            raise ValueError("hcms.storage_backend must be one of: filesystem, hybrid")
+        self.storage_backend = backend
+        return self
+
+
+class GitRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    required: bool = True
+    provider: str = "github"
+    token_env: str = "GITHUB_TOKEN"
+    user_name: str | None = None
+    user_email: str | None = None
+    remote_url: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_git_config(self) -> "GitRuntimeConfig":
+        self.provider = str(self.provider or "github").strip().lower().replace("-", "_") or "github"
+        token_env = str(self.token_env or "GITHUB_TOKEN").strip()
+        if token_env.startswith("${") and token_env.endswith("}"):
+            token_env = token_env[2:-1].strip()
+        self.token_env = token_env or "GITHUB_TOKEN"
+        self.user_name = _clean_optional_string(self.user_name)
+        self.user_email = _clean_optional_string(self.user_email)
+        self.remote_url = _clean_optional_string(self.remote_url)
+        return self
+
+
+def _clean_optional_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
 
 
 class SkillCuratorConfig(BaseModel):
@@ -851,7 +850,7 @@ class SkillCuratorConfig(BaseModel):
     maintenance_enabled: bool = True
     max_actions_per_run: int = 25
     max_archive_per_run: int = 2
-    max_review_plan_per_run: int = 6
+    max_quality_plan_per_run: int = 6
     max_merge_plan_per_run: int = 3
     max_procedure_promotions_per_run: int = 3
     max_template_promotions_per_run: int = 3
@@ -860,7 +859,7 @@ class SkillCuratorConfig(BaseModel):
     force: bool = False
 
     @model_validator(mode="after")
-    def normalize_hermes_compatible_fields(self) -> "SkillCuratorConfig":
+    def normalize_curator_alias_fields(self) -> "SkillCuratorConfig":
         if self.enabled is not None:
             self.automation_enabled = bool(self.enabled)
         if self.interval_hours is not None:
@@ -1317,9 +1316,7 @@ class ContextFilesConfig(BaseModel):
     filenames: list[str] = Field(
         default_factory=lambda: [
             "AGENTS.md",
-            "CLAUDE.md",
-            "CODEX.md",
-            "GEMINI.md",
+            "PROJECT_RULES.md",
             ".cursorrules",
             ".windsurfrules",
         ]
@@ -1327,7 +1324,7 @@ class ContextFilesConfig(BaseModel):
     rule_globs: list[str] = Field(default_factory=lambda: [".cursor/rules/*.md", ".github/copilot-instructions.md"])
     include_readme: bool = False
     recursive_agents: bool = False
-    recursive_names: list[str] = Field(default_factory=lambda: ["AGENTS.md", "CODEX.md", "CLAUDE.md", "GEMINI.md"])
+    recursive_names: list[str] = Field(default_factory=lambda: ["AGENTS.md", "PROJECT_RULES.md"])
     max_files: int = 12
     max_chars: int = 12000
     max_chars_per_file: int = 4000
@@ -1358,15 +1355,14 @@ class EffectiveConfig(BaseModel):
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
     subsystem_models: dict[str, str] = Field(default_factory=dict)
     extensions: ExtensionsConfig = Field(default_factory=ExtensionsConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    memory_platform: MemoryPlatformConfig = Field(default_factory=MemoryPlatformConfig)
+    hcms: HCMSRuntimeConfig = Field(default_factory=HCMSRuntimeConfig)
+    git: GitRuntimeConfig = Field(default_factory=GitRuntimeConfig)
     skills_config: SkillsConfig = Field(default_factory=SkillsConfig)
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     summarization: SummarizationConfig = Field(default_factory=SummarizationConfig)
     jit_context: JITContextConfig = Field(default_factory=JITContextConfig)
-    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     tool_output_budget: ToolOutputBudgetConfig = Field(default_factory=ToolOutputBudgetConfig)
     tool_visibility_budget: ToolVisibilityBudgetConfig = Field(default_factory=ToolVisibilityBudgetConfig)
     title: TitleConfig = Field(default_factory=TitleConfig)

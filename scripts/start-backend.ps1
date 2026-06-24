@@ -1,5 +1,6 @@
 param(
-  [string]$Host = "127.0.0.1",
+  [Alias("Host")]
+  [string]$BindHost = "127.0.0.1",
   [int]$Port = 18000
 )
 
@@ -9,7 +10,7 @@ $env:PYTHONPATH = "$backendRoot;$backendRoot\packages\harness"
 
 Push-Location $backendRoot
 try {
-  python -m app.gateway.main --host $Host --port $Port
+  python -m app.gateway.main --host $BindHost --port $Port
 } finally {
   Pop-Location
 }

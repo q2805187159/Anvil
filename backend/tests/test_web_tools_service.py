@@ -209,7 +209,7 @@ def test_runtime_web_tool_handlers_are_visible_and_use_service_contract(contract
     assert extract_payload["items"][0]["content"] == "Anvil page"
 
 
-def test_runtime_web_extract_accepts_hermes_style_urls_list(contract_tmp_path) -> None:
+def test_runtime_web_extract_accepts_legacy_urls_list(contract_tmp_path) -> None:
     config_result = _config(
         {
             "mock_fetch_results": {

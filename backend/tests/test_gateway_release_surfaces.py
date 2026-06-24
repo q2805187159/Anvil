@@ -155,10 +155,12 @@ def test_gateway_can_cancel_pending_approval(gateway_app_factory) -> None:
 
 def test_gateway_lists_and_cancels_subagent_tasks(gateway_app_factory) -> None:
     blocker = threading.Event()
+    started = threading.Event()
 
     def blocking_runner_factory(*, task, prompt, config_result, allowed_tool_names):
         def _runner() -> str:
-            blocker.wait(timeout=2)
+            started.set()
+            blocker.wait()
             return f"done:{prompt}"
 
         return _runner
@@ -197,6 +199,7 @@ def test_gateway_lists_and_cancels_subagent_tasks(gateway_app_factory) -> None:
                 break
             time.sleep(0.05)
         assert tasks
+        assert started.wait(timeout=2) is True
         task_id = tasks[0]["task_id"]
 
         cancelled = client.post(f"/threads/thread-subagents/subagents/{task_id}/cancel")

@@ -25,10 +25,41 @@ class MemoryCaptureMiddleware(AgentMiddleware[LeadAgentState, LeadAgentContext])
                 trace_id=runtime.context.thread_id,
                 blocked=blocked,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            diagnostics = _capture_diagnostics("build_capture_envelope", exc)
+            runtime.context.memory_capture_diagnostics = diagnostics
+            return {"memory_capture_diagnostics": diagnostics}
 
         if not memory_service.has_capture_signal(envelope):
             return None
         memory_service.enqueue_capture(envelope)
-        return {"memory_snapshot_id": namespace}
+        try:
+            process_immediately = memory_service.should_process_capture_immediately(envelope)
+            processed = memory_service.process_pending(namespace, force=process_immediately)
+        except Exception as exc:
+            processed = 0
+            diagnostics = _capture_diagnostics("process_pending", exc)
+            runtime.context.memory_capture_diagnostics = diagnostics
+            return {
+                "memory_snapshot_id": namespace,
+                "memory_capture_diagnostics": diagnostics,
+            }
+        runtime.context.memory_capture_processed = processed > 0
+        runtime.context.memory_capture_processed_count += processed
+        diagnostics = {
+            "source": "memory_service",
+            "status": "processed" if processed else "queued",
+            "phase": "after_agent",
+            "processed_count": processed,
+        }
+        runtime.context.memory_capture_diagnostics = diagnostics
+        return {"memory_snapshot_id": namespace, "memory_capture_diagnostics": diagnostics}
+
+
+def _capture_diagnostics(phase: str, exc: Exception) -> dict[str, object]:
+    return {
+        "source": "memory_service",
+        "status": "error",
+        "phase": phase,
+        "error_type": exc.__class__.__name__,
+    }

@@ -141,7 +141,7 @@ export function PluginInspectorPanel({
                   active={selectedItem === plugin.plugin_id}
                   title={plugin.plugin_id}
                   subtitle={plugin.source_path ?? undefined}
-                  meta={`${plugin.enabled ? copy.common.enabled : copy.common.disabled} · ${plugin.tool_count} tools · ${plugin.memory_provider_count ?? 0} memory`}
+                  meta={`${plugin.enabled ? copy.common.enabled : copy.common.disabled} · ${plugin.tool_count} tools`}
                   onClick={() => onSelectItem(plugin.plugin_id)}
                 />
                 ))
@@ -203,7 +203,6 @@ function filterCatalog(catalog: PluginCatalogEntryView[], query: string) {
       plugin.registry_source,
       ...plugin.tags,
       ...plugin.tool_names,
-      ...(plugin.memory_providers ?? []),
     ]
       .filter(Boolean)
       .join(" ")
@@ -280,7 +279,6 @@ function CatalogListItem({
     installed ? copy.plugins.installed : copy.plugins.available,
     plugin.tool_count ? `${plugin.tool_count} tools` : null,
     plugin.mcp_server_count ? `${plugin.mcp_server_count} MCP` : null,
-    plugin.memory_provider_count ? `${plugin.memory_provider_count} memory` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -357,7 +355,6 @@ function CatalogDetail({
           <Metric label={copy.plugins.tools} value={String(plugin.tool_count)} compact />
           <Metric label={copy.plugins.skillRoots} value={String(plugin.skill_count)} compact />
           <Metric label={copy.plugins.mcpServers} value={String(plugin.mcp_server_count)} compact />
-          <Metric label={copy.plugins.memoryProviders} value={String(plugin.memory_provider_count ?? 0)} compact />
           <Metric label={copy.plugins.resources} value={String(plugin.resource_count)} compact />
           <Metric label={copy.plugins.prompts} value={String(plugin.prompt_count)} compact />
         </div>
@@ -388,9 +385,6 @@ function CatalogDetail({
       </OpsPanelCard>
       <OpsPanelCard title={copy.plugins.mcpServers}>
         <OpsTagList items={plugin.mcp_servers} emptyLabel={copy.common.none} />
-      </OpsPanelCard>
-      <OpsPanelCard title={copy.plugins.memoryProviders}>
-        <OpsTagList items={plugin.memory_providers ?? []} emptyLabel={copy.common.none} />
       </OpsPanelCard>
       <OpsPanelCard title={copy.plugins.catalogMetadata}>
         <OpsJsonBlock value={plugin.catalog_metadata} emptyLabel={copy.common.none} />
@@ -472,9 +466,6 @@ function InstalledDetail({ copy, plugin }: { copy: OpsCopy; plugin: PluginView }
       </OpsPanelCard>
       <OpsPanelCard title={copy.plugins.tools}>
         <OpsTagList items={plugin.tool_names} emptyLabel={copy.common.none} />
-      </OpsPanelCard>
-      <OpsPanelCard title={copy.plugins.memoryProviders}>
-        <OpsJsonBlock value={plugin.memory_providers ?? []} emptyLabel={copy.common.none} />
       </OpsPanelCard>
       <OpsPanelCard title={copy.plugins.resources}>
         <OpsJsonBlock value={plugin.resources} emptyLabel={copy.common.none} />

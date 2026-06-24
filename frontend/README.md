@@ -52,6 +52,8 @@ For the Docker-based operator flow, see `docs/guides/local-docker-workspace.md`.
 
 Related docs:
 
+- `README.md`
 - `docs/index.md`
-- `docs/guides/quickstart-and-startup-modes.md`
-- `docs/architecture/source-of-truth.md`
+- `docs/guides/usage.md`
+- `docs/guides/configuration.md`
+- `docs/guides/release-verification.md`

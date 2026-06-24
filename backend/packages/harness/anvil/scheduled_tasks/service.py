@@ -8,7 +8,7 @@ from threading import Lock
 from typing import Callable
 from uuid import uuid4
 
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 from .contracts import (
     ScheduledTask,

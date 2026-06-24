@@ -19,6 +19,15 @@ def write_skill(root: Path, slug: str, title: str, body: str) -> None:
     (skill_dir / "SKILL.md").write_text(f"# {title}\n\n{body}\n", encoding="utf-8")
 
 
+def write_manifest_skill(root: Path, slug: str, frontmatter: str, body: str) -> None:
+    skill_dir = root / slug
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\n{frontmatter.strip()}\n---\n# {slug}\n\n{body}\n",
+        encoding="utf-8",
+    )
+
+
 def test_repo_skill_discovery_and_enable_disable_resolution(contract_tmp_path) -> None:
     skills_root = contract_tmp_path / "skills"
     write_skill(skills_root, "alpha", "Alpha Skill", "Alpha summary")
@@ -66,6 +75,212 @@ def test_skill_lookup_accepts_prompt_style_prefixed_skill_ids(contract_tmp_path)
     assert path_manifest.skill_id == "ppt-generation"
     assert uri_manifest is not None
     assert uri_manifest.skill_id == "ppt-generation"
+
+
+def test_skill_retrieval_l0_l3_selects_top_k_without_loading_full_content(
+    contract_tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_root = contract_tmp_path / "skills"
+    write_manifest_skill(
+        skills_root,
+        "code-review",
+        """
+title: Code Review
+summary: Review code regressions and missing tests.
+tags: [review, regression, tests]
+domain: engineering
+task_type: review
+allowed_tools: [shell_command, rg]
+related_skills: [test-driven-development]
+risk_level: low
+""",
+        "Review code for regressions. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "test-driven-development",
+        """
+title: Test Driven Development
+summary: Write failing tests before implementation.
+tags: [tests, regression]
+domain: engineering
+task_type: implementation
+allowed_tools: [shell_command]
+risk_level: low
+""",
+        "Use red green refactor loops. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "ppt-generation",
+        """
+title: Presentation Generation
+summary: Create presentation decks and slide layouts.
+tags: [slides]
+domain: presentation
+task_type: generation
+risk_level: normal
+""",
+        "Make slides. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+
+    config = EffectiveConfig(skills_config=SkillsConfig(enabled=True, external_dirs=[str(skills_root)]))
+    service = SkillsService()
+    service.resolve_roots = lambda _config: [skills_root.resolve()]  # type: ignore[method-assign]
+
+    def fail_content_read(*_args, **_kwargs):
+        raise AssertionError("skill retrieval must not load full skill content")
+
+    monkeypatch.setattr(service, "get_skill_content", fail_content_read)
+    monkeypatch.setattr(service, "mentioned_skill_content_summaries", fail_content_read)
+
+    plan = service.retrieve(
+        config=config,
+        fingerprint="cfg-retrieval",
+        query="review code regression tests",
+        top_k=2,
+        feedback_by_skill_id={
+            "code-review": {
+                "usage_count": 5,
+                "success_count": 4,
+                "failure_count": 1,
+                "utility_score": 0.82,
+                "average_latency_ms": 110,
+            }
+        },
+        graph_neighbors_by_skill_id={
+            "test-driven-development": ("code-review", "regression-tests"),
+        },
+    )
+
+    assert plan.query == "review code regression tests"
+    assert plan.top_k == 2
+    assert plan.l0_summary["enabled_count"] == 3
+    assert plan.l0_summary["domain_counts"]["engineering"] == 2
+    assert plan.l0_summary["tag_counts"]["tests"] == 2
+    assert plan.tiers_used == ("L0", "L1", "L2", "L3")
+    assert plan.diagnostics["loaded_full_skill_content"] is False
+    assert plan.diagnostics["embedding_mode"] == "lexical_fallback"
+    assert plan.selected_skill_ids == ("code-review", "test-driven-development")
+
+    candidates = {candidate.skill_id: candidate for candidate in plan.candidates}
+    assert candidates["code-review"].selected is True
+    assert candidates["code-review"].selection_rank == 1
+    assert candidates["code-review"].tier_scores["history"] > 0
+    assert "summary" in candidates["code-review"].matched_fields
+    assert "tests" in candidates["code-review"].matched_terms
+    assert candidates["test-driven-development"].tier_scores["graph"] > 0
+    assert "code-review" in candidates["test-driven-development"].graph_neighbors
+    assert candidates["ppt-generation"].selected is False
+    assert "FULL BODY SENTINEL" not in json.dumps(plan.model_dump(mode="json"))
+
+
+def test_skill_retrieval_l4_l6_reranks_expands_and_prefetches_without_loading_full_content(
+    contract_tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_root = contract_tmp_path / "skills"
+    write_manifest_skill(
+        skills_root,
+        "runtime-context",
+        """
+title: Runtime Context Assembly
+summary: Assemble ContextBlock budgets, salience routes, and runtime trace diagnostics.
+tags: [runtime-context, contextblock, salience]
+domain: runtime
+task_type: implementation
+allowed_tools: [shell_command, rg]
+risk_level: low
+""",
+        "Runtime context implementation body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "context-cleanup",
+        """
+title: Context Cleanup
+summary: Remove duplicate prompt injection paths and migrate legacy memory appenders.
+tags: [cleanup, prompt-injection]
+domain: runtime
+task_type: refactor
+allowed_tools: [shell_command, rg]
+risk_level: normal
+""",
+        "Cleanup body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "dangerous-deploy",
+        """
+title: Dangerous Deploy
+summary: Deploy production infrastructure with broad release permissions.
+tags: [deploy]
+domain: release
+task_type: deployment
+allowed_tools: [shell_command]
+risk_level: high
+""",
+        "Deploy body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "evaluation-suite",
+        """
+title: Evaluation Suite
+summary: Build trace replay, ablation reports, and release quality metrics.
+tags: [evaluation, trace-replay, ablation]
+domain: evaluation
+task_type: verification
+risk_level: low
+""",
+        "Evaluation body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+
+    config = EffectiveConfig(skills_config=SkillsConfig(enabled=True, external_dirs=[str(skills_root)]))
+    service = SkillsService()
+    service.resolve_roots = lambda _config: [skills_root.resolve()]  # type: ignore[method-assign]
+
+    def fail_content_read(*_args, **_kwargs):
+        raise AssertionError("skill retrieval must not load full skill content")
+
+    monkeypatch.setattr(service, "get_skill_content", fail_content_read)
+    monkeypatch.setattr(service, "mentioned_skill_content_summaries", fail_content_read)
+
+    plan = service.retrieve(
+        config=config,
+        fingerprint="cfg-retrieval-l4-l6",
+        query="fix it",
+        top_k=2,
+        salience_boost_terms={
+            "contextblock": 1.0,
+            "salience": 0.8,
+            "runtime": 0.7,
+            "legacy memory": 0.45,
+            "prompt injection": 0.4,
+            "trace": 0.5,
+        },
+        prefetch_terms=("ablation", "release metrics", "legacy memory appenders"),
+    )
+
+    assert plan.tiers_used == ("L0", "L1", "L2", "L3", "L4", "L5", "L6")
+    assert set(plan.selected_skill_ids) == {"runtime-context", "context-cleanup"}
+    assert plan.diagnostics["loaded_full_skill_content"] is False
+    assert plan.diagnostics["l4_rerank_triggered"] is True
+    assert plan.diagnostics["l4_trigger_reasons"] == ("high_candidate_count", "high_risk_candidate")
+    assert plan.diagnostics["l5_hyde_triggered"] is True
+    assert "contextblock" in plan.diagnostics["expanded_query_terms"]
+    assert plan.diagnostics["prefetch_skill_ids"] == ("evaluation-suite",)
+
+    candidates = {candidate.skill_id: candidate for candidate in plan.candidates}
+    assert candidates["runtime-context"].selection_rank is not None
+    assert candidates["context-cleanup"].selection_rank is not None
+    assert candidates["runtime-context"].tier_scores["rerank"] > candidates["dangerous-deploy"].tier_scores["rerank"]
+    assert candidates["runtime-context"].tier_scores["hyde"] > 0
+    assert candidates["evaluation-suite"].selected is False
+    assert candidates["evaluation-suite"].metadata["prefetch_candidate"] is True
+    assert candidates["evaluation-suite"].metadata["prefetch_reason"] == "L6_goal_prefetch"
+    assert "FULL BODY SENTINEL" not in json.dumps(plan.model_dump(mode="json"))
 
 
 def test_skill_discovery_defers_supporting_file_index_until_detail(
@@ -406,7 +621,7 @@ def test_skill_loader_keeps_common_external_frontmatter_as_valid_metadata(contra
         "author: External Agent\n"
         "license: MIT\n"
         "metadata:\n"
-        "  hermes:\n"
+        "  anvil:\n"
         "    tags: [Research, API]\n"
         "    related_skills: [deep-research]\n"
         "triggers:\n"
@@ -2107,10 +2322,10 @@ def test_skill_curator_report_ranks_governance_recommendations(
     report = service.manage_curator(config=config, action="report")
 
     recommendations = report["recommendations"]
-    assert recommendations[0]["action"] == "review_plan"
+    assert recommendations[0]["action"] == "quality_plan"
     assert recommendations[0]["skill_id"] == "agent-review-rec"
     assert recommendations[0]["next_tool_call"] == {
-        "action": "review_plan",
+        "action": "quality_plan",
         "skill_id": "agent-review-rec",
     }
     template_rec = next(item for item in recommendations if item.get("skill_id") == "agent-template-rec")
@@ -2154,12 +2369,12 @@ def test_skill_curator_curate_report_persists_recommendations(
 
     run = service.manage_curator(config=config, action="curate", dry_run=True)
 
-    assert run["recommendations"][0]["action"] == "review_plan"
+    assert run["recommendations"][0]["action"] == "quality_plan"
     run_payload = json.loads(Path(str(run["run_json_path"])).read_text(encoding="utf-8"))
     assert run_payload["recommendations"][0]["skill_id"] == "agent-run-rec"
     report_text = Path(str(run["report_path"])).read_text(encoding="utf-8")
     assert "## Recommendations" in report_text
-    assert "review_plan: agent-run-rec" in report_text
+    assert "quality_plan: agent-run-rec" in report_text
 
 
 def test_skill_curator_auto_review_ignores_single_low_confidence_runtime_failure(
@@ -2197,13 +2412,13 @@ def test_skill_curator_auto_review_ignores_single_low_confidence_runtime_failure
 
     report = service.manage_curator(config=config, action="curate")
 
-    assert [item for item in report["actions"] if item["action"] == "review_plan"] == []
+    assert [item for item in report["actions"] if item["action"] == "quality_plan"] == []
     usage = json.loads((contract_tmp_path / "governance" / "curator" / "usage.json").read_text(encoding="utf-8"))
     assert usage["agent-runtime-noise"]["failure_count"] == 1
     assert usage["agent-runtime-noise"]["feedback_by_source"]["runtime_failure"] == 1
 
 
-def test_skill_curator_review_plan_generates_bounded_proposal_without_mutating_skill(
+def test_skill_curator_quality_plan_generates_bounded_proposal_without_mutating_skill(
     contract_tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2241,13 +2456,13 @@ def test_skill_curator_review_plan_generates_bounded_proposal_without_mutating_s
 
     planned = service.manage_curator(
         config=config,
-        action="review_plan",
+        action="quality_plan",
         skill_id="agent-review-plan",
         rationale="Prepare a safe quality-improvement proposal.",
     )
 
     assert planned["accepted"] is True
-    assert planned["mode"] == "curator_review_plan"
+    assert planned["mode"] == "curator_quality_plan"
     assert Path(str(planned["proposal_path"])).exists()
     assert Path(str(planned["proposal_report_path"])).exists()
     assert planned["proposal"]["skill_id"] == "agent-review-plan"
@@ -2289,7 +2504,7 @@ def test_skill_curator_review_apply_applies_bounded_patch_and_respects_pin(
         outcome="failure",
         rationale="The skill missed verification evidence.",
     )
-    planned = service.manage_curator(config=config, action="review_plan", skill_id="agent-review-apply")
+    planned = service.manage_curator(config=config, action="quality_plan", skill_id="agent-review-apply")
     original_text = (workspace_skills / "agent-review-apply" / "SKILL.md").read_text(encoding="utf-8")
 
     service.manage_curator(config=config, action="pin", skill_id="agent-review-apply")
@@ -2330,7 +2545,7 @@ def test_skill_curator_review_apply_applies_bounded_patch_and_respects_pin(
     assert usage["agent-review-apply"]["patch_count"] >= 1
 
 
-def test_skill_curator_auto_review_plans_failure_feedback_without_mutating_skill(
+def test_skill_curator_auto_quality_plans_failure_feedback_without_mutating_skill(
     contract_tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2364,14 +2579,14 @@ def test_skill_curator_auto_review_plans_failure_feedback_without_mutating_skill
 
     report = service.manage_curator(config=config, action="curate")
 
-    review_actions = [item for item in report["actions"] if item["action"] == "review_plan"]
+    review_actions = [item for item in report["actions"] if item["action"] == "quality_plan"]
     assert review_actions
     assert review_actions[0]["skill_id"] == "agent-auto-review"
     assert Path(str(review_actions[0]["proposal_path"])).exists()
     assert (workspace_skills / "agent-auto-review" / "SKILL.md").read_text(encoding="utf-8") == original_text
 
     second = service.manage_curator(config=config, action="curate")
-    second_review_actions = [item for item in second["actions"] if item["action"] == "review_plan"]
+    second_review_actions = [item for item in second["actions"] if item["action"] == "quality_plan"]
     assert second_review_actions
     assert second_review_actions[0]["reused"] is True
 
@@ -2425,7 +2640,7 @@ def test_skill_curator_auto_review_stops_at_existing_proposal_scan_budget(
         )
 
     report = service.manage_curator(config=config, action="curate")
-    review_actions = [item for item in report["actions"] if item["action"] == "review_plan"]
+    review_actions = [item for item in report["actions"] if item["action"] == "quality_plan"]
 
     assert review_actions
     assert review_actions[0]["accepted"] is False
@@ -2619,7 +2834,7 @@ def test_skill_curator_automation_runs_when_due_and_tracks_state(contract_tmp_pa
     assert first.report is not None
     assert first.report["accepted"] is True
     assert first.report["recommendations"][0]["next_tool_call"] == {
-        "action": "review_plan",
+        "action": "quality_plan",
         "skill_id": "agent-automation",
     }
 
@@ -2641,7 +2856,7 @@ def test_skill_curator_automation_runs_when_due_and_tracks_state(contract_tmp_pa
     assert status["last_run_id"] == forced.report["run_id"]
     assert status["last_recommendation_count"] >= 1
     assert status["last_recommendations"][0]["next_tool_call"] == {
-        "action": "review_plan",
+        "action": "quality_plan",
         "skill_id": "agent-automation",
     }
     assert (contract_tmp_path / "governance" / "curator" / "automation.json").exists()
@@ -2657,7 +2872,7 @@ def test_skill_curator_maintenance_plans_and_executes_bounded_actions(contract_t
             enabled=True,
             governance_root=str(contract_tmp_path / "governance"),
             curator=SkillCuratorConfig(
-                max_review_plan_per_run=1,
+                max_quality_plan_per_run=1,
                 max_procedure_promotions_per_run=1,
                 max_actions_per_run=2,
             ),
@@ -2719,13 +2934,13 @@ def test_skill_curator_maintenance_plans_and_executes_bounded_actions(contract_t
     procedures = service.manage_curator(config=config, action="procedures")
     assert procedures["counts"]["total"] == 1
     assert procedures["items"][0]["frequency"] == 4
-    assert dry_run["skipped_actions"]["review_plan"] >= 1
+    assert dry_run["skipped_actions"]["quality_plan"] >= 1
     assert dry_run["skipped_actions"].get("promote_procedure", 0) == 0
     assert not (workspace_skills / "learned-focused-verification" / "SKILL.md").exists()
 
     executed = service.run_curator_maintenance(config=config, dry_run=False, source="test")
     assert executed["status"] == "completed"
-    assert executed["actions_executed"]["review_plan"] == 1
+    assert executed["actions_executed"]["quality_plan"] == 1
     assert executed["actions_executed"]["promote_procedure"] == 1
     assert (workspace_skills / "learned-focused-verification" / "SKILL.md").exists()
     assert Path(str(executed["run_json_path"])).exists()
@@ -2745,7 +2960,7 @@ def test_skill_curator_maintenance_auto_applies_safe_review_and_merge(
             governance_root=str(contract_tmp_path / "governance"),
             curator=SkillCuratorConfig(
                 max_actions_per_run=4,
-                max_review_plan_per_run=1,
+                max_quality_plan_per_run=1,
                 max_merge_plan_per_run=1,
             ),
         )
@@ -2799,9 +3014,9 @@ def test_skill_curator_maintenance_auto_applies_safe_review_and_merge(
     executed = service.run_curator_maintenance(config=config, dry_run=False, source="test")
 
     assert executed["status"] == "completed"
-    assert executed["actions_executed"]["review_plan"] == 1
+    assert executed["actions_executed"]["quality_plan"] == 1
     assert executed["actions_executed"]["merge_plan"] == 1
-    review_result = next(item for item in executed["results"] if item["action"] == "review_plan")
+    review_result = next(item for item in executed["results"] if item["action"] == "quality_plan")
     merge_result = next(item for item in executed["results"] if item["action"] == "merge_plan")
     assert review_result["apply_result"]["mode"] == "curator_review_apply"
     assert review_result["apply_result"]["patch_result"]["applied"] is True

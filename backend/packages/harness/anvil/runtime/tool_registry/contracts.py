@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CapabilityVisibility(str, Enum):
@@ -52,6 +52,38 @@ class CapabilityDependency(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class CapabilitySuccessHistory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    usage_count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    user_correction_count: int = 0
+    recent_success_rate: float = 0.0
+    average_latency_ms: int | None = None
+
+    @field_validator("usage_count", "success_count", "failure_count", "user_correction_count")
+    @classmethod
+    def _bound_count(cls, value: int) -> int:
+        return max(int(value or 0), 0)
+
+    @field_validator("recent_success_rate")
+    @classmethod
+    def _bound_success_rate(cls, value: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 0.0
+        return round(min(max(numeric, 0.0), 1.0), 4)
+
+    @field_validator("average_latency_ms")
+    @classmethod
+    def _bound_average_latency(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return max(int(value), 0)
+
+
 class CapabilityResource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -60,7 +92,40 @@ class CapabilityResource(BaseModel):
     description: str = ""
     server_id: str | None = None
     path: str | None = None
+    name: str = ""
+    kind: str = "resource"
+    usage_scenarios: tuple[str, ...] = ()
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    examples: tuple[str, ...] = ()
+    preconditions: tuple[str, ...] = ()
+    side_effects: tuple[str, ...] = ()
+    risk_level: str = "normal"
+    latency_cost: int = 0
+    token_cost: int = 0
+    success_history: CapabilitySuccessHistory = Field(default_factory=CapabilitySuccessHistory)
+    last_used_at: str | None = None
+    related_memories: tuple[str, ...] = ()
+    related_skills: tuple[str, ...] = ()
+    graph_neighbors: tuple[str, ...] = ()
+    source_ref: str = ""
+    visibility_state: str = "discovered"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        return self.resource_id
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.name:
+            self.name = self.title
+        if not self.source_ref:
+            self.source_ref = self.resource_id
+
+    @field_validator("latency_cost", "token_cost")
+    @classmethod
+    def _bound_cost(cls, value: int) -> int:
+        return max(int(value or 0), 0)
 
 
 class CapabilityPrompt(BaseModel):
@@ -513,6 +578,64 @@ class DeferredCapabilityPromotion(BaseModel):
     query: str | None = None
 
 
+class SkillSelectionFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    turn_id: str
+    selected: bool = False
+    injected: bool = False
+    used_by_llm: bool = False
+    outcome: str = "unknown"
+    user_correction: bool = False
+    latency_ms: int | None = None
+    context_block_refs: tuple[str, ...] = ()
+
+    @field_validator("skill_id", "turn_id", "outcome")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value must not be empty")
+        return text[:160]
+
+    @field_validator("latency_ms")
+    @classmethod
+    def _bound_latency(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return max(int(value), 0)
+
+    @field_validator("context_block_refs", mode="before")
+    @classmethod
+    def _bound_context_block_refs(cls, value: Any) -> tuple[str, ...]:
+        refs = _string_tuple(value)
+        return tuple(ref[:240] for ref in refs[:12])
+
+
+class CapabilityFeedbackDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    capability_ids: tuple[str, ...] = ()
+    updated: bool = False
+    feedback_count: int = 0
+    success_count: int = 0
+    correction_count: int = 0
+    utility_score: float = 0.0
+    last_outcome: str | None = None
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("utility_score")
+    @classmethod
+    def _bound_utility_score(cls, value: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 0.0
+        return round(min(max(numeric, 0.0), 1.0), 4)
+
+
 class CapabilitySearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -538,6 +661,22 @@ class CapabilitySearchResult(BaseModel):
     promotion: DeferredCapabilityPromotion
     total_matches: int = 0
     match_traces: dict[str, CapabilitySearchTrace] = Field(default_factory=dict)
+
+
+class HiddenCapabilitySummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    categories: tuple[str, ...] = ()
+    example_names: tuple[str, ...] = ()
+    request_hint: str = "Use capability_search to request a hidden or deferred capability by name or task."
+    omitted_count: int = 0
+    token_cost: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("omitted_count", "token_cost")
+    @classmethod
+    def _bound_count(cls, value: int) -> int:
+        return max(int(value or 0), 0)
 
 
 class CapabilityCatalogEntry(BaseModel):
@@ -607,6 +746,21 @@ class CapabilityAssemblyDiagnostics(BaseModel):
     skills_discovery_stage_durations_ms: dict[str, int] = Field(default_factory=dict)
     slowest_skills_discovery_stage: str | None = None
     slowest_skills_discovery_stage_duration_ms: int | None = None
+    skill_retrieval_query: str = ""
+    skill_retrieval_top_k: int = 0
+    skill_retrieval_selected_ids: tuple[str, ...] = ()
+    skill_retrieval_tiers_used: tuple[str, ...] = ()
+    skill_retrieval_candidate_count: int = 0
+    skill_retrieval_loaded_full_content: bool | None = None
+    skill_retrieval_embedding_mode: str | None = None
+    skill_retrieval_expanded_query_terms: tuple[str, ...] = ()
+    skill_retrieval_prefetch_ids: tuple[str, ...] = ()
+    skill_retrieval_l4_rerank_triggered: bool = False
+    skill_retrieval_l5_hyde_triggered: bool = False
+    skill_retrieval_l6_prefetch_triggered: bool = False
+    skill_retrieval_salience_route_id: str | None = None
+    skill_retrieval_goal_stack_ref: str | None = None
+    skill_retrieval_active_goal_id: str | None = None
     visible_by_source_kind: dict[str, int] = Field(default_factory=dict)
     deferred_by_source_kind: dict[str, int] = Field(default_factory=dict)
     visible_by_group: dict[str, int] = Field(default_factory=dict)
@@ -637,3 +791,15 @@ class CapabilityBundle(BaseModel):
 ToolRegistryEntry.model_rebuild()
 CapabilitySearchResult.model_rebuild()
 CapabilityBundle.model_rebuild()
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        text = str(value).strip()
+        return (text,) if text else ()
+    if isinstance(value, tuple | list | set):
+        return tuple(str(item).strip() for item in value if str(item or "").strip())
+    text = str(value).strip()
+    return (text,) if text else ()

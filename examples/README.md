@@ -10,8 +10,9 @@ They are:
 
 They are not the architecture source of truth. For binding rules and decision ownership, see:
 
-- [`docs/architecture/source-of-truth.md`](../docs/architecture/source-of-truth.md)
-- [`docs/architecture/extension-model.md`](../docs/architecture/extension-model.md)
+- [`docs/guides/usage.md`](../docs/guides/usage.md)
+- [`docs/guides/extensions-and-capability-surfaces.md`](../docs/guides/extensions-and-capability-surfaces.md)
+- [`docs/guides/plugins.md`](../docs/guides/plugins.md)
 
 ## Included Examples
 

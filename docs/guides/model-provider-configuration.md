@@ -180,7 +180,8 @@ llm:
 
 The runtime projects the effective values for the active concrete model through
 thread state as `context_window_usage`. The frontend meter shows progress toward
-`auto_compact_threshold_tokens`; 100% means automatic summarization should fire.
+`auto_compact_threshold_tokens`; a full meter means automatic summarization
+should fire.
 `context_window_usage` is backend-owned: RunEngine estimates or normalizes
 context pressure and provider token usage, the gateway maps the view model, and
 the frontend renders the returned fields without deriving durable context from

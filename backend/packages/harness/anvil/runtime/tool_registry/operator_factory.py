@@ -613,7 +613,7 @@ class OperatorToolFactory:
     def build_skill_manage_tool(self, *, config_result: ConfigResolutionResult) -> ToolRegistryEntry:
         description = (
             "Self-improve skills through the curator lane. Supports report, create, update, "
-            "archive, restore, backup, rollback, curate, maintenance, review_plan, review_apply, merge_plan, merge_apply, feedback, learn_procedure, procedures, promote_procedure, reject_procedure, restore_procedure, pin, and unpin for agent-created workspace skills. "
+            "archive, restore, backup, rollback, curate, maintenance, quality_plan, review_apply, merge_plan, merge_apply, feedback, learn_procedure, procedures, promote_procedure, reject_procedure, restore_procedure, pin, and unpin for agent-created workspace skills. "
             "It does not enable, disable, uninstall, or modify repo/user skills."
         )
 
@@ -703,7 +703,7 @@ class OperatorToolFactory:
                             "restore",
                             "backup",
                             "rollback",
-                            "review_plan",
+                            "quality_plan",
                             "review_apply",
                             "merge_plan",
                             "merge_apply",
@@ -745,7 +745,7 @@ class OperatorToolFactory:
                 "required": ["action"],
             },
             risk_category="skill_curator",
-            typed_approval=TypedApprovalPolicy(mode="auto", risk_category="skill_curator"),
+            typed_approval=TypedApprovalPolicy(mode="runtime", risk_category="skill_curator"),
             output_budget=12000,
         )
         return _with_structured_handler(entry, description=description, func=skill_manage)

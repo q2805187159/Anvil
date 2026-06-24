@@ -18,7 +18,20 @@ BACKEND_TEST_SHIM_NAME = "pytest-shim"
 BACKEND_TEST_SHIM = BACKEND_TEST_TMP / BACKEND_TEST_SHIM_NAME
 
 
+class BackendTestArgs:
+    def __init__(self, *, pytest_args: list[str], shard_index: int | None, shard_count: int | None) -> None:
+        self.pytest_args = pytest_args
+        self.shard_index = shard_index
+        self.shard_count = shard_count
+
+
 def main(argv: list[str]) -> int:
+    try:
+        parsed_args = _parse_backend_test_args(argv)
+    except ValueError as exc:
+        print(f"run-backend-tests argument error: {exc}", file=sys.stderr)
+        return 2
+
     env = dict(os.environ)
     pythonpath = [
         str(BACKEND_ROOT),
@@ -33,7 +46,14 @@ def main(argv: list[str]) -> int:
     env["TMP"] = str(backend_test_tmp)
     env["TEMP"] = str(backend_test_tmp)
     env["TMPDIR"] = str(backend_test_tmp)
-    pytest_args = ["-p", "no:cacheprovider", *argv]
+    pytest_args = ["-p", "no:cacheprovider", *parsed_args.pytest_args]
+    if parsed_args.shard_index is not None:
+        selected_files = _select_backend_test_shard(
+            index=parsed_args.shard_index,
+            count=parsed_args.shard_count,
+            files=_discover_backend_test_files(),
+        )
+        pytest_args = ["-p", "no:cacheprovider", *selected_files, *parsed_args.pytest_args]
 
     if os.name == "nt":
         shim = backend_test_tmp / BACKEND_TEST_SHIM_NAME
@@ -95,19 +115,64 @@ def main(argv: list[str]) -> int:
         # Child subprocesses such as `python -m pip install ...` must run with
         # the real Windows platform. sitecustomize only changes sys.platform in
         # the pytest parent process, then removes the flag for descendants.
-        # Some TestClient-backed gateway tests still trip a local Winsock/provider
-        # failure even under the shim. Exclude them in this wrapper on Windows and
-        # run equivalent service/adapter tests instead.
-        skip_expr = "not test_gateway_tools_and_plugins"
-        if "-k" in pytest_args:
-            index = pytest_args.index("-k")
-            if index + 1 < len(pytest_args):
-                pytest_args[index + 1] = f"({pytest_args[index + 1]}) and ({skip_expr})"
-        else:
-            pytest_args.extend(["-k", skip_expr])
 
     command = [sys.executable, "-m", "pytest", *pytest_args]
     return subprocess.call(command, cwd=BACKEND_ROOT, env=env)
+
+
+def _parse_backend_test_args(argv: list[str]) -> BackendTestArgs:
+    pytest_args: list[str] = []
+    shard_index: int | None = None
+    shard_count: int | None = None
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--backend-shard-index":
+            if index + 1 >= len(argv):
+                raise ValueError("--backend-shard-index requires a value")
+            shard_index = _parse_positive_int("--backend-shard-index", argv[index + 1])
+            index += 2
+            continue
+        if arg == "--backend-shard-count":
+            if index + 1 >= len(argv):
+                raise ValueError("--backend-shard-count requires a value")
+            shard_count = _parse_positive_int("--backend-shard-count", argv[index + 1])
+            index += 2
+            continue
+        pytest_args.append(arg)
+        index += 1
+
+    if shard_index is None and shard_count is None:
+        return BackendTestArgs(pytest_args=pytest_args, shard_index=None, shard_count=None)
+    if shard_index is None or shard_count is None:
+        raise ValueError("--backend-shard-index and --backend-shard-count must be provided together")
+    if shard_index > shard_count:
+        raise ValueError("--backend-shard-index must be between 1 and --backend-shard-count")
+    return BackendTestArgs(pytest_args=pytest_args, shard_index=shard_index, shard_count=shard_count)
+
+
+def _parse_positive_int(name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _discover_backend_test_files() -> list[Path]:
+    return sorted((BACKEND_ROOT / "tests").glob("test_*.py"), key=_backend_relative_posix)
+
+
+def _select_backend_test_shard(*, index: int, count: int, files: list[Path]) -> list[str]:
+    sorted_files = sorted(files, key=_backend_relative_posix)
+    selected = [path for offset, path in enumerate(sorted_files) if offset % count == index - 1]
+    return [_backend_relative_posix(path) for path in selected]
+
+
+def _backend_relative_posix(path: Path) -> str:
+    return path.relative_to(BACKEND_ROOT).as_posix()
 
 
 def _select_backend_test_tmp() -> Path:

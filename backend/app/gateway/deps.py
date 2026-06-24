@@ -300,15 +300,15 @@ class AppRuntimeDeps:
                 await self.run_skill_curator_automation_if_due()
 
     def memory_maintenance_watch_enabled(self) -> bool:
-        maintenance = self.effective_config.memory_platform.maintenance
+        maintenance = self.effective_config.hcms.maintenance
         return bool(
-            self.effective_config.memory_platform.enabled
+            self.effective_config.hcms.enabled
             and maintenance.enabled
             and maintenance.automation_enabled
         )
 
     def memory_maintenance_watch_interval_seconds(self) -> float:
-        return max(float(self.effective_config.memory_platform.maintenance.tick_seconds), 10.0)
+        return max(float(self.effective_config.hcms.maintenance.tick_seconds), 10.0)
 
     async def run_memory_maintenance_automation_if_due(self, *, force_run: bool = False) -> bool:
         result = self.memory_manager.run_maintenance_automation_if_due(force_run=force_run)

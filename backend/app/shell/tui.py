@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
 import shlex
 
+import yaml
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import checkboxlist_dialog, input_dialog, radiolist_dialog
@@ -168,20 +170,20 @@ class AnvilShell:
             overview = self.client.get_memory_overview()
             stores = self.client.list_memory_stores()
             lines = [
-                f"Active provider: {overview.active_provider_id or 'none'}",
+                f"Active engine: {overview.active_engine_id or 'none'}",
                 f"Archive turns: {overview.archive_turn_count}",
                 f"Reflection jobs: {overview.reflection_job_count}",
             ]
             lines.extend(f"- {store.store_id} ({store.entry_count} entries)" for store in stores)
             return "\n".join(lines)
-        if command.name == "memory-provider":
+        if command.name == "memory-engine":
             if args:
-                provider = next((item for item in self.client.list_memory_providers() if item.provider_id == args[0]), None)
-                if provider is None:
-                    return f"Unknown provider: {args[0]}"
-                return f"{provider.provider_id} [{provider.family}] active={provider.active}"
-            providers = self.client.list_memory_providers()
-            return "\n".join(f"{item.provider_id} [{item.family}] active={item.active}" for item in providers)
+                engine = next((item for item in self.client.list_memory_engines() if item.engine_id == args[0]), None)
+                if engine is None:
+                    return f"Unknown engine: {args[0]}"
+                return f"{engine.engine_id} [{engine.family}] active={engine.active}"
+            engines = self.client.list_memory_engines()
+            return "\n".join(f"{item.engine_id} [{item.family}] active={item.active}" for item in engines)
         if command.name == "memory-search":
             if not args:
                 return "Usage: /memory-search <query>"
@@ -215,6 +217,8 @@ class AnvilShell:
             if not tasks:
                 return "No scheduled automations."
             return "\n".join(f"{task.task_id} [{task.status}] next={task.next_run_at}" for task in tasks)
+        if command.name == "setup":
+            return self._handle_setup(args)
         if command.name == "approve":
             thread_id = args[0] if args else self.session.current_thread_id
             if thread_id is None:
@@ -544,6 +548,54 @@ class AnvilShell:
             ]
         )
 
+    def _handle_setup(self, args: list[str] | None = None) -> str:
+        args = args or []
+        if args:
+            try:
+                options = _parse_setup_options(args)
+                if options.get("help"):
+                    return _render_setup_usage()
+                token_env = _clean_env_name(options.get("git_token_env")) or "GITHUB_TOKEN"
+                payload = _read_shell_config(self.profile.config_path)
+                git_payload = payload.setdefault("git", {})
+                if not isinstance(git_payload, dict):
+                    return "Setup failed: config key 'git' must be a mapping"
+                git_payload["enabled"] = True
+                git_payload["required"] = True
+                git_payload["provider"] = str(options.get("git_provider") or git_payload.get("provider") or "github").strip().lower()
+                git_payload["token_env"] = token_env
+                _set_optional_config_value(git_payload, "user_name", options.get("git_user_name"))
+                _set_optional_config_value(git_payload, "user_email", options.get("git_user_email"))
+                _set_optional_config_value(git_payload, "remote_url", options.get("git_remote_url"))
+
+                dotenv_path = self.profile.config_path.parent / ".env"
+                if options.get("git_token"):
+                    _upsert_shell_dotenv_value(dotenv_path, token_env, str(options["git_token"]))
+                    os.environ[token_env] = str(options["git_token"])
+
+                _write_shell_config(self.profile.config_path, payload)
+            except ValueError as exc:
+                return f"Setup failed: {exc}\n{_render_setup_usage()}"
+            lines = [
+                "Git token configured for HCMS version control.",
+                f"Config: {self.profile.config_path}",
+                f"Token env: {token_env}",
+            ]
+            if options.get("git_token"):
+                lines.append(f"Dotenv: {dotenv_path}")
+            lines.append("Open Configuration Center > Basic Configuration to test required and extension items.")
+            return "\n".join(lines)
+        return "\n".join(
+            [
+                "First-run setup checklist:",
+                "1. Model provider: run anvil setup --provider <provider> --api-key-env <ENV>.",
+                "2. Git token: configure GITHUB_TOKEN or run anvil setup --git-token-env GITHUB_TOKEN --git-token <token>.",
+                "3. HCMS version control: Git token is required for memory version metadata.",
+                "4. Browser: open Configuration Center > Basic Configuration to edit and test each item.",
+                "5. TUI: run /setup --git-token-env GITHUB_TOKEN --git-token <token> to save Git base config for this profile.",
+            ]
+        )
+
     def _handle_history(self) -> str:
         if not self._history_path.exists():
             return "No shell history yet."
@@ -853,3 +905,102 @@ def _render_user_interaction_prompt(interaction) -> str:
     else:
         lines.append("Submit: /answer --choice <option_id> [--choice <option_id>] [--custom <text>] [--free-text <text>]")
     return "\n".join(lines)
+
+
+def _parse_setup_options(args: list[str]) -> dict[str, str | bool]:
+    flag_map = {
+        "--git-token": "git_token",
+        "--git-token-env": "git_token_env",
+        "--git-provider": "git_provider",
+        "--git-user-name": "git_user_name",
+        "--git-user-email": "git_user_email",
+        "--git-remote-url": "git_remote_url",
+    }
+    options: dict[str, str | bool] = {}
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in {"--help", "-h"}:
+            options["help"] = True
+            index += 1
+            continue
+        key = flag_map.get(token)
+        if key is None:
+            raise ValueError(f"unknown setup option {token!r}")
+        if index + 1 >= len(args):
+            raise ValueError(f"missing value for {token}")
+        options[key] = args[index + 1]
+        index += 2
+    return options
+
+
+def _render_setup_usage() -> str:
+    return "\n".join(
+        [
+            "Usage: /setup [--git-token-env ENV] [--git-token TOKEN] [--git-provider github]",
+            "              [--git-user-name NAME] [--git-user-email EMAIL] [--git-remote-url URL]",
+        ]
+    )
+
+
+def _read_shell_config(config_path: Path) -> dict[str, object]:
+    if not config_path.exists():
+        return {}
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("config root must be a mapping")
+    return payload
+
+
+def _write_shell_config(config_path: Path, payload: dict[str, object]) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def _clean_env_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if cleaned.startswith("${") and cleaned.endswith("}"):
+        cleaned = cleaned[2:-1].strip()
+    return cleaned or None
+
+
+def _set_optional_config_value(payload: dict[str, object], key: str, value: str | bool | None) -> None:
+    if value is None:
+        return
+    cleaned = str(value).strip()
+    if cleaned:
+        payload[key] = cleaned
+    else:
+        payload.pop(key, None)
+
+
+def _upsert_shell_dotenv_value(dotenv_path: Path, key: str, value: str) -> None:
+    dotenv_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = dotenv_path.read_text(encoding="utf-8").splitlines() if dotenv_path.exists() else []
+    rendered = f"{key}={_dotenv_quote(value)}"
+    replaced = False
+    next_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            current_key = stripped.split("=", 1)[0].strip()
+            if current_key == key:
+                next_lines.append(rendered)
+                replaced = True
+                continue
+        next_lines.append(line)
+    if not replaced:
+        if next_lines and next_lines[-1].strip():
+            next_lines.append("")
+        next_lines.append(rendered)
+    dotenv_path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _dotenv_quote(value: str) -> str:
+    if not value or any(char.isspace() for char in value) or any(char in value for char in ['"', "'", "#"]):
+        return json.dumps(value, ensure_ascii=False)
+    return value

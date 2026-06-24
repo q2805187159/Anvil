@@ -10,13 +10,17 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from anvil import ApprovalDecision, RuntimeFeatureSet
 from anvil.agents import RecentToolActivity, ThreadLifecycleStatus
 from anvil.agents.lead_agent.context_files import reset_project_context_snapshot_cache
-from anvil.agents.middlewares.summarization_middleware import SummarizationMiddleware
 from anvil.agents.lead_agent.prompt import reset_prompt_snapshot_cache, reset_runtime_path_context_cache
-from anvil.config import EffectiveConfig, SkillsConfig
+from anvil.config import EffectiveConfig, HCMSRuntimeConfig, SkillsConfig
+from anvil.memory import MemoryCategory, MemoryManager, SourceType
+from anvil.memory.hcms_v2 import ClaimRecord, ConflictLedger
+from anvil.runtime.context_v2 import context_v2_evaluation_record_from_snapshot
 from anvil.runtime.checkpointers import CheckpointerBackend, create_checkpointer
 from anvil.runtime.runs import RunEngine, RunRequest
 from anvil.runtime.serialization import serialize_messages
+from anvil.runtime.state_v2 import ConflictAlert
 from anvil.runtime.store import StoreBackend, create_store
+from anvil.runtime.tool_registry import SkillSelectionFeedback, ToolRegistryEntry, ToolSourceKind
 from anvil.skills import SkillsService
 from anvil.sandbox import PathService
 from anvil.config import ConfigLayer, ConfigLayerKind
@@ -114,7 +118,6 @@ def summarization_only_features() -> RuntimeFeatureSet:
         clarification=False,
         summarization=True,
         jit_context=False,
-        compaction=False,
     )
 
 
@@ -142,7 +145,7 @@ def context_layers() -> list[ConfigLayer]:
     layers[0].data["context_files"] = {
         "enabled": True,
         "recursive_agents": True,
-        "recursive_names": ["AGENTS.md", "CODEX.md"],
+        "recursive_names": ["AGENTS.md", "PROJECT_RULES.md"],
         "max_files": 10,
         "max_chars": 2000,
     }
@@ -425,6 +428,7 @@ def test_run_engine_persists_runtime_assembly_prompt_cache_delta(contract_tmp_pa
             thread_id="thread-runtime-assembly-cache",
             user_message="say hello",
             config_layers=base_layers(),
+            feature_set=RuntimeFeatureSet(skills=False),
             path_service=path_service,
             checkpointer=checkpointer,
             store=store,
@@ -438,6 +442,7 @@ def test_run_engine_persists_runtime_assembly_prompt_cache_delta(contract_tmp_pa
             thread_id="thread-runtime-assembly-cache",
             user_message="say hello again",
             config_layers=base_layers(),
+            feature_set=RuntimeFeatureSet(skills=False),
             path_service=path_service,
             checkpointer=checkpointer,
             store=store,
@@ -451,6 +456,8 @@ def test_run_engine_persists_runtime_assembly_prompt_cache_delta(contract_tmp_pa
     first_cache_delta = first.thread_state.execution.runtime_assembly_snapshot["prompt"]["cache_delta"]
     second_cache_delta = second.thread_state.execution.runtime_assembly_snapshot["prompt"]["cache_delta"]
     second_prompt = second.thread_state.execution.runtime_assembly_snapshot["prompt"]
+    second_context_v2 = second.thread_state.execution.runtime_assembly_snapshot["context_v2"]
+    second_turn_state = second_context_v2["turn_pipeline"]["turn_state"]
     persisted = checkpointer.get_thread_state("thread-runtime-assembly-cache")
 
     assert first_cache_delta["misses"] == 1
@@ -461,8 +468,58 @@ def test_run_engine_persists_runtime_assembly_prompt_cache_delta(contract_tmp_pa
     assert second_prompt["volatile_prompt_tokens"] > 0
     assert second_prompt["stable_section_tokens"]["role_and_intent"] > 0
     assert second_prompt["volatile_section_tokens"]["request_context"] > 0
+    assert second_context_v2["enabled"] is True
+    assert second_context_v2["diagnostic_only"] is True
+    assert second_context_v2["fallback_used"] is False
+    second_context_trace = second_context_v2["trace"]
+    assert second_context_trace["prompt_hash"]
+    assert isinstance(second_context_trace["selected_tools"], list)
+    assert isinstance(second_context_trace["selected_mcp_tools"], list)
+    assert isinstance(second_context_trace["selected_skills"], list)
+    assert isinstance(second_context_trace["selected_memory"], list)
+    assert isinstance(second_context_trace["selected_workspace"], list)
+    assert isinstance(second_context_trace["selected_events"], list)
+    assert isinstance(second_context_trace["selected_tool_results"], list)
+    assert isinstance(second_context_trace["selected_tool_result_refs"], list)
+    assert second_context_v2["actual_prompt_mode"] == "runtime_context_v2"
+    assert second_context_v2["actual_system_prompt_hash"]
+    assert second_context_trace["metadata"]["actual_system_prompt_hash"] == (
+        second_context_v2["actual_system_prompt_hash"]
+    )
+    assert second_context_trace["metadata"]["actual_prompt_mode"] == "runtime_context_v2"
+    assert "request_context" in second_context_v2["candidate_block_titles"]
+    assert second_turn_state["user_text_summary"] == "say hello again"
     assert persisted is not None
     assert persisted.execution.runtime_assembly_snapshot["prompt"]["cache_delta"]["hits"] == 1
+    persisted_context_v2 = persisted.execution.runtime_assembly_snapshot["context_v2"]
+    persisted_context_trace = persisted_context_v2["trace"]
+    persisted_turn_state = persisted_context_v2["turn_pipeline"]["turn_state"]
+    assert persisted_context_trace["prompt_hash"] == second_context_trace["prompt_hash"]
+    assert persisted_context_trace["selected_tools"] == second_context_trace["selected_tools"]
+    assert persisted_context_trace["selected_memory"] == second_context_trace["selected_memory"]
+    assert persisted_context_trace["selected_workspace"] == second_context_trace["selected_workspace"]
+    assert persisted_context_trace["selected_events"] == second_context_trace["selected_events"]
+    assert persisted_context_trace["selected_tool_results"] == second_context_trace["selected_tool_results"]
+    assert persisted_context_trace["selected_tool_result_refs"] == second_context_trace[
+        "selected_tool_result_refs"
+    ]
+    assert persisted_context_v2["selected_block_count"] == second_context_v2["selected_block_count"]
+    assert persisted_context_v2["actual_system_prompt_hash"] == second_context_v2["actual_system_prompt_hash"]
+    assert persisted_turn_state["user_text_summary"] == "say hello again"
+    persisted_evaluation_record = context_v2_evaluation_record_from_snapshot(
+        persisted.execution.runtime_assembly_snapshot
+    )
+    assert persisted_evaluation_record is not None
+    assert persisted_evaluation_record.trace_id == persisted_context_trace["trace_id"]
+    assert persisted_evaluation_record.prompt_hash == persisted_context_trace["prompt_hash"]
+    assert persisted_evaluation_record.actual_system_prompt_hash == persisted_context_v2[
+        "actual_system_prompt_hash"
+    ]
+    assert persisted_evaluation_record.diagnostic_only is True
+    assert persisted_evaluation_record.selected_tools == persisted_context_trace["selected_tools"]
+    assert persisted_evaluation_record.selected_tool_result_refs == persisted_context_trace[
+        "selected_tool_result_refs"
+    ]
 
 
 def test_run_engine_persists_runtime_assembly_diff_between_runs(contract_tmp_path) -> None:
@@ -556,7 +613,7 @@ def test_run_engine_persists_project_context_manifest(contract_tmp_path) -> None
     nested = workspace / "packages" / "api"
     nested.mkdir(parents=True)
     (workspace / "AGENTS.md").write_text("Root context.\n", encoding="utf-8")
-    (nested / "CODEX.md").write_text("Nested context.\n", encoding="utf-8")
+    (nested / "PROJECT_RULES.md").write_text("Nested context.\n", encoding="utf-8")
 
     result = RunEngine().run(
         RunRequest(
@@ -574,7 +631,7 @@ def test_run_engine_persists_project_context_manifest(contract_tmp_path) -> None
 
     manifest = result.thread_state.prompt_snapshot.project_context_files
     assert result.thread_state.prompt_snapshot.project_context_fingerprint is not None
-    assert {item["relative_path"] for item in manifest} == {"AGENTS.md", "packages/api/CODEX.md"}
+    assert {item["relative_path"] for item in manifest} == {"AGENTS.md", "packages/api/PROJECT_RULES.md"}
     assert any(item["applies_to"] == "/mnt/user-data/workspace/packages/api" for item in manifest)
 
 
@@ -1276,6 +1333,545 @@ def test_run_engine_succeeds_with_controlled_file_tool(contract_tmp_path) -> Non
     assert len(result.thread_state.conversation.messages) >= 3
 
 
+def test_run_engine_persists_tool_result_store_and_workspace_state(contract_tmp_path) -> None:
+    path_service = PathService(contract_tmp_path / "threads")
+    workspace = path_service.thread_workspace_dir("thread-runtime-tool-store")
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "evidence.txt").write_text("runtime evidence\n", encoding="utf-8")
+    checkpointer = create_checkpointer(CheckpointerBackend.IN_MEMORY)
+
+    result = RunEngine().run(
+        RunRequest(
+            thread_id="thread-runtime-tool-store",
+            user_message="list files and report what you saw",
+            config_layers=base_layers(),
+            path_service=path_service,
+            checkpointer=checkpointer,
+            store=create_store(StoreBackend.IN_MEMORY),
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "list_dir",
+                                "args": {"path": "/mnt/user-data/workspace"},
+                                "id": "call_runtime_tool_store",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="saw evidence.txt"),
+                ]
+            ),
+        )
+    )
+
+    assert result.thread_state.lifecycle.status == ThreadLifecycleStatus.COMPLETED
+    snapshot = result.thread_state.execution.runtime_assembly_snapshot
+    runtime_state = snapshot["context_v2"]["runtime_state"]
+    tool_store = runtime_state["tool_result_store"]
+    assert tool_store["record_count"] == 1
+    record = tool_store["records"][0]
+    assert record["tool_name"] == "list_dir"
+    assert record["tool_call_id"] == "call_runtime_tool_store"
+    assert record["summary"]
+    assert record["workspace_ref"]
+    assert record["raw_size_chars"] >= record["summary_size_chars"] > 0
+
+    workspace_state = runtime_state["workspace_state"]
+    assert workspace_state["diagnostics"]["intermediate_result_count"] == 1
+    workspace_result = workspace_state["intermediate_results"][0]
+    assert workspace_result["tool_result_id"] == record["result_id"]
+    assert workspace_result["result_ref"] == record["workspace_ref"]
+    assert workspace_result["summary"] == record["summary"]
+
+    event_log = runtime_state["event_log"]
+    assert "tool_result" in event_log["event_types"]
+    assert any(record["result_id"] in event["tool_result_refs"] for event in event_log["events"])
+
+    persisted = checkpointer.get_thread_state("thread-runtime-tool-store")
+    assert persisted is not None
+    persisted_state = persisted.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]
+    assert persisted_state["tool_result_store"]["records"][0]["result_id"] == record["result_id"]
+    assert persisted_state["workspace_state"]["intermediate_results"][0]["tool_result_id"] == record["result_id"]
+
+
+def test_run_engine_event_log_records_post_context_phase_events(contract_tmp_path) -> None:
+    path_service = PathService(contract_tmp_path / "threads")
+    workspace = path_service.thread_workspace_dir("thread-runtime-phase-events")
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "evidence.txt").write_text("runtime evidence\n", encoding="utf-8")
+    checkpointer = create_checkpointer(CheckpointerBackend.IN_MEMORY)
+
+    result = RunEngine().run(
+        RunRequest(
+            thread_id="thread-runtime-phase-events",
+            user_message="list files and report what you saw",
+            config_layers=base_layers(),
+            path_service=path_service,
+            checkpointer=checkpointer,
+            store=create_store(StoreBackend.IN_MEMORY),
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "list_dir",
+                                "args": {"path": "/mnt/user-data/workspace"},
+                                "id": "call_runtime_phase_events",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="saw evidence.txt"),
+                ]
+            ),
+        )
+    )
+
+    assert result.thread_state.lifecycle.status == ThreadLifecycleStatus.COMPLETED
+    runtime_state = result.thread_state.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]
+    event_log = runtime_state["event_log"]
+    events = event_log["events"]
+    event_types = event_log["event_types"]
+
+    assert event_types[:2] == ["user_message_received", "context_assembled"]
+    for event_type in (
+        "action_dispatch",
+        "tool_result",
+        "observation_handling",
+        "state_update",
+        "maintenance_scheduling",
+    ):
+        assert event_type in event_types
+    assert [event["sequence"] for event in events] == sorted(event["sequence"] for event in events)
+
+    phase_events = {event["event_type"]: event for event in events if event["event_type"] != "tool_result"}
+    for phase in ("action_dispatch", "observation_handling", "state_update", "maintenance_scheduling"):
+        event = phase_events[phase]
+        assert event["trace_id"] == result.runtime.context.run_trace_id
+        assert event["metadata"]["phase"] == phase
+
+    action_event = phase_events["action_dispatch"]
+    assert action_event["source_kind"] == "tool"
+    assert action_event["source_ref"] == "call_runtime_phase_events"
+    assert action_event["metadata"]["tool_name"] == "list_dir"
+
+    observation_event = phase_events["observation_handling"]
+    assert observation_event["tool_result_refs"]
+    assert observation_event["workspace_refs"]
+
+    state_update_event = phase_events["state_update"]
+    assert state_update_event["source_kind"] in {"workspace_state", "thread_state"}
+    maintenance_event = phase_events["maintenance_scheduling"]
+    assert maintenance_event["metadata"]["post_run_maintenance"] is True
+
+    replayable_phase_types = {"action_dispatch", "observation_handling", "state_update", "maintenance_scheduling"}
+    serialized_phase_events = json.dumps(
+        [event for event in events if event["event_type"] in replayable_phase_types],
+        sort_keys=True,
+    )
+    assert "list files and report what you saw" not in serialized_phase_events
+
+    persisted = checkpointer.get_thread_state("thread-runtime-phase-events")
+    assert persisted is not None
+    persisted_event_types = persisted.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]["event_log"][
+        "event_types"
+    ]
+    for event_type in ("action_dispatch", "observation_handling", "state_update", "maintenance_scheduling"):
+        assert event_type in persisted_event_types
+
+
+def test_run_engine_runtime_state_exports_review_inbox_warning_blocks(contract_tmp_path) -> None:
+    engine = RunEngine()
+    result = engine.run(
+        RunRequest(
+            thread_id="thread-runtime-warning",
+            user_message="hello",
+            config_layers=base_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            execution_mode="chat",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
+        )
+    )
+
+    inbox = result.runtime.context.review_inbox
+    assert inbox is not None
+    raw_conflict_payload = "RAW-CONFLICT-PAYLOAD " * 120
+    item = inbox.add_alert(
+        ConflictAlert(
+            alert_id="alert-run-engine-1",
+            conflict_id="conflict-run-engine-1",
+            severity="critical",
+            affected_claims=["claim-old", "claim-new"],
+            affected_memories=["mem-old"],
+            preferred_claim_id="claim-new",
+            unresolved_reason=(
+                "Authoritative memory conflict must be surfaced as a warning block. "
+                f"{raw_conflict_payload}"
+            ),
+            injection_policy="inject_warning",
+            review_inbox_id="review-run-engine-1",
+            conflict_type="contradiction",
+            metadata={"raw_payload": raw_conflict_payload},
+        )
+    )
+
+    snapshot = engine._runtime_assembly_snapshot_payload(result.runtime)  # noqa: SLF001 - regression covers runtime state export.
+    review_state = snapshot["context_v2"]["runtime_state"]["review_inbox"]
+
+    assert review_state["inbox_id"] == inbox.inbox_id
+    assert review_state["item_count"] == 1
+    assert review_state["open_item_count"] == 1
+    assert review_state["items"][0]["review_inbox_id"] == item.review_inbox_id
+    warning_block = review_state["warning_blocks"][0]
+    assert warning_block["block_type"] == "runtime_warning"
+    assert warning_block["source"]["ref"] == item.review_inbox_id
+    assert warning_block["compression_policy"]["ref"] == item.review_inbox_id
+    assert warning_block["injection_policy"]["requires_warning"] is True
+    assert warning_block["metadata"]["conflict_id"] == "conflict-run-engine-1"
+    assert raw_conflict_payload.strip() not in json.dumps(snapshot, sort_keys=True)
+
+
+def test_run_engine_runtime_state_exports_goal_stack_salience_route(contract_tmp_path) -> None:
+    result = RunEngine().run(
+        RunRequest(
+            thread_id="thread-runtime-goal-stack",
+            user_message="route active goal into memory salience",
+            config_layers=base_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            execution_mode="chat",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
+        )
+    )
+
+    snapshot = result.thread_state.execution.runtime_assembly_snapshot
+    runtime_state = snapshot["context_v2"]["runtime_state"]
+    goal_stack = runtime_state["goal_stack"]
+    salience_route = runtime_state["salience_route"]
+
+    assert result.runtime.context.goal_stack is not None
+    assert result.runtime.context.salience_route is not None
+    assert goal_stack["stack_id"] == result.runtime.context.goal_stack.stack_id
+    assert goal_stack["thread_id"] == "thread-runtime-goal-stack"
+    assert goal_stack["goal_count"] == 1
+    assert goal_stack["active_goal_id"] == result.runtime.context.goal_stack.active_goal_id
+    assert goal_stack["goals"][0]["goal_id"] == result.runtime.context.goal_stack.active_goal_id
+    assert salience_route["goal_stack_ref"] == goal_stack["stack_id"]
+    assert salience_route["active_goal_id"] == goal_stack["active_goal_id"]
+    assert "current_query=route active goal into memory salience" in salience_route["memory_query"]
+
+
+def test_run_engine_runtime_state_exports_capability_registry_skill_feedback(contract_tmp_path) -> None:
+    engine = RunEngine()
+    result = engine.run(
+        RunRequest(
+            thread_id="thread-runtime-skill-feedback",
+            user_message="track skill selection feedback in registry",
+            config_layers=base_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            execution_mode="chat",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
+        )
+    )
+
+    registry = result.runtime.context.tool_registry
+    assert registry is not None
+    registered = registry.register(
+        ToolRegistryEntry(
+            name="feedback_skill",
+            display_name="Feedback Skill",
+            source_kind=ToolSourceKind.SKILL,
+            source_id="skill-feedback",
+            capability_group="skills",
+            summary="Skill used to validate feedback export.",
+        )
+    )
+    long_ref = "raw-context-ref-" * 80
+    decision = result.runtime.context.record_skill_selection_feedback(
+        SkillSelectionFeedback(
+            skill_id="skill-feedback",
+            turn_id="turn-feedback-1",
+            selected=True,
+            injected=True,
+            used_by_llm=True,
+            outcome="success",
+            latency_ms=42,
+            context_block_refs=["skill:block:feedback", long_ref],
+        )
+    )
+
+    snapshot = engine._runtime_assembly_snapshot_payload(result.runtime)  # noqa: SLF001 - regression covers runtime state export.
+    registry_state = snapshot["context_v2"]["runtime_state"]["capability_registry"]
+    feedback_entry = registry_state["feedback_entries"][0]
+
+    assert registry_state["entry_count"] >= 1
+    assert registry_state["feedback_entry_count"] == 1
+    assert registry_state["skill_feedback_count"] == 1
+    assert feedback_entry["name"] == registered.name
+    assert feedback_entry["source_id"] == "skill-feedback"
+    assert feedback_entry["capability_id"] == registered.capability_id
+    assert feedback_entry["feedback"]["feedback_count"] == 1
+    assert feedback_entry["feedback"]["success_count"] == 1
+    assert feedback_entry["feedback"]["last_outcome"] == "success"
+    assert len(feedback_entry["feedback"]["last_context_block_refs"][1]) <= 240
+    assert registry_state["feedback_decisions"][0]["updated"] is True
+    assert registry_state["feedback_decisions"][0]["capability_ids"] == [registered.capability_id]
+    assert registry_state["feedback_decisions"][0]["utility_score"] == decision.utility_score
+    assert long_ref not in json.dumps(snapshot, sort_keys=True)
+
+
+def test_run_engine_captures_tool_result_as_hcms_v2_episodic_memory(contract_tmp_path) -> None:
+    path_service = PathService(contract_tmp_path / "threads")
+    workspace = path_service.thread_workspace_dir("thread-runtime-tool-memory")
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "evidence.txt").write_text("runtime evidence\n", encoding="utf-8")
+    memory_manager = MemoryManager.from_config(
+        config=HCMSRuntimeConfig(enabled=True, storage_backend="filesystem"),
+        base_path=contract_tmp_path / "runtime",
+    )
+
+    result = RunEngine().run(
+        RunRequest(
+            thread_id="thread-runtime-tool-memory",
+            user_message="list files and remember tool observation",
+            config_layers=base_layers(),
+            path_service=path_service,
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            memory_manager=memory_manager,
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "list_dir",
+                                "args": {"path": "/mnt/user-data/workspace"},
+                                "id": "call_runtime_tool_memory",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="saw evidence.txt"),
+                ]
+            ),
+        )
+    )
+
+    assert result.thread_state.lifecycle.status == ThreadLifecycleStatus.COMPLETED
+    runtime_state = result.thread_state.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]
+    record = runtime_state["tool_result_store"]["records"][0]
+    workspace_result = runtime_state["workspace_state"]["intermediate_results"][0]
+
+    state = memory_manager.hcms_service.prefetch("global/default")
+    event_memories = [
+        memory
+        for memory in state.memories
+        if memory.metadata.get("hcms_v2") is True and memory.metadata.get("event_id")
+    ]
+    captured_event_types = {str(memory.metadata.get("event_type") or "") for memory in event_memories}
+    tool_memories = [
+        memory
+        for memory in event_memories
+        if record["result_id"] in memory.metadata.get("tool_result_refs", ())
+        and memory.metadata.get("event_type") == "tool_result"
+    ]
+    assert len(tool_memories) == 1
+    memory = tool_memories[0]
+    assert memory.category == MemoryCategory.CONTEXT
+    assert memory.source_type == SourceType.TOOL
+    assert memory.source_thread_id == "thread-runtime-tool-memory"
+    assert memory.metadata["layer"] == "episodic"
+    assert memory.metadata["hcms_layer"] == "episodic"
+    assert memory.metadata["layer_id"] == "episodic"
+    assert memory.metadata["event_type"] == "tool_result"
+    assert memory.metadata["tool_name"] == "list_dir"
+    assert memory.metadata["tool_call_id"] == "call_runtime_tool_memory"
+    assert memory.metadata["workspace_refs"] == [workspace_result["result_ref"]]
+    assert memory.metadata["content_ref"] == record["raw_ref"]
+    assert "evidence.txt" in memory.summary or "evidence.txt" in memory.content
+    assert {
+        "action_dispatch",
+        "tool_result",
+        "observation_handling",
+        "state_update",
+        "maintenance_scheduling",
+    }.issubset(captured_event_types)
+    assert memory.metadata["hcms_v2_slow_consolidated"] is True
+    assert memory.metadata["hcms_v2_slow_consolidated_memory_ids"]
+    assert memory.metadata["hcms_v2_slow_consolidation_claim_ids"]
+
+    slow_memories = [
+        item
+        for item in state.memories
+        if item.metadata.get("source") == "hcms_v2_slow_consolidation_replay"
+    ]
+    assert slow_memories
+    assert any(item.metadata.get("claim_ids") for item in slow_memories)
+    assert any(item.metadata.get("source_kind") == "runtime_event_slow_consolidation" for item in slow_memories)
+
+    mined_memories = [
+        item
+        for item in state.memories
+        if item.metadata.get("source") == "procedure_wisdom_miner"
+    ]
+    assert {item.metadata.get("layer") for item in mined_memories} >= {"procedural", "wisdom"}
+
+    diagnostics = result.runtime.context.hcms_v2_runtime_event_capture_diagnostics
+    assert diagnostics["captured_event_count"] >= 5
+    assert set(diagnostics["captured_event_types"]) >= {
+        "action_dispatch",
+        "tool_result",
+        "observation_handling",
+        "state_update",
+        "maintenance_scheduling",
+    }
+    mining = diagnostics["capability_mining"]
+    assert mining["status"] == "mined"
+    assert mining["event_count"] >= 1
+    assert mining["persisted_memory_count"] >= 2
+
+
+def test_run_engine_syncs_workspace_state_to_hcms_working_memory(contract_tmp_path) -> None:
+    path_service = PathService(contract_tmp_path / "threads")
+    workspace = path_service.thread_workspace_dir("thread-runtime-workspace-memory")
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "evidence.txt").write_text("runtime evidence\n", encoding="utf-8")
+    memory_manager = MemoryManager.from_config(
+        config=HCMSRuntimeConfig(enabled=True, storage_backend="filesystem"),
+        base_path=contract_tmp_path / "runtime",
+    )
+    engine = RunEngine()
+
+    result = engine.run(
+        RunRequest(
+            thread_id="thread-runtime-workspace-memory",
+            user_message="list files and sync workspace state",
+            config_layers=base_layers(),
+            path_service=path_service,
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            memory_manager=memory_manager,
+            chat_model_override=BindableFakeMessagesListChatModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "list_dir",
+                                "args": {"path": "/mnt/user-data/workspace"},
+                                "id": "call_runtime_workspace_memory",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="saw evidence.txt"),
+                ]
+            ),
+        )
+    )
+
+    assert result.thread_state.lifecycle.status == ThreadLifecycleStatus.COMPLETED
+    runtime_state = result.thread_state.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]
+    record = runtime_state["tool_result_store"]["records"][0]
+    workspace_result = runtime_state["workspace_state"]["intermediate_results"][0]
+
+    state = memory_manager.hcms_service.prefetch("global/default")
+    working_memories = [
+        memory
+        for memory in state.memories
+        if memory.metadata.get("workspace_state_ref") == "workspace:thread-runtime-workspace-memory"
+        and memory.metadata.get("layer") == "working"
+    ]
+
+    assert len(working_memories) == 1
+    memory = working_memories[0]
+    assert memory.category == MemoryCategory.CONTEXT
+    assert memory.source_type == SourceType.OBSERVATION
+    assert memory.source_thread_id == "thread-runtime-workspace-memory"
+    assert memory.metadata["hcms_layer"] == "working"
+    assert memory.metadata["layer_id"] == "working"
+    assert memory.metadata["store_id"] == "hcms_working"
+    assert memory.metadata["intermediate_result_count"] == 1
+    assert workspace_result["result_ref"] in memory.content
+    if record["raw_ref"] is not None:
+        assert record["raw_ref"] in memory.content
+    assert workspace_result["tool_result_id"] in memory.content
+    assert "list_dir" in memory.content
+    assert "evidence.txt" in memory.summary or "evidence.txt" in memory.content
+
+    fresh_snapshot = engine._runtime_assembly_snapshot_payload(result.runtime)  # noqa: SLF001 - regression covers runtime state export.
+    sync_state = fresh_snapshot["context_v2"]["runtime_state"]["workspace_state"]["working_memory_sync"]
+    assert sync_state["status"] == "synced"
+    assert sync_state["memory_id"] == memory.memory_id
+    assert sync_state["layer_id"] == "working"
+    assert sync_state["workspace_state_ref"] == "workspace:thread-runtime-workspace-memory"
+
+
+def test_run_engine_syncs_hcms_conflicts_to_review_inbox_warning_blocks(contract_tmp_path) -> None:
+    path_service = PathService(contract_tmp_path / "threads")
+    memory_manager = MemoryManager.from_config(
+        config=HCMSRuntimeConfig(enabled=True, storage_backend="filesystem"),
+        base_path=contract_tmp_path / "runtime",
+    )
+    previous = ClaimRecord(
+        claim_id="claim-runtime-conflict-old",
+        namespace="global/default",
+        subject="runtime_memory",
+        predicate="direct_append",
+        object_value="true",
+        human_text="Runtime memory is appended directly to the prompt.",
+    )
+    correction = ClaimRecord(
+        claim_id="claim-runtime-conflict-new",
+        namespace="global/default",
+        subject="runtime_memory",
+        predicate="direct_append",
+        object_value="false",
+        human_text="Runtime memory must enter ContextBlock budget competition.",
+        source_priority=90,
+    )
+    conflict = ConflictLedger().detect_exact_conflicts([previous, correction])[0]
+    memory_manager.queue_conflict_alerts([conflict])
+
+    result = RunEngine().run(
+        RunRequest(
+            thread_id="thread-runtime-conflict-alert-sync",
+            user_message="surface HCMS unresolved conflicts as warning blocks",
+            config_layers=base_layers(),
+            path_service=path_service,
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            memory_manager=memory_manager,
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="conflict noted")]),
+        )
+    )
+
+    runtime_state = result.thread_state.execution.runtime_assembly_snapshot["context_v2"]["runtime_state"]
+    review_state = runtime_state["review_inbox"]
+    warning_block = review_state["warning_blocks"][0]
+
+    assert review_state["item_count"] == 1
+    assert review_state["open_item_count"] == 1
+    assert review_state["items"][0]["conflict_id"] == conflict.conflict_id
+    assert review_state["items"][0]["review_inbox_id"] == conflict.review_inbox_id
+    assert warning_block["block_type"] == "runtime_warning"
+    assert warning_block["source"]["ref"] == conflict.review_inbox_id
+    assert warning_block["conflict_state"] == "unresolved"
+    assert warning_block["injection_policy"]["requires_warning"] is True
+    assert review_state["diagnostics"]["hcms_conflict_alert_sync"]["status"] == "synced"
+    assert result.runtime.context.conflict_alert_sync_diagnostics["synced_count"] == 1
+
+
 def test_run_engine_aggregates_model_usage_across_tool_loop(contract_tmp_path) -> None:
     engine = RunEngine()
     result = engine.run(
@@ -1507,7 +2103,29 @@ def test_run_engine_context_window_counts_middleware_injected_context(contract_t
             chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
         )
     )
+    result.runtime.context.memory_context_mode = "legacy_prompt_append"
     result.runtime.context.memory_context = "<memory_context>\nUser prefers concise reports.\n</memory_context>"
+    result.runtime.context.context_v2_memory_blocks = [
+        {
+            "block_id": "memory:block:legacy-migrated",
+            "block_type": "retrieved_memory",
+            "source": {"kind": "memory", "ref": "memory-legacy-migrated"},
+            "title": "Migrated legacy recall",
+            "content": "User prefers concise reports.",
+            "token_cost": 5,
+            "priority": 0.78,
+            "salience": 0.78,
+            "confidence": 0.84,
+        }
+    ]
+    result.runtime.context.memory_injection_diagnostics = {
+        "source": "memory_manager",
+        "status": "injected",
+        "injection_mode": "context_v2",
+        "requested_injection_mode": "legacy_prompt_append",
+        "legacy_prompt_append_migrated": True,
+        "context_v2_block_count": 1,
+    }
     result.runtime.context.summary_context = "Earlier turns discussed the Anvil runtime contract."
     result.runtime.context.todo_context = "- [PENDING] Verify context accounting (todo-1)"
     result.runtime.context.view_image_context = (
@@ -1520,11 +2138,101 @@ def test_run_engine_context_window_counts_middleware_injected_context(contract_t
         messages=[],
     )
 
-    assert context["context_breakdown"]["memory_context"] >= 1
+    assert "memory_context" not in context["context_breakdown"]
+    assert context["context_breakdown"]["context_v2_memory"] >= 1
     assert context["context_breakdown"]["conversation_summary"] >= 1
     assert context["context_breakdown"]["todo_state"] >= 1
     assert context["context_breakdown"]["view_image_context"] >= 1
-    assert context["context_breakdown_percentages"]["memory_context"] > 0
+    assert context["context_breakdown_percentages"]["context_v2_memory"] > 0
+    assert context["estimated_context_tokens"] == context["context_tokens"]
+
+
+def test_run_engine_context_window_ignores_legacy_memory_context_without_v2_blocks(contract_tmp_path) -> None:
+    engine = RunEngine()
+    result = engine.run(
+        RunRequest(
+            thread_id="thread-legacy-context-accounting-suppressed",
+            user_message="hello",
+            config_layers=usage_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            execution_mode="chat",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
+        )
+    )
+    result.runtime.context.memory_context_mode = "legacy_prompt_append"
+    result.runtime.context.memory_context = "LEGACY_CONTEXT_ACCOUNTING_SENTINEL"
+    result.runtime.context.context_v2_memory_blocks = []
+    result.runtime.context.memory_injection_diagnostics = {
+        "source": "memory_manager",
+        "status": "suppressed",
+        "injection_mode": "context_v2",
+        "requested_injection_mode": "legacy_prompt_append",
+        "legacy_prompt_append_suppressed": True,
+        "context_v2_block_count": 0,
+    }
+    result.runtime.context.summary_context = "Earlier turns discussed the Anvil runtime contract."
+
+    context = engine._build_context_window_usage(  # noqa: SLF001 - regression covers runtime context accounting.
+        token_usage={},
+        runtime=result.runtime,
+        messages=[],
+    )
+
+    assert "memory_context" not in context["context_breakdown"]
+    assert "context_v2_memory" not in context["context_breakdown"]
+    assert context["context_breakdown"]["conversation_summary"] >= 1
+    assert context["estimated_context_tokens"] == context["context_tokens"]
+
+
+def test_run_engine_context_window_accounts_context_v2_memory_without_legacy_prompt_category(contract_tmp_path) -> None:
+    engine = RunEngine()
+    result = engine.run(
+        RunRequest(
+            thread_id="thread-context-v2-memory-accounting",
+            user_message="hello",
+            config_layers=usage_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            execution_mode="chat",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello back")]),
+        )
+    )
+    result.runtime.context.memory_context_mode = ""
+    result.runtime.context.memory_context = (
+        "<memory_context>\nRaw legacy memory prompt should not be counted independently.\n</memory_context>"
+    )
+    result.runtime.context.context_v2_memory_blocks = [
+        {
+            "block_id": "memory:block:default-v2",
+            "block_type": "semantic_fact",
+            "source": {"kind": "memory", "ref": "memory-default-v2"},
+            "title": "Default V2 Memory",
+            "content": "User prefers Runtime Context V2 memory block accounting.",
+            "token_cost": 11,
+            "priority": 0.8,
+            "salience": 0.8,
+            "confidence": 0.9,
+        }
+    ]
+    result.runtime.context.memory_injection_diagnostics = {
+        "source": "memory_manager",
+        "status": "injected",
+        "injection_mode": "context_v2",
+        "context_v2_block_count": 1,
+    }
+
+    context = engine._build_context_window_usage(  # noqa: SLF001 - regression covers runtime context accounting.
+        token_usage={},
+        runtime=result.runtime,
+        messages=[],
+    )
+
+    assert "memory_context" not in context["context_breakdown"]
+    assert context["context_breakdown"]["context_v2_memory"] >= 1
+    assert context["context_breakdown_percentages"]["context_v2_memory"] > 0
     assert context["estimated_context_tokens"] == context["context_tokens"]
 
 
@@ -1617,197 +2325,6 @@ def test_run_engine_reports_recursive_compaction_metadata(contract_tmp_path) -> 
     assert context["compaction_summary_tokens"] == 40
     assert context["compaction_keep_recent_turns"] == 2
     assert context["compaction_savings_tokens"] == max(3200 - context["context_tokens"], 0)
-
-
-def test_summarization_middleware_records_recursive_compaction_level(contract_tmp_path) -> None:
-    engine = RunEngine()
-    checkpointer = create_checkpointer(CheckpointerBackend.IN_MEMORY)
-    store = create_store(StoreBackend.IN_MEMORY)
-    path_service = PathService(contract_tmp_path / "threads")
-    first = engine.run(
-        RunRequest(
-            thread_id="thread-real-recursive-compaction",
-            user_message="first turn " + ("older context " * 80),
-            config_layers=low_threshold_summarization_layers(),
-            feature_set=summarization_only_features(),
-            path_service=path_service,
-            checkpointer=checkpointer,
-            store=store,
-            execution_mode="chat",
-            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="first response")]),
-        )
-    )
-    state = first.thread_state.model_copy(deep=True)
-    state.conversation.summary = "Existing summary from the previous compacted turn."
-    archived_messages = [
-        HumanMessage(content="archived older turn " + ("older context " * 120)),
-        AIMessage(content="archived older answer " + ("older answer " * 120)),
-    ]
-    state.conversation.messages.extend(
-        json.loads(json.dumps(serialize_messages(archived_messages), ensure_ascii=False))
-    )
-    checkpointer.put_thread_state(state)
-
-    second = engine.run(
-        RunRequest(
-            thread_id="thread-real-recursive-compaction",
-            user_message="second turn " + ("more older context " * 220),
-            config_layers=low_threshold_summarization_layers(),
-            feature_set=summarization_only_features(),
-            path_service=path_service,
-            checkpointer=checkpointer,
-            store=store,
-            execution_mode="chat",
-            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="second response")]),
-        )
-    )
-
-    context = second.thread_state.execution.context_window_usage
-    assert second.thread_state.lifecycle.status is ThreadLifecycleStatus.COMPLETED
-    assert context["compact_status"] == "compacted"
-    assert context["summarization_triggered"] is True
-    assert context["compaction_level"] == 2
-    assert context["compaction_level_label"] == "recursive_summary"
-    assert context["compaction_reason"] == "token_threshold_exceeded"
-    assert context["compaction_input_tokens"] >= 20
-    assert context["compaction_summary_tokens"] >= 1
-    assert context["compaction_keep_recent_turns"] == 2
-    diagnostics = context["compaction_diagnostics"]
-    assert diagnostics["summary_source"] in {"fallback", "model"}
-    assert diagnostics["archived_message_count"] >= 1
-    assert diagnostics["serialized_tokens"] >= 1
-    assert diagnostics["compaction_level"] == 2
-    assert second.thread_state.archived_summaries[-1].diagnostics["compaction_level"] == 2
-
-
-def test_summarization_middleware_serializes_tools_and_images_for_compaction_diagnostics(contract_tmp_path) -> None:
-    engine = RunEngine()
-    checkpointer = create_checkpointer(CheckpointerBackend.IN_MEMORY)
-    store = create_store(StoreBackend.IN_MEMORY)
-    path_service = PathService(contract_tmp_path / "threads")
-    state = engine._create_initial_thread_state(  # noqa: SLF001 - builds a durable thread fixture.
-        RunRequest(
-            thread_id="thread-structured-compaction",
-            user_message="seed",
-            config_layers=[
-                *usage_layers(),
-                ConfigLayer(
-                    name="structured-compaction-model-threshold",
-                    kind=ConfigLayerKind.REQUEST,
-                    data={
-                        "models": {
-                            "openai": {
-                                "auto_compact_threshold_tokens": 20,
-                            },
-                        },
-                    },
-                ),
-                ConfigLayer(
-                    name="structured-compaction",
-                    kind=ConfigLayerKind.REQUEST,
-                    data={
-                        "summarization": {
-                            "enabled": True,
-                            "token_threshold": 20,
-                            "keep_recent_turns": 1,
-                        },
-                    },
-                ),
-            ],
-            feature_set=summarization_only_features(),
-            path_service=path_service,
-            checkpointer=checkpointer,
-            store=store,
-            execution_mode="chat",
-        )
-    )
-    archived_messages = [
-        HumanMessage(
-            content=[
-                {"type": "text", "text": "Please inspect /mnt/user-data/workspace/app.py"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
-            ]
-        ),
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "read_file",
-                    "args": {"path": "/mnt/user-data/workspace/app.py"},
-                    "id": "tool-read-1",
-                    "type": "tool_call",
-                }
-            ],
-        ),
-        ToolMessage(
-            content="line 1\n" + ("tool output detail " * 300),
-            name="read_file",
-            tool_call_id="tool-read-1",
-        ),
-    ]
-    state.conversation.messages = json.loads(json.dumps(serialize_messages(archived_messages), ensure_ascii=False))
-    checkpointer.put_thread_state(state)
-
-    result = engine.run(
-        RunRequest(
-            thread_id="thread-structured-compaction",
-            user_message="continue " + ("new context " * 80),
-            config_layers=[
-                *usage_layers(),
-                ConfigLayer(
-                    name="structured-compaction-model-threshold",
-                    kind=ConfigLayerKind.REQUEST,
-                    data={
-                        "models": {
-                            "openai": {
-                                "auto_compact_threshold_tokens": 20,
-                            },
-                        },
-                    },
-                ),
-                ConfigLayer(
-                    name="structured-compaction",
-                    kind=ConfigLayerKind.REQUEST,
-                    data={
-                        "summarization": {
-                            "enabled": True,
-                            "token_threshold": 20,
-                            "keep_recent_turns": 1,
-                        },
-                    },
-                ),
-            ],
-            feature_set=summarization_only_features(),
-            path_service=path_service,
-            checkpointer=checkpointer,
-            store=store,
-            execution_mode="chat",
-            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="continued")]),
-        )
-    )
-
-    diagnostics = result.thread_state.execution.context_window_usage["compaction_diagnostics"]
-    assert result.thread_state.lifecycle.status is ThreadLifecycleStatus.COMPLETED
-    assert diagnostics["summary_source"] in {"fallback", "model"}
-    assert diagnostics["tool_call_count"] >= 1
-    assert diagnostics["tool_result_count"] >= 1
-    assert diagnostics["pruned_tool_result_count"] >= 1
-    assert diagnostics["truncated_message_count"] >= 1
-    assert diagnostics["serialized_chars"] >= 1
-    assert result.thread_state.execution.runtime_assembly_snapshot["compaction_diagnostics"]["tool_call_count"] >= 1
-    transcript, image_diagnostics = SummarizationMiddleware()._serialize_for_summary(  # noqa: SLF001
-        [
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": "Use this uploaded image."},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
-                ]
-            )
-        ],
-        keep_recent_turns=1,
-    )
-    assert image_diagnostics["image_block_count"] == 1
-    assert "[image block: image/png data omitted]" in transcript
 
 
 def _estimated_tokens_for_text(value: str) -> int:

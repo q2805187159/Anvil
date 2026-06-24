@@ -3,12 +3,19 @@ from __future__ import annotations
 import json
 
 from anvil.runtime.tool_registry import (
+    CapabilityFeedbackDecision,
+    CapabilityHealth,
+    CapabilityHealthStatus,
     CapabilitySearchRequest,
     DeferredCapabilityPromotion,
+    HiddenCapabilitySummary,
+    SkillSelectionFeedback,
+    SkillSelectionFeedbackSubscriber,
     ToolRegistry,
     ToolRegistryEntry,
     ToolSourceKind,
 )
+from anvil.runtime.state_v2 import EventLog, RuntimeEvent, RuntimeEventBus
 
 
 def test_tool_registry_preserves_built_in_names_and_namespaces_collisions() -> None:
@@ -33,6 +40,131 @@ def test_tool_registry_preserves_built_in_names_and_namespaces_collisions() -> N
     )
 
     assert external.name == "github__search"
+
+
+def test_skill_selection_feedback_updates_capability_registry_ranking_metadata() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolRegistryEntry(
+            name="shell_command",
+            display_name="Shell Command",
+            source_kind=ToolSourceKind.BUILTIN,
+            source_id="core",
+            capability_group="process",
+        )
+    )
+    registry.register(
+        ToolRegistryEntry(
+            name="demo_skill",
+            display_name="Demo Skill",
+            source_kind=ToolSourceKind.SKILL,
+            source_id="demo-skill",
+            capability_group="skills",
+            summary="Use the demo workflow for feedback routing.",
+        )
+    )
+
+    decision = registry.record_skill_selection_feedback(
+        SkillSelectionFeedback(
+            skill_id="demo-skill",
+            turn_id="turn-1",
+            selected=True,
+            injected=True,
+            used_by_llm=True,
+            outcome="success",
+            user_correction=False,
+            latency_ms=120,
+            context_block_refs=["ctx:block:skill"],
+        )
+    )
+
+    entries = {entry.name: entry for entry in registry.entries()}
+    skill_entry = entries["demo_skill"]
+    stats = skill_entry.provenance["skill_selection_feedback"]
+
+    assert isinstance(decision, CapabilityFeedbackDecision)
+    assert decision.updated is True
+    assert decision.skill_id == "demo-skill"
+    assert decision.capability_ids == (skill_entry.capability_id,)
+    assert decision.feedback_count == 1
+    assert decision.success_count == 1
+    assert decision.correction_count == 0
+    assert decision.utility_score >= 0.9
+    assert stats["feedback_count"] == 1
+    assert stats["selected_count"] == 1
+    assert stats["injected_count"] == 1
+    assert stats["used_by_llm_count"] == 1
+    assert stats["success_count"] == 1
+    assert stats["failure_count"] == 0
+    assert stats["last_turn_id"] == "turn-1"
+    assert stats["last_outcome"] == "success"
+    assert stats["last_context_block_refs"] == ["ctx:block:skill"]
+    assert stats["utility_score"] == decision.utility_score
+    assert "skill_selection_feedback" not in entries["shell_command"].provenance
+
+
+def test_runtime_event_bus_skill_selection_feedback_updates_capability_registry() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolRegistryEntry(
+            name="demo_skill",
+            display_name="Demo Skill",
+            source_kind=ToolSourceKind.SKILL,
+            source_id="demo-skill",
+            capability_group="skills",
+            summary="Use the demo workflow for event bus feedback routing.",
+        )
+    )
+    event_bus = RuntimeEventBus(event_log=EventLog(thread_id="thread-feedback"))
+    subscriber = SkillSelectionFeedbackSubscriber(registry=registry)
+    event_bus.subscribe(subscriber)
+
+    published = event_bus.publish(
+        RuntimeEvent(
+            event_id="event-skill-feedback-1",
+            event_type="skill_selection_feedback",
+            actor="runtime",
+            thread_id="thread-feedback",
+            run_id="run-1",
+            turn_id="turn-1",
+            source_kind="skill",
+            source_ref="demo-skill",
+            payload_summary="Demo skill was selected, injected, used, and succeeded.",
+            metadata={
+                "skill_id": "demo-skill",
+                "selected": True,
+                "injected": True,
+                "used_by_llm": True,
+                "outcome": "success",
+                "user_correction": False,
+                "latency_ms": 155,
+                "context_block_refs": ["ctx:skill:demo"],
+            },
+        )
+    )
+
+    entries = {entry.name: entry for entry in registry.entries()}
+    stats = entries["demo_skill"].provenance["skill_selection_feedback"]
+    decision = published.metadata["capability_feedback_decision"]
+
+    assert len(subscriber.decisions) == 1
+    assert stats["feedback_count"] == 1
+    assert stats["selected_count"] == 1
+    assert stats["injected_count"] == 1
+    assert stats["used_by_llm_count"] == 1
+    assert stats["success_count"] == 1
+    assert stats["last_context_block_refs"] == ["ctx:skill:demo"]
+    assert decision["skill_id"] == "demo-skill"
+    assert decision["updated"] is True
+    assert decision["feedback_count"] == 1
+    assert decision["utility_score"] == stats["utility_score"]
+
+    subscriber(published)
+
+    entries_after_duplicate = {entry.name: entry for entry in registry.entries()}
+    duplicate_stats = entries_after_duplicate["demo_skill"].provenance["skill_selection_feedback"]
+    assert len(subscriber.decisions) == 1
+    assert duplicate_stats["feedback_count"] == 1
 
 
 def test_tool_registry_builds_per_request_visible_bundle() -> None:
@@ -92,6 +224,106 @@ def test_deferred_capability_search_and_promotion() -> None:
     assert [entry.name for entry in search_result.matches] == ["ticket_lookup"]
     assert [entry.name for entry in after.visible_tools] == ["ticket_lookup"]
     assert before.fingerprint != after.fingerprint
+
+
+def test_capability_resource_view_explains_visible_deferred_and_hidden_capabilities() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolRegistryEntry(
+            name="read_file",
+            display_name="Read File",
+            source_kind=ToolSourceKind.BUILTIN,
+            source_id="core",
+            capability_group="filesystem",
+            summary="Read workspace files.",
+            input_schema={"properties": {"path": {"type": "string"}}},
+            output_token_budget=1200,
+            provenance={"latency_cost": 2, "related_memories": ["mem:file-guidelines"]},
+        )
+    )
+    registry.register(
+        ToolRegistryEntry(
+            name="github_search",
+            display_name="GitHub Search",
+            source_kind=ToolSourceKind.MCP,
+            source_id="github",
+            capability_group="search",
+            summary="Search GitHub repositories.",
+            risk_category="network_request",
+            deferred=True,
+            provenance={"examples": ["Find pull requests"], "graph_neighbors": ["skill:code-review"]},
+        )
+    )
+    registry.register(
+        ToolRegistryEntry(
+            name="code_review_skill",
+            display_name="Code Review Skill",
+            source_kind=ToolSourceKind.SKILL,
+            source_id="code-review",
+            capability_group="skills",
+            summary="Review code for regressions.",
+            health=CapabilityHealth(status=CapabilityHealthStatus.FAILED, message="disabled by policy"),
+            availability_check=lambda: False,
+            provenance={
+                "skill_selection_feedback": {
+                    "feedback_count": 4,
+                    "success_count": 3,
+                    "failure_count": 1,
+                    "correction_count": 1,
+                    "utility_score": 0.75,
+                    "average_latency_ms": 180,
+                },
+                "related_skills": ["test-driven-development"],
+            },
+        )
+    )
+
+    bundle = registry.build_bundle(
+        effective_config_fingerprint="cfg-resources",
+        enabled_source_ids={"core", "github", "code-review"},
+    )
+
+    resources = registry.capability_resources(bundle)
+    by_name = {resource.name: resource for resource in resources}
+    hidden_summary = registry.hidden_capability_summary(bundle, resources=resources)
+
+    assert isinstance(hidden_summary, HiddenCapabilitySummary)
+    assert [resource.name for resource in resources] == ["code_review_skill", "github_search", "read_file"]
+
+    read_resource = by_name["read_file"]
+    assert read_resource.id == "builtin:core:read_file"
+    assert read_resource.kind == "tool"
+    assert read_resource.visibility_state == "visible"
+    assert read_resource.token_cost > 0
+    assert read_resource.latency_cost == 2
+    assert read_resource.related_memories == ("mem:file-guidelines",)
+    assert read_resource.source_ref == "builtin:core:read_file"
+
+    mcp_resource = by_name["github_search"]
+    assert mcp_resource.kind == "mcp"
+    assert mcp_resource.visibility_state == "deferred"
+    assert mcp_resource.risk_level == "network_request"
+    assert mcp_resource.examples == ("Find pull requests",)
+    assert mcp_resource.graph_neighbors == ("skill:code-review",)
+    assert mcp_resource.metadata["visibility_reason"] == "deferred_by_policy_or_budget"
+
+    skill_resource = by_name["code_review_skill"]
+    assert skill_resource.kind == "skill"
+    assert skill_resource.visibility_state in {"hidden", "disabled", "unhealthy"}
+    assert skill_resource.success_history.usage_count == 4
+    assert skill_resource.success_history.success_count == 3
+    assert skill_resource.success_history.failure_count == 1
+    assert skill_resource.success_history.user_correction_count == 1
+    assert skill_resource.success_history.recent_success_rate == 0.75
+    assert skill_resource.success_history.average_latency_ms == 180
+    assert skill_resource.related_skills == ("test-driven-development",)
+    assert skill_resource.metadata["visibility_reason"] == "unavailable_or_unhealthy"
+
+    assert hidden_summary.categories == ("mcp:search", "skill:skills")
+    assert hidden_summary.omitted_count == 2
+    assert hidden_summary.example_names == ("github_search", "code_review_skill")
+    assert hidden_summary.token_cost > 0
+    assert "capability_search" in hidden_summary.request_hint
 
 
 def test_capability_search_explains_provenance_matches() -> None:

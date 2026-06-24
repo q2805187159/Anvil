@@ -18,12 +18,6 @@ from ..models import (
     MemoryGovernanceActionResponse,
     MemoryGovernanceBatchRequest,
     MemoryGovernanceBatchResponse,
-    ProfileFacetAuditResponse,
-    ProfileFacetGovernanceRequest,
-    ProfileFacetGovernanceResponse,
-    ProfileFacetListResponse,
-    ProfileFacetRebuildRequest,
-    ProfileFacetRebuildResponse,
     MemoryMaintenanceAutomationRequest,
     MemoryMaintenanceAutomationRunResponse,
     MemoryMaintenanceAutomationStatusResponse,
@@ -37,11 +31,20 @@ from ..models import (
     MemoryAdminImportRequest,
     MemoryAdminImportResponse,
     MemoryLayerView,
-    MemoryProviderAdminResponse,
-    MemoryProviderTestResponse,
+    MemoryEngineAdminResponse,
+    MemoryEngineTestResponse,
     MemoryStalenessResponse,
     MemoryTraceRequest,
     MemoryTraceResponse,
+    HCMSQueryRequest,
+    HCMSRecallResponse,
+    HCMSWhyResponse,
+    HCMSMemoryListResponse,
+    HCMSMemoryResponse,
+    HCMSMemoryDeleteResponse,
+    HCMSMemoryRelationsResponse,
+    HCMSMemoryHistoryResponse,
+    HCMSMemoryDiffResponse,
     MemoryRecallBenchmarkRequest,
     MemoryRecallBenchmarkResponse,
     MemoryRecallBenchmarkRunListResponse,
@@ -51,12 +54,7 @@ from ..models import (
     MemoryRecallBenchmarkSuiteUpsertRequest,
     MemoryRecallBenchmarkSuiteView,
     MemoryOverviewView,
-    MemoryProviderView,
-    MemoryReviewDecisionRequest,
-    MemoryReviewBatchRequest,
-    MemoryReviewBatchResponse,
-    MemoryReviewItemView,
-    MemoryReviewResponse,
+    MemoryEngineView,
     MemoryStoreView,
     ReflectionJobAdminResponse,
     ReflectionJobCreateRequest,
@@ -80,14 +78,14 @@ def get_memory_overview(
 
 
 @router.get("/overview", response_model=MemoryOverviewView)
-def get_memory_overview_vnext(
+def get_memory_overview_hcms(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> MemoryOverviewView:
-    return services.get_memory_overview_vnext(deps)
+    return services.get_memory_overview_hcms(deps)
 
 
 @router.get("/session", response_model=SessionMemoryView)
-def get_memory_session_vnext(
+def get_memory_session(
     thread_id: str,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> SessionMemoryView:
@@ -95,7 +93,7 @@ def get_memory_session_vnext(
 
 
 @router.post("/session/search", response_model=SessionSearchResultView)
-def search_memory_session_vnext(
+def search_memory_session(
     body: SessionSearchRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> SessionSearchResultView:
@@ -103,14 +101,14 @@ def search_memory_session_vnext(
 
 
 @router.get("/user", response_model=list[MemoryEntryView])
-def list_memory_user_vnext(
+def list_memory_user(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> list[MemoryEntryView]:
     return services.list_memory_user_entries(deps)
 
 
 @router.post("/user", response_model=MemoryEntryView)
-def create_memory_user_vnext(
+def create_memory_user(
     body: MemoryEntryCreateRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> MemoryEntryView:
@@ -118,7 +116,7 @@ def create_memory_user_vnext(
 
 
 @router.patch("/user/{entry_id}", response_model=MemoryEntryView)
-def update_memory_user_vnext(
+def update_memory_user(
     entry_id: str,
     body: MemoryEntryUpdateRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
@@ -127,7 +125,7 @@ def update_memory_user_vnext(
 
 
 @router.delete("/user/{entry_id}")
-def delete_memory_user_vnext(
+def delete_memory_user(
     entry_id: str,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> dict[str, str]:
@@ -135,14 +133,14 @@ def delete_memory_user_vnext(
 
 
 @router.get("/workspace", response_model=list[MemoryEntryView])
-def list_memory_workspace_vnext(
+def list_memory_workspace(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> list[MemoryEntryView]:
     return services.list_memory_workspace_entries(deps)
 
 
 @router.post("/workspace", response_model=MemoryEntryView)
-def create_memory_workspace_vnext(
+def create_memory_workspace(
     body: MemoryEntryCreateRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> MemoryEntryView:
@@ -150,7 +148,7 @@ def create_memory_workspace_vnext(
 
 
 @router.patch("/workspace/{entry_id}", response_model=MemoryEntryView)
-def update_memory_workspace_vnext(
+def update_memory_workspace(
     entry_id: str,
     body: MemoryEntryUpdateRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
@@ -159,7 +157,7 @@ def update_memory_workspace_vnext(
 
 
 @router.delete("/workspace/{entry_id}")
-def delete_memory_workspace_vnext(
+def delete_memory_workspace(
     entry_id: str,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> dict[str, str]:
@@ -174,11 +172,112 @@ def get_memory_trace(
     return services.get_memory_trace(deps, body)
 
 
-@router.get("/admin/providers", response_model=MemoryProviderAdminResponse)
-def list_memory_admin_providers(
+@router.post("/hcms/recall", response_model=HCMSRecallResponse)
+def hcms_recall(
+    body: HCMSQueryRequest,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryProviderAdminResponse:
-    return services.list_memory_admin_providers(deps)
+) -> HCMSRecallResponse:
+    return services.hcms_recall(deps, body)
+
+
+@router.post("/hcms/search", response_model=HCMSRecallResponse)
+def hcms_search(
+    body: HCMSQueryRequest,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSRecallResponse:
+    return services.hcms_recall(deps, body)
+
+
+@router.post("/search", response_model=HCMSRecallResponse)
+def search_memory_hcms(
+    body: HCMSQueryRequest,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSRecallResponse:
+    return services.hcms_recall(deps, body)
+
+
+@router.post("/hcms/why", response_model=HCMSWhyResponse)
+def hcms_why(
+    body: HCMSQueryRequest,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSWhyResponse:
+    return services.hcms_why(deps, body)
+
+
+@router.get("/hcms/memories", response_model=HCMSMemoryListResponse)
+def list_hcms_memories(
+    query: str | None = None,
+    state: str | None = None,
+    category: str | None = None,
+    layer_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryListResponse:
+    return services.list_hcms_memories(
+        deps,
+        query=query,
+        state=state,
+        category=category,
+        layer_id=layer_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/hcms/memories/{memory_id}", response_model=HCMSMemoryResponse)
+def hcms_memory(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryResponse:
+    return services.hcms_memory(deps, memory_id)
+
+
+@router.delete("/hcms/memories/{memory_id}", response_model=HCMSMemoryDeleteResponse)
+def delete_hcms_memory(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryDeleteResponse:
+    return services.delete_hcms_memory(deps, memory_id)
+
+
+@router.get("/hcms/memories/{memory_id}/history", response_model=HCMSMemoryHistoryResponse)
+def hcms_history(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryHistoryResponse:
+    return services.hcms_history(deps, memory_id)
+
+
+@router.get("/hcms/memories/{memory_id}/versions", response_model=HCMSMemoryHistoryResponse)
+def hcms_versions(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryHistoryResponse:
+    return services.hcms_history(deps, memory_id)
+
+
+@router.get("/hcms/memories/{memory_id}/relations", response_model=HCMSMemoryRelationsResponse)
+def hcms_relations(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryRelationsResponse:
+    return services.hcms_relations(deps, memory_id)
+
+
+@router.get("/hcms/memories/{memory_id}/diff", response_model=HCMSMemoryDiffResponse)
+def hcms_diff(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryDiffResponse:
+    return services.hcms_diff(deps, memory_id)
+
+
+@router.get("/admin/engines", response_model=MemoryEngineAdminResponse)
+def list_memory_admin_engines(
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> MemoryEngineAdminResponse:
+    return services.list_memory_admin_engines(deps)
 
 
 @router.get("/admin/reflections", response_model=ReflectionJobAdminResponse)
@@ -296,39 +395,6 @@ def onboard_memory_admin_workspace(
     return services.onboard_memory_workspace(deps, body)
 
 
-@router.get("/admin/review", response_model=MemoryReviewResponse)
-def list_memory_admin_review(
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryReviewResponse:
-    return services.list_memory_admin_review(deps)
-
-
-@router.post("/admin/review/{review_id}/approve", response_model=MemoryEntryView)
-def approve_memory_admin_review(
-    review_id: str,
-    body: MemoryReviewDecisionRequest | None = None,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryEntryView:
-    return services.approve_memory_review_item(deps, review_id, body or MemoryReviewDecisionRequest())
-
-
-@router.post("/admin/review/{review_id}/reject", response_model=MemoryReviewItemView)
-def reject_memory_admin_review(
-    review_id: str,
-    body: MemoryReviewDecisionRequest | None = None,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryReviewItemView:
-    return services.reject_memory_review_item(deps, review_id, body or MemoryReviewDecisionRequest())
-
-
-@router.post("/admin/review/batch", response_model=MemoryReviewBatchResponse)
-def batch_memory_admin_review(
-    body: MemoryReviewBatchRequest,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryReviewBatchResponse:
-    return services.batch_memory_review(deps, body)
-
-
 @router.post("/admin/memories/{memory_id}/govern", response_model=MemoryGovernanceActionResponse)
 def govern_memory_admin_entry(
     memory_id: str,
@@ -344,38 +410,6 @@ def batch_govern_memory_admin(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> MemoryGovernanceBatchResponse:
     return services.batch_govern_memory(deps, body)
-
-
-@router.get("/admin/profile/facets", response_model=ProfileFacetListResponse)
-def list_memory_admin_profile_facets(
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> ProfileFacetListResponse:
-    return services.list_profile_facets(deps)
-
-
-@router.post("/admin/profile/facets/rebuild", response_model=ProfileFacetRebuildResponse)
-def rebuild_memory_admin_profile_facets(
-    body: ProfileFacetRebuildRequest,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> ProfileFacetRebuildResponse:
-    return services.rebuild_profile_facets(deps, body)
-
-
-@router.get("/admin/profile/facets/audit", response_model=ProfileFacetAuditResponse)
-def list_memory_admin_profile_facet_audit(
-    limit: int = 50,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> ProfileFacetAuditResponse:
-    return services.list_profile_facet_audit(deps, limit=limit)
-
-
-@router.post("/admin/profile/facets/{facet_id}/govern", response_model=ProfileFacetGovernanceResponse)
-def govern_memory_admin_profile_facet(
-    facet_id: str,
-    body: ProfileFacetGovernanceRequest,
-    deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> ProfileFacetGovernanceResponse:
-    return services.govern_profile_facet(deps, facet_id, body)
 
 
 @router.post("/admin/maintenance", response_model=MemoryMaintenanceResponse)
@@ -532,34 +566,34 @@ def delete_memory_entry(
     return services.delete_memory_entry(deps, store_id, entry_id)
 
 
-@router.get("/providers", response_model=list[MemoryProviderView])
-def list_memory_providers(
+@router.get("/engines", response_model=list[MemoryEngineView])
+def list_memory_engines(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> list[MemoryProviderView]:
-    return services.list_memory_providers(deps)
+) -> list[MemoryEngineView]:
+    return services.list_memory_engines(deps)
 
 
-@router.post("/providers/reload", response_model=list[MemoryProviderView])
-def reload_memory_providers(
+@router.post("/engines/reload", response_model=list[MemoryEngineView])
+def reload_memory_engines(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> list[MemoryProviderView]:
-    return services.reload_memory_providers(deps)
+) -> list[MemoryEngineView]:
+    return services.reload_memory_engines(deps)
 
 
-@router.post("/providers/{provider_id}/activate", response_model=MemoryProviderView)
-def activate_memory_provider(
-    provider_id: str,
+@router.post("/engines/{engine_id}/activate", response_model=MemoryEngineView)
+def activate_memory_engine(
+    engine_id: str,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryProviderView:
-    return services.activate_memory_provider(deps, provider_id)
+) -> MemoryEngineView:
+    return services.activate_memory_engine(deps, engine_id)
 
 
-@router.post("/providers/{provider_id}/test", response_model=MemoryProviderTestResponse)
-def test_memory_provider(
-    provider_id: str,
+@router.post("/engines/{engine_id}/test", response_model=MemoryEngineTestResponse)
+def test_memory_engine(
+    engine_id: str,
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
-) -> MemoryProviderTestResponse:
-    return services.test_memory_provider(deps, provider_id)
+) -> MemoryEngineTestResponse:
+    return services.test_memory_engine(deps, engine_id)
 
 
 @router.post("/archive/search", response_model=MemoryArchiveSearchResultView)
@@ -623,3 +657,56 @@ def remove_reflection_job(
     deps: AppRuntimeDeps = Depends(get_runtime_deps),
 ) -> ReflectionJobView:
     return services.remove_reflection_job(deps, job_id)
+
+
+@router.get("/list", response_model=HCMSMemoryListResponse)
+def list_memory_hcms_alias(
+    query: str | None = None,
+    state: str | None = None,
+    category: str | None = None,
+    layer_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryListResponse:
+    return services.list_hcms_memories(
+        deps,
+        query=query,
+        state=state,
+        category=category,
+        layer_id=layer_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{memory_id}/versions", response_model=HCMSMemoryHistoryResponse)
+def memory_hcms_versions_alias(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryHistoryResponse:
+    return services.hcms_history(deps, memory_id)
+
+
+@router.get("/{memory_id}/relations", response_model=HCMSMemoryRelationsResponse)
+def memory_hcms_relations_alias(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryRelationsResponse:
+    return services.hcms_relations(deps, memory_id)
+
+
+@router.get("/{memory_id}", response_model=HCMSMemoryResponse)
+def memory_hcms_alias(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryResponse:
+    return services.hcms_memory(deps, memory_id)
+
+
+@router.delete("/{memory_id}", response_model=HCMSMemoryDeleteResponse)
+def delete_memory_hcms_alias(
+    memory_id: str,
+    deps: AppRuntimeDeps = Depends(get_runtime_deps),
+) -> HCMSMemoryDeleteResponse:
+    return services.delete_hcms_memory(deps, memory_id)

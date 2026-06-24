@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from anvil.config import EffectiveConfig
-from anvil.memory_platform import MemoryManager
+from anvil.memory import MemoryManager
 from anvil.skills import SkillsService
 from anvil.trajectory import (
     ThreadTrajectoryExporter,
@@ -170,16 +170,16 @@ class SelfUpgradeHealthService:
         memory_manager: MemoryManager | None,
         candidate_audit_limit: int,
     ) -> tuple[SelfUpgradeDomainHealth, tuple[SelfUpgradeBacklogItem, ...]]:
-        if not config.memory_platform.enabled:
+        if not config.hcms.enabled:
             return (
                 SelfUpgradeDomainHealth(
                     domain_id="memory",
-                    label="Memory Platform",
+                    label="HCMS Memory",
                     status="disabled",
                     score=1.0,
                     enabled=False,
                     metrics={"configured": False},
-                    recommendations=("Enable memory_platform to participate in self-upgrade health.",),
+                    recommendations=("Enable HCMS memory to participate in self-upgrade health.",),
                 ),
                 (),
             )
@@ -187,13 +187,13 @@ class SelfUpgradeHealthService:
             return (
                 SelfUpgradeDomainHealth(
                     domain_id="memory",
-                    label="Memory Platform",
+                    label="HCMS Memory",
                     status="unavailable",
                     score=0.0,
                     enabled=True,
                     metrics={"configured": True},
                     issues=("memory_manager_missing",),
-                    recommendations=("Provide MemoryManager to inspect memory self-upgrade health.",),
+                    recommendations=("Provide an HCMS MemoryManager to inspect memory self-upgrade health.",),
                 ),
                 (
                     SelfUpgradeBacklogItem(
@@ -201,71 +201,83 @@ class SelfUpgradeHealthService:
                         domain="memory",
                         severity="critical",
                         title="Memory manager unavailable",
-                        summary="Memory platform is enabled but no MemoryManager was supplied to the health service.",
+                        summary="HCMS memory is enabled but no MemoryManager was supplied to the health service.",
                         metric="memory_manager",
                         count=1,
-                        recommendation="Wire MemoryManager into the self-upgrade health composition root.",
+                        recommendation="Wire an HCMS MemoryManager into the self-upgrade health composition root.",
                     ),
                 ),
             )
 
-        health = memory_manager.health_report()
-        pending_updates = int(memory_manager.update_queue.pending_count())
-        audit = memory_manager.list_candidate_audit(limit=candidate_audit_limit)
-        automation_status = _as_dict(memory_manager.maintenance_automation_status())
-        benchmark_suites = memory_manager.list_recall_benchmark_suites()
-        benchmark_runs = memory_manager.list_recall_benchmark_runs(limit=200)
-        enabled_benchmark_suites = [suite for suite in benchmark_suites if suite.enabled]
-        unrun_benchmark_suites = [suite for suite in enabled_benchmark_suites if not suite.latest_run_id]
-        benchmark_scores = [
-            float(suite.latest_score)
-            for suite in enabled_benchmark_suites
-            if suite.latest_score is not None
-        ]
-        failed_latest_benchmark_suites = [
-            suite
-            for suite in enabled_benchmark_suites
-            if suite.latest_passed is False
-        ]
-        latest_benchmark_score = min(benchmark_scores) if benchmark_scores else None
-        skip_count = sum(1 for item in audit if item.action == "skip")
-        review_count = sum(1 for item in audit if item.action == "review")
-        write_count = sum(1 for item in audit if item.action == "write")
-        blocker_count = sum(1 for item in audit if item.blockers)
-        low_confidence_count = sum(store.low_confidence_count for store in health.stores)
-        missing_evidence_count = sum(store.missing_evidence_count for store in health.stores)
-        duplicate_cluster_count = sum(store.duplicate_cluster_count for store in health.stores)
-        maintenance_error_count = _int(automation_status.get("last_error_count"))
+        service = getattr(memory_manager, "hcms_service", None)
+        if service is None:
+            return (
+                SelfUpgradeDomainHealth(
+                    domain_id="memory",
+                    label="HCMS Memory",
+                    status="unavailable",
+                    score=0.0,
+                    enabled=True,
+                    metrics={"configured": True, "hcms_service": False},
+                    issues=("hcms_service_missing",),
+                    recommendations=("Provide an HCMS MemoryManager with hcms_service.",),
+                ),
+                (
+                    SelfUpgradeBacklogItem(
+                        item_id="memory:hcms_service_missing",
+                        domain="memory",
+                        severity="critical",
+                        title="HCMS service unavailable",
+                        summary="Memory is enabled but the supplied manager does not expose hcms_service.",
+                        metric="hcms_service",
+                        count=1,
+                        recommendation="Wire anvil.memory.MemoryManager into the self-upgrade health composition root.",
+                    ),
+                ),
+            )
 
+        state = service.prefetch("global/default")
+        health = memory_manager.health_report()
+        pending_updates = int(getattr(service.queue, "pending_count", lambda: 0)())
+        cost_reduction = float(getattr(service.queue, "cost_reduction_ratio", lambda: 0.0)())
+        active_count = len(state.active_memories())
+        low_confidence_count = sum(int(getattr(store, "low_confidence_count", 0)) for store in health.stores)
+        quality_issue_count = len(tuple(getattr(health, "issues", ()) or ()))
+        archived_count = sum(1 for item in state.memories if item.state.value == "archived")
+        forgotten_count = sum(1 for item in state.memories if item.state.value == "forgotten")
+        relation_count = len(state.relations)
+        causal_edge_count = len(state.causal_edges)
+        benchmark_suites = tuple(memory_manager.list_recall_benchmark_suites())
+        benchmark_runs = tuple(memory_manager.list_recall_benchmark_runs(limit=200))
+        latest_benchmark = benchmark_runs[-1] if benchmark_runs else None
+        latest_benchmark_score = float(latest_benchmark.report.score) if latest_benchmark else 0.0
+        passing_benchmark_runs = sum(1 for run in benchmark_runs if run.report.passed)
+        unrun_benchmark_suites = sum(1 for suite in benchmark_suites if suite.latest_run_id is None)
         metrics: dict[str, int | float | str | bool] = {
-            "quality_score": float(health.quality_score),
-            "archive_turn_count": int(health.archive_turn_count),
-            "pending_review_count": int(health.pending_review_count),
-            "conflict_count": int(health.conflict_count),
-            "stale_count": int(health.stale_count),
-            "provider_count": int(health.provider_count),
-            "store_count": len(health.stores),
-            "issue_count": len(health.issues),
-            "recommendation_count": len(health.recommendations),
-            "low_confidence_count": int(low_confidence_count),
-            "missing_evidence_count": int(missing_evidence_count),
-            "duplicate_cluster_count": int(duplicate_cluster_count),
+            "configured": True,
+            "hcms_service": True,
+            "active_memory_count": active_count,
+            "archived_memory_count": archived_count,
+            "forgotten_memory_count": forgotten_count,
+            "low_confidence_count": low_confidence_count,
+            "quality_issue_count": quality_issue_count,
+            "observation_count": len(state.observations),
+            "entity_count": len(state.entities),
+            "relation_count": relation_count,
+            "causal_edge_count": causal_edge_count,
             "update_queue_pending": pending_updates,
-            "candidate_audit_total": len(audit),
-            "candidate_audit_skip_count": skip_count,
-            "candidate_audit_review_count": review_count,
-            "candidate_audit_write_count": write_count,
-            "candidate_audit_blocker_count": blocker_count,
-            "maintenance_automation_enabled": bool(automation_status.get("enabled")),
-            "maintenance_last_error_count": maintenance_error_count,
+            "llm_calls_avoided": state.metrics.llm_calls_avoided,
+            "deterministic_updates": state.metrics.deterministic_updates,
+            "cost_reduction_ratio": cost_reduction,
+            "last_latency_ms": state.metrics.last_latency_ms,
+            "recall_hit_rate": state.metrics.recall_hit_rate,
             "recall_benchmark_suite_count": len(benchmark_suites),
-            "recall_benchmark_enabled_suite_count": len(enabled_benchmark_suites),
-            "recall_benchmark_unrun_suite_count": len(unrun_benchmark_suites),
+            "recall_benchmark_unrun_suite_count": unrun_benchmark_suites,
             "recall_benchmark_run_count": len(benchmark_runs),
-            "recall_benchmark_failed_latest_count": len(failed_latest_benchmark_suites),
+            "recall_benchmark_passed_count": passing_benchmark_runs,
+            "latest_recall_benchmark_score": latest_benchmark_score,
+            "latest_recall_benchmark_passed": bool(latest_benchmark.report.passed) if latest_benchmark else False,
         }
-        if latest_benchmark_score is not None:
-            metrics["recall_benchmark_latest_score"] = _clamp(latest_benchmark_score)
 
         backlog: list[SelfUpgradeBacklogItem] = []
         if pending_updates:
@@ -274,82 +286,37 @@ class SelfUpgradeHealthService:
                     item_id="memory:update_queue_pending",
                     domain="memory",
                     severity="watch",
-                    title="Memory update queue has pending turns",
-                    summary="Low-signal memory updates are batched and waiting for the next drain boundary.",
+                    title="HCMS update queue has pending observations",
+                    summary="Captured observations are waiting for the adaptive debounce queue to drain.",
                     metric="update_queue_pending",
                     count=pending_updates,
-                    recommendation="Let scheduled maintenance or lifecycle flush drain the queue before judging memory freshness.",
+                    recommendation="Flush HCMS memory before judging memory freshness.",
                 )
             )
-        if health.pending_review_count:
+        if active_count == 0:
             backlog.append(
                 SelfUpgradeBacklogItem(
-                    item_id="memory:pending_review",
+                    item_id="memory:empty_hcms",
                     domain="memory",
-                    severity="warning",
-                    title="Memory review queue has pending items",
-                    summary="Curated memory candidates require governance before they become prompt-visible truth.",
-                    metric="pending_review_count",
-                    count=int(health.pending_review_count),
-                    recommendation="Run memory maintenance or review the pending queue through the memory governance lane.",
+                    severity="watch",
+                    title="HCMS has no active memories",
+                    summary="Memory is enabled but no active durable memories are available for recall.",
+                    metric="active_memory_count",
+                    count=0,
+                    recommendation="Run an end-to-end capture flow and verify the zero-LLM updater stores useful observations.",
                 )
             )
-        if health.conflict_count:
-            backlog.append(
-                SelfUpgradeBacklogItem(
-                    item_id="memory:conflicts",
-                    domain="memory",
-                    severity="critical",
-                    title="Memory conflicts need resolution",
-                    summary="Conflicting memory entries can degrade recall and self-upgrade decisions.",
-                    metric="conflict_count",
-                    count=int(health.conflict_count),
-                    recommendation="Resolve conflicts through MemoryManager.govern_memory instead of editing stores directly.",
-                )
-            )
-        if low_confidence_count or missing_evidence_count or duplicate_cluster_count:
+        if quality_issue_count:
             backlog.append(
                 SelfUpgradeBacklogItem(
                     item_id="memory:quality_issues",
                     domain="memory",
-                    severity="warning",
-                    title="Memory quality issues detected",
-                    summary="The health report found low-confidence, unsupported, or duplicate memory entries.",
-                    metric="issue_count",
-                    count=int(low_confidence_count + missing_evidence_count + duplicate_cluster_count),
-                    recommendation="Use the typed memory governance plan to archive, reinforce, review, or refresh weak entries.",
-                    metadata={
-                        "low_confidence_count": int(low_confidence_count),
-                        "missing_evidence_count": int(missing_evidence_count),
-                        "duplicate_cluster_count": int(duplicate_cluster_count),
-                    },
-                )
-            )
-        if skip_count:
-            backlog.append(
-                SelfUpgradeBacklogItem(
-                    item_id="memory:candidate_audit_skipped",
-                    domain="memory",
-                    severity="warning",
-                    title="Memory updater is skipping candidates",
-                    summary="Recent memory candidate audit entries include skipped candidates and blocker evidence.",
-                    metric="candidate_audit_skip_count",
-                    count=skip_count,
-                    recommendation="Inspect candidate audit blockers before loosening memory updater thresholds.",
-                    metadata={"candidate_audit_blocker_count": blocker_count},
-                )
-            )
-        if maintenance_error_count:
-            backlog.append(
-                SelfUpgradeBacklogItem(
-                    item_id="memory:maintenance_errors",
-                    domain="memory",
-                    severity="critical",
-                    title="Memory maintenance automation reported errors",
-                    summary="The last memory maintenance automation run recorded errors.",
-                    metric="maintenance_last_error_count",
-                    count=maintenance_error_count,
-                    recommendation="Inspect the last automation report and rerun bounded maintenance after fixing the root cause.",
+                    severity="watch",
+                    title="HCMS memory quality issues need review",
+                    summary="HCMS health found low confidence or missing-evidence memories.",
+                    metric="quality_issue_count",
+                    count=quality_issue_count,
+                    recommendation="Review HCMS confidence, evidence, and retention signals before promotion.",
                 )
             )
         if unrun_benchmark_suites:
@@ -358,52 +325,33 @@ class SelfUpgradeHealthService:
                     item_id="memory:recall_benchmark_unrun",
                     domain="memory",
                     severity="watch",
-                    title="Recall benchmark suites have not been run",
-                    summary="Persisted recall benchmark suites exist but have no recorded result yet.",
+                    title="HCMS recall benchmark suites need a run",
+                    summary="One or more configured HCMS recall benchmark suites have no recorded run.",
                     metric="recall_benchmark_unrun_suite_count",
-                    count=len(unrun_benchmark_suites),
-                    recommendation="Run persisted recall benchmark suites after memory changes to collect self-upgrade evidence.",
-                    metadata={"suite_ids": [suite.suite_id for suite in unrun_benchmark_suites[:12]]},
-                )
-            )
-        if failed_latest_benchmark_suites:
-            backlog.append(
-                SelfUpgradeBacklogItem(
-                    item_id="memory:recall_benchmark_failed",
-                    domain="memory",
-                    severity="warning",
-                    title="Recall benchmark suites are failing",
-                    summary="One or more enabled recall benchmark suites have a failing latest run.",
-                    metric="recall_benchmark_failed_latest_count",
-                    count=len(failed_latest_benchmark_suites),
-                    recommendation="Inspect failed recall benchmark cases before claiming memory recall quality improved.",
-                    metadata={"suite_ids": [suite.suite_id for suite in failed_latest_benchmark_suites[:12]]},
+                    count=unrun_benchmark_suites,
+                    recommendation="Run HCMS recall benchmarks before judging recall quality.",
                 )
             )
 
-        score = _clamp(float(health.quality_score))
+        score = 1.0
         score = _penalize(score, pending_updates, 0.02, 0.10)
-        score = _penalize(score, skip_count, 0.03, 0.15)
-        score = _penalize(score, maintenance_error_count, 0.20, 0.40)
-        score = _penalize(score, len(unrun_benchmark_suites), 0.03, 0.12)
-        score = _penalize(score, len(failed_latest_benchmark_suites), 0.15, 0.35)
-        if latest_benchmark_score is not None:
-            score = _clamp(min(score, 0.75 + (_clamp(latest_benchmark_score) * 0.25)))
-        status = _status(
-            score=score,
-            critical=bool(health.conflict_count or maintenance_error_count),
-            watch=bool(backlog),
-        )
+        score = _penalize(score, quality_issue_count, 0.02, 0.12)
+        score = _penalize(score, unrun_benchmark_suites, 0.01, 0.05)
+        if active_count == 0:
+            score = _clamp(score - 0.15)
+        if latest_benchmark is not None:
+            score = _clamp(score + min(max(latest_benchmark_score, 0.0), 1.0) * 0.01)
+        status = _status(score=score, critical=False, watch=bool(backlog))
         return (
             SelfUpgradeDomainHealth(
                 domain_id="memory",
-                label="Memory Platform",
+                label="HCMS Memory",
                 status=status,
                 score=score,
                 enabled=True,
                 metrics=metrics,
-                issues=tuple(issue.kind for issue in health.issues[:12]),
-                recommendations=tuple(health.recommendations[:8]),
+                issues=tuple(item.item_id for item in backlog[:12]),
+                recommendations=tuple(dict.fromkeys(item.recommendation for item in backlog if item.recommendation))[:8],
             ),
             tuple(backlog),
         )

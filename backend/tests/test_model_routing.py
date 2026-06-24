@@ -39,6 +39,7 @@ def make_config() -> EffectiveConfig:
                 provider="openai",
                 provider_kind=ProviderKind.OPENAI_COMPATIBLE,
                 capabilities=ModelCapabilities(image_generation=True),
+                image_generation={"endpoint": "mock://image-generation"},
             ),
         },
         subsystem_models={"memory": "vision-model"},

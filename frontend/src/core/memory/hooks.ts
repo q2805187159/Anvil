@@ -4,42 +4,42 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import {
-  activateMemoryProvider,
   auditMemoryAdmin,
-  approveMemoryReview,
   batchGovernMemory,
-  batchMemoryReview,
   createMemoryLayerEntry,
   createMemoryEntry,
   deleteMemoryLayerEntry,
   deleteMemoryEntry,
+  deleteHcmsMemory,
   exportMemoryAdmin,
+  getHcmsMemory,
+  getHcmsMemoryDiff,
+  getHcmsMemoryHistory,
+  getHcmsMemoryVersions,
+  getHcmsMemoryRelations,
   getMemoryHealth,
   getMemoryMaintenanceAutomation,
   getSessionMemory,
   getMemoryTrace,
-  governProfileFacet,
   governMemory,
+  hcmsRecall,
+  hcmsSearch,
+  hcmsWhy,
   flushMemory,
   importMemoryAdmin,
+  listHcmsMemories,
+  type HCMSMemoryListParams,
   listMemoryBenchmarkRuns,
   listMemoryBenchmarkSuites,
   listMemoryConflicts,
   listMemoryLayerEntries,
   listMemoryLayers,
   getMemoryOverview,
-  listMemoryProviders,
-  listProfileFacetAudit,
-  listProfileFacets,
-  listMemoryReview,
   listMemoryStaleness,
   listMemoryStoreEntries,
   listMemoryStores,
   listReflectionJobs,
   pauseReflectionJob,
-  rejectMemoryReview,
-  reloadMemoryProviders,
-  rebuildProfileFacets,
   removeReflectionJob,
   resolveMemoryConflict,
   resumeReflectionJob,
@@ -50,7 +50,6 @@ import {
   runMemoryBenchmarkSuite,
   searchMemorySessions,
   searchMemoryArchive,
-  testMemoryProvider,
   updateMemoryLayerEntry,
   updateMemoryEntry,
 } from "./api";
@@ -232,15 +231,6 @@ export function useDeleteMemoryEntry() {
   });
 }
 
-export function useMemoryProviders(options: QueryGateOptions = {}) {
-  return useQuery({
-    queryKey: ["memory-providers"],
-    queryFn: listMemoryProviders,
-    enabled: queryEnabled(options),
-    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
-  });
-}
-
 export function useMemoryConflicts(options: QueryGateOptions = {}) {
   return useQuery({
     queryKey: ["memory-conflicts"],
@@ -309,15 +299,6 @@ export function useRunMemoryBenchmarkSuite() {
   });
 }
 
-export function useMemoryReview(options: QueryGateOptions = {}) {
-  return useQuery({
-    queryKey: ["memory-review"],
-    queryFn: listMemoryReview,
-    enabled: queryEnabled(options),
-    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
-  });
-}
-
 export function useMemoryAdminAudit(options: QueryGateOptions = {}) {
   return useQuery({
     queryKey: ["memory-audit"],
@@ -335,11 +316,8 @@ function invalidateMemoryAdmin(queryClient: ReturnType<typeof useQueryClient>) {
     queryClient.invalidateQueries({ queryKey: ["memory-conflicts"] }),
     queryClient.invalidateQueries({ queryKey: ["memory-staleness"] }),
     queryClient.invalidateQueries({ queryKey: ["memory-health"] }),
-    queryClient.invalidateQueries({ queryKey: ["memory-review"] }),
     queryClient.invalidateQueries({ queryKey: ["memory-audit"] }),
-    queryClient.invalidateQueries({ queryKey: ["memory-providers"] }),
-    queryClient.invalidateQueries({ queryKey: ["profile-facets"] }),
-    queryClient.invalidateQueries({ queryKey: ["profile-facet-audit"] }),
+    queryClient.invalidateQueries({ queryKey: ["hcms-memories"], exact: false }),
     queryClient.invalidateQueries({ queryKey: ["config-overview"] }),
   ]);
 }
@@ -355,82 +333,19 @@ export function useFlushMemory() {
   });
 }
 
-export function useApproveMemoryReview() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (reviewId: string) => approveMemoryReview(reviewId),
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
-export function useRejectMemoryReview() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (reviewId: string) => rejectMemoryReview(reviewId),
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
-export function useBatchMemoryReview() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: batchMemoryReview,
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
 export function useGovernMemory() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ memoryId, action, reason }: { memoryId: string; action: string; reason?: string }) =>
       governMemory(memoryId, { action, reason, source: "ops" }),
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
-export function useProfileFacets(options: QueryGateOptions = {}) {
-  return useQuery({
-    queryKey: ["profile-facets"],
-    queryFn: listProfileFacets,
-    enabled: queryEnabled(options),
-    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
-  });
-}
-
-export function useProfileFacetAudit(limit = 20, options: QueryGateOptions = {}) {
-  return useQuery({
-    queryKey: ["profile-facet-audit", limit],
-    queryFn: () => listProfileFacetAudit(limit),
-    enabled: queryEnabled(options),
-    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
-  });
-}
-
-export function useGovernProfileFacet() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ facetId, action, reason }: { facetId: string; action: string; reason?: string }) =>
-      governProfileFacet(facetId, { action, reason, source: "ops" }),
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
-export function useRebuildProfileFacets() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => rebuildProfileFacets({ source: "ops" }),
-    onSuccess: async () => {
-      await invalidateMemoryAdmin(queryClient);
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        invalidateMemoryAdmin(queryClient),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory", variables.memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-history", variables.memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-relations", variables.memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-diff", variables.memoryId] }),
+      ]);
     },
   });
 }
@@ -483,40 +398,6 @@ export function useResolveMemoryConflict() {
       resolveMemoryConflict(conflictId, { action }),
     onSuccess: async () => {
       await invalidateMemoryAdmin(queryClient);
-    },
-  });
-}
-
-export function useActivateMemoryProvider() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (providerId: string) => activateMemoryProvider(providerId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["memory-overview"] });
-      await queryClient.invalidateQueries({ queryKey: ["memory-providers"] });
-    },
-  });
-}
-
-export function useReloadMemoryProviders() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: reloadMemoryProviders,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["memory-overview"] });
-      await queryClient.invalidateQueries({ queryKey: ["memory-providers"] });
-      await queryClient.invalidateQueries({ queryKey: ["memory-audit"] });
-    },
-  });
-}
-
-export function useTestMemoryProvider() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: testMemoryProvider,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["memory-providers"] });
-      await queryClient.invalidateQueries({ queryKey: ["memory-audit"] });
     },
   });
 }
@@ -584,6 +465,132 @@ export function useMemoryTrace(threadId: string | null) {
     ...mutation,
     data,
   };
+}
+
+export function useHCMSRecall() {
+  const [data, setData] = useState<Awaited<ReturnType<typeof hcmsRecall>> | null>(null);
+  const mutation = useMutation({
+    mutationFn: ({ query, limit = 10 }: { query: string; limit?: number }) => hcmsRecall(query, limit),
+    onSuccess: (result) => setData(result),
+  });
+
+  return {
+    ...mutation,
+    data,
+  };
+}
+
+export function useHCMSSearch() {
+  const [data, setData] = useState<Awaited<ReturnType<typeof hcmsSearch>> | null>(null);
+  const mutation = useMutation({
+    mutationFn: ({ query, limit = 10 }: { query: string; limit?: number }) => hcmsSearch(query, limit),
+    onSuccess: (result) => setData(result),
+  });
+
+  return {
+    ...mutation,
+    data,
+  };
+}
+
+export function useHCMSWhy() {
+  const [data, setData] = useState<Awaited<ReturnType<typeof hcmsWhy>> | null>(null);
+  const mutation = useMutation({
+    mutationFn: ({ query, limit = 3 }: { query: string; limit?: number }) => hcmsWhy(query, limit),
+    onSuccess: (result) => setData(result),
+  });
+
+  return {
+    ...mutation,
+    data,
+  };
+}
+
+export function useHCMSMemoryHistory(memoryId: string | null, options: QueryGateOptions = {}) {
+  return useQuery({
+    queryKey: ["hcms-memory-history", memoryId],
+    queryFn: () => getHcmsMemoryHistory(memoryId as string),
+    enabled: Boolean(memoryId) && queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
+}
+
+export function useHCMSMemoryVersions(memoryId: string | null, options: QueryGateOptions = {}) {
+  return useQuery({
+    queryKey: ["hcms-memory-versions", memoryId],
+    queryFn: () => getHcmsMemoryVersions(memoryId as string),
+    enabled: Boolean(memoryId) && queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
+}
+
+export function useHCMSMemory(memoryId: string | null, options: QueryGateOptions = {}) {
+  return useQuery({
+    queryKey: ["hcms-memory", memoryId],
+    queryFn: () => getHcmsMemory(memoryId as string),
+    enabled: Boolean(memoryId) && queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
+}
+
+export function useHCMSMemories(params: HCMSMemoryListParams = {}, options: QueryGateOptions = {}) {
+  const query = params.query?.trim() || "";
+  const state = params.state || "all";
+  const category = params.category?.trim() || "";
+  const layerId = params.layerId || "all";
+  const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
+  return useQuery({
+    queryKey: ["hcms-memories", query, state, category, layerId, limit, offset],
+    queryFn: () =>
+      listHcmsMemories({
+        query,
+        state,
+        category,
+        layerId,
+        limit,
+        offset,
+      }),
+    enabled: queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
+}
+
+export function useDeleteHCMSMemory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (memoryId: string) => deleteHcmsMemory(memoryId),
+    onSuccess: async (_, memoryId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory", memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-history", memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-relations", memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memory-diff", memoryId] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-health"] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-stores"] }),
+        queryClient.invalidateQueries({ queryKey: ["hcms-memories"], exact: false }),
+      ]);
+    },
+  });
+}
+
+export function useHCMSMemoryRelations(memoryId: string | null, options: QueryGateOptions = {}) {
+  return useQuery({
+    queryKey: ["hcms-memory-relations", memoryId],
+    queryFn: () => getHcmsMemoryRelations(memoryId as string),
+    enabled: Boolean(memoryId) && queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
+}
+
+export function useHCMSMemoryDiff(memoryId: string | null, options: QueryGateOptions = {}) {
+  return useQuery({
+    queryKey: ["hcms-memory-diff", memoryId],
+    queryFn: () => getHcmsMemoryDiff(memoryId as string),
+    enabled: Boolean(memoryId) && queryEnabled(options),
+    staleTime: MEMORY_ADMIN_STALE_TIME_MS,
+  });
 }
 
 export function useReflectionJobs(options: QueryGateOptions = {}) {

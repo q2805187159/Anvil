@@ -22,7 +22,7 @@ vi.mock("@/src/core/self-upgrade/hooks", () => ({
       domains: [
         {
           domain_id: "memory",
-          label: "Memory Platform",
+          label: "HCMS Memory",
           status: "watch",
           score: 0.82,
           enabled: true,
@@ -81,7 +81,7 @@ describe("SelfUpgradePanel", () => {
     render(<SelfUpgradePanel copy={opsCopy("en-US")} />);
 
     expect(screen.getByText("Self-upgrade Health")).toBeInTheDocument();
-    expect(screen.getByText("Memory Platform")).toBeInTheDocument();
+    expect(screen.getByText("HCMS Memory")).toBeInTheDocument();
     expect(screen.getByText("Trajectory Quality")).toBeInTheDocument();
     expect(screen.getByText("memory:update_queue_pending")).toBeInTheDocument();
     expect(screen.getByText("trajectory:quality_failed")).toBeInTheDocument();

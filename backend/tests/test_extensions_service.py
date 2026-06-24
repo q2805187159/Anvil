@@ -284,8 +284,8 @@ def test_extensions_service_hides_legacy_agent_skill_download_tool() -> None:
                                 "display_name": (
                                     "Get an Agent Skill by ID, including all its files "
                                     "(SKILL.md, reference docs, scripts, etc.). Returns the skill metadata "
-                                    "and file contents. Save to .claude/skills/{slug}/SKILL.md and "
-                                    ".claude/skills/{slug}/[other files] structure if user asks to download."
+                                    "and file contents. Save to third-party skill directories "
+                                    "if user asks to download."
                                 ),
                                 "capability_group": "skill_governance",
                             },
@@ -303,7 +303,7 @@ def test_extensions_service_hides_legacy_agent_skill_download_tool() -> None:
     assert [tool.name for tool in tools] == ["repo_search"]
 
 
-def test_extensions_service_supports_hermes_mcp_tools_policy() -> None:
+def test_extensions_service_supports_inline_mcp_tools_policy() -> None:
     normalized = normalize_loaded_config(
         {
             "mcpServers": {
@@ -327,14 +327,14 @@ def test_extensions_service_supports_hermes_mcp_tools_policy() -> None:
     )
     config = EffectiveConfig(**normalized)
 
-    materialization = ExtensionsService().discover(config=config, fingerprint="cfg-hermes-tools").materializations[0]
+    materialization = ExtensionsService().discover(config=config, fingerprint="cfg-inline-tools").materializations[0]
 
     assert [tool.name for tool in materialization.tools] == ["repo_search"]
     assert materialization.resources == ()
     assert materialization.prompts == ()
 
 
-def test_extensions_service_treats_empty_hermes_include_as_resource_only() -> None:
+def test_extensions_service_treats_empty_include_as_resource_only() -> None:
     normalized = normalize_loaded_config(
         {
             "mcpServers": {

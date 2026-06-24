@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveGatewayUrl } from "@/src/core/api/client";
 
-import { approveThread, cancelApproval, createThread, deleteThread, deleteThreadFollowup, enqueueThreadFollowup, getThreadDetail, getThreadSettings, getThreadState, interruptThreadRun, listThreadRunEvents, listThreads, popNextThreadFollowup, runThread, streamThreadApprovalWithSignal, streamThreadRun, streamThreadRunWithSignal, streamThreadUserInteractionWithSignal, updateThreadFollowup, updateThreadSettings } from "./api";
+import { approveThread, cancelApproval, createThread, deleteThread, deleteThreadFollowup, enqueueThreadFollowup, getThreadDetail, getThreadEvaluationReport, getThreadSettings, getThreadState, interruptThreadRun, listThreadRunEvents, listThreads, popNextThreadFollowup, runThread, streamThreadApprovalWithSignal, streamThreadRun, streamThreadRunWithSignal, streamThreadUserInteractionWithSignal, updateThreadFollowup, updateThreadSettings } from "./api";
 
 describe("threads api", () => {
   beforeEach(() => {
@@ -431,6 +431,61 @@ describe("threads api", () => {
     expect(result.messages[1]?.reasoning?.text).toBe("thinking");
     expect(result.messages[1]?.reasoning?.duration_ms).toBe(1200);
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:18000/threads/thread-a/detail", expect.any(Object));
+  });
+
+  it("loads thread evaluation reports through the observability endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          report_id: "report-thread-a",
+          thread_id: "thread-a",
+          run_id: "run-a",
+          generated_at: "2026-06-11T00:00:00.000Z",
+          outcome: "passed",
+          score: 1,
+          evaluator: null,
+          runtime: {
+            status: "completed",
+            model: "openai",
+            execution_mode: "default",
+            reasoning_effort: null,
+            runtime_phase_timings: {},
+            runtime_phase_diagnostics: {},
+            runtime_assembly_snapshot: {},
+            runtime_assembly_diff: {},
+            context_v2_evaluation: {
+              trace_id: "ctx-trace-1",
+              selected_memory: ["claim-1"],
+              selected_tools: ["read_file"],
+              selected_tool_result_refs: ["artifact://thread-a/tool-results/call-read.txt"],
+            },
+            context_window_usage: {},
+            token_usage: {},
+            model_fallback_history: [],
+          },
+          tool_calls: [],
+          approvals: [],
+          artifacts: {},
+          hidden_bug_risks: [],
+          recommendations: [],
+          notes: [],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const result = await getThreadEvaluationReport("thread-a");
+    expect(result.runtime.context_v2_evaluation.selected_memory).toEqual(["claim-1"]);
+    expect(result.runtime.context_v2_evaluation.selected_tool_result_refs).toEqual([
+      "artifact://thread-a/tool-results/call-read.txt",
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18000/threads/thread-a/evaluation-report",
+      expect.any(Object),
+    );
   });
 
   it("loads thread detail with an explicit message window", async () => {

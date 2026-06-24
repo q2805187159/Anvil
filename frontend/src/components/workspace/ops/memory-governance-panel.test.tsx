@@ -2,730 +2,618 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { opsCopy } from "./types";
 import { MemoryGovernancePanel } from "./memory-governance-panel";
+import { opsCopy } from "./types";
 
-const approveReviewMock = vi.fn().mockResolvedValue({});
-const rejectReviewMock = vi.fn().mockResolvedValue({});
-const batchReviewMock = vi.fn().mockResolvedValue({ approved: ["review-1"], rejected: [] });
-const resolveConflictMock = vi.fn().mockResolvedValue({});
-const runBenchmarkMock = vi.fn().mockResolvedValue({});
-const flushMemoryMock = vi.fn().mockResolvedValue({});
-const governMemoryMock = vi.fn().mockResolvedValue({});
-const batchGovernMemoryMock = vi.fn().mockResolvedValue({});
-const runMaintenanceMock = vi.fn().mockResolvedValue({});
-const runMaintenanceAutomationMock = vi.fn().mockResolvedValue({});
-const runBenchmarkSuiteMock = vi.fn().mockResolvedValue({});
-const governProfileFacetMock = vi.fn().mockResolvedValue({});
-const rebuildProfileFacetsMock = vi.fn().mockResolvedValue({});
-
-const refetch = vi.fn().mockResolvedValue({});
-const hookOptions = {
-  useMemoryOverview: vi.fn(),
-  useMemoryHealth: vi.fn(),
-  useMemoryProviders: vi.fn(),
-  useMemoryAdminAudit: vi.fn(),
-  useMemoryLayerEntries: vi.fn(),
-  useProfileFacets: vi.fn(),
-  useProfileFacetAudit: vi.fn(),
-  useMemoryReview: vi.fn(),
-  useMemoryConflicts: vi.fn(),
-  useMemoryStaleness: vi.fn(),
-  useMemoryMaintenanceAutomation: vi.fn(),
-  useMemoryBenchmarkSuites: vi.fn(),
-  useMemoryBenchmarkRuns: vi.fn(),
-};
+const refetchOverview = vi.fn().mockResolvedValue({});
+const refetchHealth = vi.fn().mockResolvedValue({});
+const recallMutate = vi.fn().mockResolvedValue({});
+const whyMutate = vi.fn().mockResolvedValue({});
+const traceMutate = vi.fn().mockResolvedValue({});
+const refetchHcmsMemories = vi.fn().mockResolvedValue({});
+const deleteMemoryMutate = vi.fn().mockResolvedValue({ memory_id: "mem_deploy", status: "deleted", deleted: true, engine_notes: [] });
+const governMemoryMutate = vi.fn().mockResolvedValue({ action: "archive", memory_id: "mem_deploy", status: "ok" });
+let selectedMemoryLifecycleState = "active";
+function defaultRecallItems(): any[] {
+  return [
+    {
+      memory_id: "mem_deploy",
+      score: 0.88,
+      raw_scores: { bm25: 0.62, vector: 0.81, graph: 0.5, temporal: 0.92 },
+      ranks: { bm25: 2, vector: 1, graph: 3, temporal: 1 },
+      explanation: "temporal causal match",
+      memory: {
+        memory_id: "mem_deploy",
+        version: 3,
+        parent_id: "mem_deploy_v2",
+        content: "Deployment failed because the canary database migration ran before schema validation.",
+        summary: "Canary deployment failed after migration ordering drift.",
+        category: "error_pattern",
+        confidence: 0.93,
+        salience: 0.82,
+        state: "active",
+        source_thread_id: "thread-deploy",
+        source_type: "observation",
+        tags: ["deploy", "canary"],
+        entities: ["canary", "schema validation"],
+        concepts: ["migration ordering"],
+        metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+        evidence: [
+          {
+            evidence_id: "ev_deploy",
+            type: "observation",
+            content: "Run log showed migration before validation.",
+            weight: 0.91,
+            timestamp: "2026-06-03T02:00:00Z",
+            source_id: "thread-deploy",
+            metadata: {},
+          },
+        ],
+        created_at: "2026-06-03T02:00:00Z",
+        updated_at: "2026-06-03T02:20:00Z",
+        accessed_at: "2026-06-03T02:25:00Z",
+      },
+    },
+  ];
+}
+function defaultWhyPaths(): any[] {
+  return [
+    {
+      total_strength: 0.84,
+      confidence: 0.88,
+      nodes: [
+        { memory_id: "mem_migration", event_type: "decision", timestamp: "2026-06-03T01:30:00Z", confidence: 0.85 },
+        { memory_id: "mem_deploy", event_type: "error_pattern", timestamp: "2026-06-03T02:00:00Z", confidence: 0.93 },
+      ],
+      edges: [
+        {
+          edge_id: "edge_1",
+          source_event: "mem_migration",
+          target_event: "mem_deploy",
+          causal_type: "direct_cause",
+          strength: 0.84,
+          evidence: ["ev_deploy"],
+          timestamp: "2026-06-03T02:00:00Z",
+          metadata: {},
+        },
+      ],
+    },
+  ];
+}
+let hcmsRecallItems: any[] = defaultRecallItems();
+let hcmsWhyPaths: any[] = defaultWhyPaths();
+let hcmsMemoryItems = [
+  {
+    memory_id: "mem_deploy",
+    version: 3,
+    parent_id: "mem_deploy_v2",
+    content: "Deployment failed because the canary database migration ran before schema validation.",
+    summary: "Canary deployment failed after migration ordering drift.",
+    category: "error_pattern",
+    confidence: 0.93,
+    salience: 0.82,
+    state: "active",
+    source_thread_id: "thread-deploy",
+    source_type: "observation",
+    tags: ["deploy", "canary"],
+    entities: ["canary", "schema validation"],
+    concepts: ["migration ordering"],
+    metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+    evidence: [
+      {
+        evidence_id: "ev_deploy",
+        type: "observation",
+        content: "Run log showed migration before validation.",
+        weight: 0.91,
+        timestamp: "2026-06-03T02:00:00Z",
+        source_id: "thread-deploy",
+        metadata: {},
+      },
+    ],
+    created_at: "2026-06-03T02:00:00Z",
+    updated_at: "2026-06-03T02:20:00Z",
+    accessed_at: "2026-06-03T02:25:00Z",
+  },
+  {
+    memory_id: "mem_migration",
+    version: 1,
+    parent_id: null,
+    content: "Schema validation was moved after the canary migration step.",
+    summary: "Schema validation moved after canary migration.",
+    category: "decision",
+    confidence: 0.85,
+    salience: 0.75,
+    state: "active",
+    source_thread_id: "thread-deploy",
+    source_type: "observation",
+    tags: ["deploy"],
+    entities: ["schema validation"],
+    concepts: ["migration ordering"],
+    metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+    evidence: [],
+    created_at: "2026-06-03T01:30:00Z",
+    updated_at: "2026-06-03T01:30:00Z",
+    accessed_at: "2026-06-03T02:25:00Z",
+  },
+];
 
 vi.mock("@/src/core/memory/hooks", () => ({
-  useMemoryOverview: (options = {}) => {
-    hookOptions.useMemoryOverview(options);
-    return {
-      isFetching: false,
-      refetch,
-      data: {
-        store_count: 1,
-        archive_turn_count: 7,
-      },
-    };
-  },
-  useMemoryHealth: (options = {}) => {
-    hookOptions.useMemoryHealth(options);
-    return {
-      isFetching: false,
-      refetch,
-      data: {
-        status: "warning",
-        quality_score: 0.81,
-        archive_turn_count: 7,
-        pending_review_count: 1,
-        conflict_count: 1,
-        stale_count: 1,
-        provider_count: 1,
-        provider_health: { local: "ready" },
-        generated_at: "2026-05-17T06:00:00Z",
-        recommendations: ["Review duplicated workflow facts"],
-        issues: [
-          {
-            issue_id: "issue-1",
-            kind: "low_salience",
-            severity: "warning",
-            message: "Low salience memory should be reviewed",
-            recommendation: "Archive or reinforce it",
-            related_memory_ids: [],
-          },
-        ],
-        stores: [
-          {
-            store_id: "user-profile",
-            layer_id: "user",
-            status: "warning",
-            entry_count: 4,
-            active_count: 3,
-            inactive_count: 1,
-            low_confidence_count: 1,
-            low_salience_count: 1,
-            missing_evidence_count: 0,
-            duplicate_cluster_count: 1,
-            conflict_count: 1,
-            stale_count: 1,
-            accessed_count: 2,
-            hot_count: 1,
-            warm_count: 1,
-            cold_count: 2,
-            retention_average: 0.46,
-            injection_token_pressure: 0.72,
-            quality_score: 0.81,
-            issues: [],
-          },
-        ],
-      },
-    };
-  },
-  useMemoryProviders: (options = {}) => {
-    hookOptions.useMemoryProviders(options);
-    return { isFetching: false, refetch, data: [] };
-  },
-  useMemoryAdminAudit: (options = {}) => {
-    hookOptions.useMemoryAdminAudit(options);
-    return {
+  useMemoryOverview: () => ({
     isFetching: false,
-    refetch,
+    refetch: refetchOverview,
     data: {
-      candidate_audit: [
+      active_engine_id: "hcms",
+      runtime_mode: "hcms",
+      store_count: 2,
+      archive_turn_count: 3,
+      reflection_job_count: 1,
+      migration_status: {},
+      stores: [],
+      layers: [],
+    },
+  }),
+  useMemoryHealth: () => ({
+    isFetching: false,
+    refetch: refetchHealth,
+    data: {
+      status: "healthy",
+      quality_score: 0.91,
+      archive_turn_count: 3,
+      observation_queue_count: 0,
+      conflict_count: 0,
+      stale_count: 0,
+      engine_count: 1,
+      engine_health: { hcms: "healthy" },
+      recommendations: [],
+      generated_at: "2026-06-03T02:30:00Z",
+      issues: [],
+      stores: [
         {
-          audit_id: "candidate-1",
-          action: "skip",
-          reason: "quality gate skipped candidate",
+          store_id: "hcms_workspace",
           layer_id: "workspace",
-          store_id: "runtime_memory",
-          category: "resolved_outcome",
-          candidate_preview: "Temporary note without durable evidence.",
-          quality_score: 0.31,
-          quality_decision: "skip",
-          blockers: ["missing_durable_outcome_signal"],
-          confidence: 0.55,
-          salience: 0.4,
-          priority: 0.5,
-          evidence_count: 1,
-          evidence_refs: ["archive-1"],
-          target_id: null,
-          supersedes: [],
-          conflicts_with: [],
-          created_at: "2026-05-17T05:30:00Z",
+          status: "healthy",
+          entry_count: 2,
+          active_count: 2,
+          inactive_count: 0,
+          low_confidence_count: 0,
+          low_salience_count: 0,
+          missing_evidence_count: 0,
+          duplicate_cluster_count: 0,
+          conflict_count: 0,
+          stale_count: 0,
+          accessed_count: 1,
+          hot_count: 1,
+          warm_count: 1,
+          cold_count: 0,
+          retention_average: 0.78,
+          injection_token_pressure: 0.22,
+          quality_score: 0.94,
+          issues: [],
         },
       ],
     },
-    };
-  },
-  useMemoryLayerEntries: (layerId: string, options = {}) => {
-    hookOptions.useMemoryLayerEntries(layerId, options);
-    return {
-    isFetching: false,
-    refetch,
-    data:
-      layerId === "user"
-        ? [
-            {
-              entry_id: "entry-1",
-              memory_id: "mem-1",
-              store_id: "user-profile",
-              layer_id: "user",
-              content: "User prefers concise implementation summaries.",
-              category: "style",
-              source_kind: "manual",
-              priority: 0.7,
-              confidence: 0.9,
-              salience: 0.8,
-              evidence_refs: ["thread-a"],
-              status: "active",
-              metadata: { profile_class: "style" },
-              created_at: "2026-05-17T05:00:00Z",
-              updated_at: "2026-05-17T05:00:00Z",
-            },
-          ]
-        : [],
-    };
-  },
-  useProfileFacets: (options = {}) => {
-    hookOptions.useProfileFacets(options);
-    return {
-    isFetching: false,
-    refetch,
+  }),
+  useHCMSRecall: () => ({
+    isPending: false,
+    mutateAsync: recallMutate,
     data: {
-      policy: {
-        active_threshold: 1.5,
-        provisional_threshold: 0.7,
-        candidate_threshold: 0.4,
-        require_review_classes: ["identity", "veto"],
-        class_budgets: { style: 4, tooling: 5 },
-        default_class_budget: 5,
-        max_facets: 80,
-        pollution_requires_review: true,
-      },
+      query: "why did deployment fail",
+      engine_notes: ["HCMS four-stream recall active"],
+      metrics: { recall_count: 1, last_latency_ms: 24.5, recall_hit_rate: 0.9 },
+      items: hcmsRecallItems,
+    },
+  }),
+  useHCMSWhy: () => ({
+    isPending: false,
+    mutateAsync: whyMutate,
+    data: {
+      query: "why did deployment fail",
+      engine_notes: ["HCMS causal reasoning active"],
+      paths: hcmsWhyPaths,
+    },
+  }),
+  useHCMSMemories: () => ({
+    isFetching: false,
+    refetch: refetchHcmsMemories,
+    data: {
+      items: hcmsMemoryItems,
+      total: hcmsMemoryItems.length,
+      limit: 50,
+      offset: 0,
+      query: null,
+      state: "all",
+      category: null,
+      layer_id: "all",
+      engine_notes: ["HCMS memory list"],
+    },
+  }),
+  useMemoryTrace: () => ({
+    isPending: false,
+    mutateAsync: traceMutate,
+    data: {
       items: [
         {
-          facet_id: "facet-1",
-          source_memory_id: "mem-1",
-          entry_id: "entry-1",
-          store_id: "user_profile",
-          class_id: "style",
-          key: "style:summary",
-          value: "User prefers concise implementation summaries.",
-          source_category: "preference",
-          evidence_refs: ["thread-a"],
+          trace_id: "trace_1",
+          thread_id: "thread-deploy",
+          query: "why did deployment fail",
+          trace_kind: "hcms_recall",
+          target_id: "mem_deploy",
+          engine_notes: ["HCMS four-stream recall active"],
+          evidence: [],
+          created_at: "2026-06-03T02:31:00Z",
+        },
+      ],
+    },
+  }),
+  useDeleteHCMSMemory: () => ({
+    isPending: false,
+    mutateAsync: deleteMemoryMutate,
+    data: null,
+  }),
+  useGovernMemory: () => ({
+    isPending: false,
+    mutateAsync: governMemoryMutate,
+  }),
+  useHCMSMemoryHistory: () => ({
+    isFetching: false,
+    data: {
+      memory_id: "mem_deploy",
+      engine_notes: [],
+      versions: [
+        {
+          version_id: "ver_3",
+          memory_id: "mem_deploy",
+          version: 3,
+          parent_id: "ver_2",
+          content: "Deployment failed because the canary database migration ran before schema validation.",
+          summary: "Canary deployment failed after migration ordering drift.",
+          diff: "@@ -1 +1 @@",
+          reason: "manual_update",
+          created_at: "2026-06-03T02:20:00Z",
+        },
+      ],
+    },
+  }),
+  useHCMSMemory: () => ({
+    isFetching: false,
+    data: {
+      memory: {
+        memory_id: "mem_deploy",
+        version: 3,
+        parent_id: "mem_deploy_v2",
+        content: "Deployment failed because the canary database migration ran before schema validation.",
+        summary: "Canary deployment failed after migration ordering drift.",
+        category: "error_pattern",
+        confidence: 0.93,
+        salience: 0.82,
+        state: selectedMemoryLifecycleState,
+        source_thread_id: "thread-deploy",
+        source_type: "observation",
+        tags: ["deploy", "canary"],
+        entities: ["canary", "schema validation"],
+        concepts: ["migration ordering"],
+        metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+        evidence: [
+          {
+            evidence_id: "ev_deploy",
+            type: "observation",
+            content: "Run log showed migration before validation.",
+            weight: 0.91,
+            timestamp: "2026-06-03T02:00:00Z",
+            source_id: "thread-deploy",
+            metadata: {},
+          },
+        ],
+        created_at: "2026-06-03T02:00:00Z",
+        updated_at: "2026-06-03T02:20:00Z",
+        accessed_at: "2026-06-03T02:25:00Z",
+      },
+      engine_notes: ["HCMS memory detail active"],
+    },
+  }),
+  useHCMSMemoryRelations: () => ({
+    isFetching: false,
+    data: {
+      memory_id: "mem_deploy",
+      engine_notes: ["HCMS relation graph active"],
+      relations: [
+        {
+          relation_id: "rel_schema",
+          source_memory_id: "mem_migration",
+          target_memory_id: "mem_deploy",
+          relation_type: "causes",
+          weight: 0.84,
           confidence: 0.9,
-          salience: 0.8,
-          priority: 0.7,
-          stability_score: 1.76,
-          state: "active",
-          user_state: "auto",
-          prompt_visible: true,
-          source_polluted: false,
-          pollution_reasons: [],
-          reason: "stability score reached active threshold",
-          last_seen_at: "2026-05-17T05:00:00Z",
-          created_at: "2026-05-17T05:00:00Z",
-          updated_at: "2026-05-17T05:00:00Z",
-        },
-        {
-          facet_id: "facet-2",
-          source_memory_id: "mem-2",
-          entry_id: "entry-2",
-          store_id: "user_profile",
-          class_id: "identity",
-          key: "identity:teams",
-          value: "User works with release engineering teams.",
-          source_category: "identity",
-          evidence_refs: ["thread-b"],
-          confidence: 0.8,
-          salience: 0.6,
-          priority: 0.4,
-          stability_score: 1.5,
-          state: "provisional",
-          user_state: "auto",
-          prompt_visible: false,
-          source_polluted: true,
-          pollution_reasons: ["external information tool used"],
-          reason: "source thread used external/web/MCP context; requires explicit review before active prompt injection",
-          last_seen_at: "2026-05-17T05:00:00Z",
-          created_at: "2026-05-17T05:00:00Z",
-          updated_at: "2026-05-17T05:00:00Z",
-        },
-      ],
-    },
-    };
-  },
-  useProfileFacetAudit: (_limit = 20, options = {}) => {
-    hookOptions.useProfileFacetAudit(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: {
-      items: [
-        {
-          audit_id: "facet-audit-1",
-          action: "pin",
-          facet_id: "facet-1",
-          source_memory_id: "mem-1",
-          before_state: "provisional",
-          after_state: "active",
-          before_user_state: "auto",
-          after_user_state: "pinned",
-          reason: "operator confirmed",
-          source: "ops",
-          created_at: "2026-05-17T05:00:00Z",
-        },
-      ],
-    },
-    };
-  },
-  useMemoryReview: (options = {}) => {
-    hookOptions.useMemoryReview(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: [
-      {
-        review_id: "review-1",
-        layer_id: "user",
-        store_id: "user-profile",
-        action: "add",
-        content: "User prefers durable memory drilldowns.",
-        category: "workflow",
-        priority: 0.6,
-        confidence: 0.7,
-        salience: 0.8,
-        evidence_refs: ["thread-b"],
-        supersedes: [],
-        conflicts_with: [],
-        rationale: "Repeated in two sessions",
-        status: "pending",
-        created_at: "2026-05-17T05:10:00Z",
-        updated_at: "2026-05-17T05:10:00Z",
-      },
-    ],
-    };
-  },
-  useMemoryConflicts: (options = {}) => {
-    hookOptions.useMemoryConflicts(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: [
-      {
-        conflict_id: "conflict-1",
-        memory_id: "mem-left",
-        conflicting_memory_id: "mem-right",
-        reason: "conflicting memory content detected",
-        created_at: "2026-05-17T05:20:00Z",
-        resolved: false,
-        recommended_action: "review",
-        memory_content: "Use MiniMax for testing.",
-        conflicting_content: "Use OpenAI for testing.",
-      },
-    ],
-    };
-  },
-  useMemoryStaleness: (options = {}) => {
-    hookOptions.useMemoryStaleness(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: [
-      {
-        memory_id: "mem-cold",
-        layer_id: "workspace",
-        stale_score: 0.82,
-        reason: "Not accessed recently",
-        last_accessed_at: "2026-04-01T00:00:00Z",
-        expires_at: null,
-        retention_score: 0.18,
-        tier: "cold",
-        access_count: 0,
-        reinforcement_boost: 0.05,
-        temporal_decay: 0.73,
-        salience: 0.2,
-      },
-    ],
-    };
-  },
-  useFlushMemory: () => ({ isPending: false, mutateAsync: flushMemoryMock }),
-  useBatchGovernMemory: () => ({
-    isPending: false,
-    mutateAsync: batchGovernMemoryMock,
-    data: {
-      policy: "balanced",
-      layer_id: null,
-      dry_run: true,
-      candidate_count: 1,
-      executed_count: 0,
-      skipped_count: 1,
-      errors: [],
-      results: [],
-      items: [
-        {
-          memory_id: "mem-cold",
-          store_id: "runtime_memory",
-          entry_id: "entry-cold",
-          layer_id: "workspace",
-          action: "review",
-          reason: "balanced policy queued stale memory for review",
-          tier: "cold",
-          stale_score: 0.82,
-          retention_score: 0.18,
-          salience: 0.2,
-          access_count: 0,
-          last_accessed_at: "2026-04-01T00:00:00Z",
-          expires_at: null,
-        },
-      ],
-    },
-  }),
-  useRunMemoryMaintenance: () => ({
-    isPending: false,
-    mutateAsync: runMaintenanceMock,
-    data: {
-      run_id: "maintenance-1",
-      status: "noop",
-      dry_run: true,
-      policy: "balanced",
-      layer_id: null,
-      source: "ops",
-      update_queue_pending: 2,
-      update_queue_drained: 2,
-      reflection_jobs_due: 1,
-      reflection_jobs_run: 1,
-      reflection_entries_written: 1,
-      governance: {
-        policy: "balanced",
-        layer_id: null,
-        dry_run: true,
-        candidate_count: 1,
-        executed_count: 0,
-        skipped_count: 1,
-        errors: [],
-        results: [],
-        items: [],
-      },
-      health_before: { quality_score: 0.7 },
-      health_after: { quality_score: 0.75 },
-      actions_executed: {},
-      skipped_actions: { review: 1 },
-      errors: [],
-      started_at: "2026-05-17T05:40:00Z",
-      finished_at: "2026-05-17T05:40:01Z",
-    },
-  }),
-  useMemoryMaintenanceAutomation: (options = {}) => {
-    hookOptions.useMemoryMaintenanceAutomation(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: {
-      enabled: true,
-      last_run_at: "2026-05-17T05:45:00Z",
-      last_status: "completed",
-      last_reason: "due",
-      last_run_id: "automation-1",
-      last_counts: {
-        update_queue_drained: 2,
-        reflection_jobs_run: 1,
-        governance_executed: 1,
-      },
-      last_error_count: 0,
-      last_errors: [],
-      next_run_at: "2026-05-17T11:45:00Z",
-      tick_seconds: 300,
-      interval_seconds: 21600,
-      min_idle_seconds: 0,
-      dry_run: true,
-      execute: false,
-      policy: "balanced",
-      layer_id: null,
-      limit: 12,
-      run_reflection_due_jobs: true,
-    },
-    };
-  },
-  useRunMemoryMaintenanceAutomation: () => ({
-    isPending: false,
-    mutateAsync: runMaintenanceAutomationMock,
-    data: {
-      ran: false,
-      reason: "not_due",
-      next_run_at: "2026-05-17T11:45:00Z",
-      report: null,
-    },
-  }),
-  useMemoryBenchmarkSuites: (options = {}) => {
-    hookOptions.useMemoryBenchmarkSuites(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: [
-      {
-        suite_id: "northstar-regression",
-        name: "Northstar Regression",
-        description: "Persistent recall regression suite.",
-        cases: [
-          {
-            case_id: "northstar-canary",
-            query: "Northstar canary pytest",
-            thread_id: "ops-benchmark",
-            expected_terms: ["canary deployment"],
-            expected_memory_ids: ["mem-1"],
-            expected_archive_thread_ids: [],
-            forbidden_terms: [],
-            forbidden_memory_ids: [],
-            min_score: 0.6,
+          bidirectional: false,
+          metadata: {},
+          created_at: "2026-06-03T02:00:00Z",
+          updated_at: "2026-06-03T02:10:00Z",
+          source_memory: {
+            memory_id: "mem_migration",
+            version: 1,
+            parent_id: null,
+            content: "Schema validation was moved after the canary migration step.",
+            summary: "Schema validation moved after canary migration.",
+            category: "decision",
+            confidence: 0.85,
+            salience: 0.75,
+            state: "active",
+            source_thread_id: "thread-deploy",
+            source_type: "observation",
+            tags: ["deploy"],
+            entities: ["schema validation"],
+            concepts: ["migration ordering"],
+            metadata: {},
+            evidence: [],
+            created_at: "2026-06-03T01:30:00Z",
+            updated_at: "2026-06-03T01:30:00Z",
+            accessed_at: "2026-06-03T02:25:00Z",
           },
-        ],
-        tags: ["memory"],
-        enabled: true,
-        source: "ops",
-        created_at: "2026-05-17T05:00:00Z",
-        updated_at: "2026-05-17T05:50:00Z",
-        latest_run_id: "run-1",
-        latest_score: 0.88,
-        latest_passed: true,
-        latest_run_at: "2026-05-17T05:50:00Z",
-      },
-    ],
-    };
-  },
-  useMemoryBenchmarkRuns: (_suiteId = null, options = {}) => {
-    hookOptions.useMemoryBenchmarkRuns(options);
-    return {
-    isFetching: false,
-    refetch,
-    data: [
-      {
-        run_id: "run-1",
-        suite_id: "northstar-regression",
-        suite_name: "Northstar Regression",
-        source: "ops",
-        created_at: "2026-05-17T05:50:00Z",
-        report: {
-          suite_id: "northstar-regression",
-          passed: true,
-          score: 0.88,
-          case_count: 1,
-          passed_count: 1,
-          failed_count: 0,
-          recall_hit_rate: 1,
-          false_positive_rate: 0,
-          average_evidence_count: 2,
-          generated_at: "2026-05-17T05:50:00Z",
-          recommendations: [],
-          cases: [],
-        },
-      },
-    ],
-    };
-  },
-  useRunMemoryBenchmarkSuite: () => ({
-    isPending: false,
-    mutateAsync: runBenchmarkSuiteMock,
-  }),
-  useRunMemoryBenchmark: () => ({
-    isPending: false,
-    mutateAsync: runBenchmarkMock,
-    data: {
-      suite_id: "ops-memory-smoke",
-      passed: false,
-      score: 0.5,
-      case_count: 1,
-      passed_count: 0,
-      failed_count: 1,
-      recall_hit_rate: 0.5,
-      false_positive_rate: 0.25,
-      average_evidence_count: 2,
-      generated_at: "2026-05-17T05:30:00Z",
-      recommendations: ["Add stronger evidence"],
-      cases: [
-        {
-          case_id: "case-1",
-          query: "concise summaries",
-          passed: false,
-          score: 0.42,
-          recall_hits: 1,
-          expected_count: 2,
-          false_positive_count: 1,
-          evidence_count: 2,
-          missing_expectations: ["implementation summaries"],
-          false_positives: ["weather preference"],
-          summary: "Expected memory was weakly recalled.",
-          top_evidence: [
-            {
-              evidence_id: "ev-1",
-              source_kind: "curated",
-              source_id: "mem-1",
-              score: 0.42,
-              final_score: 0.42,
-              reason: "term overlap",
-              excerpt: "User prefers concise implementation summaries.",
-            },
-          ],
+          target_memory: null,
         },
       ],
     },
   }),
-  useApproveMemoryReview: () => ({ isPending: false, mutateAsync: approveReviewMock }),
-  useRejectMemoryReview: () => ({ isPending: false, mutateAsync: rejectReviewMock }),
-  useBatchMemoryReview: () => ({ isPending: false, mutateAsync: batchReviewMock }),
-  useGovernMemory: () => ({ isPending: false, mutateAsync: governMemoryMock }),
-  useGovernProfileFacet: () => ({ isPending: false, mutateAsync: governProfileFacetMock }),
-  useRebuildProfileFacets: () => ({ isPending: false, mutateAsync: rebuildProfileFacetsMock }),
-  useResolveMemoryConflict: () => ({ isPending: false, mutateAsync: resolveConflictMock }),
+  useHCMSMemoryDiff: () => ({
+    isFetching: false,
+    data: {
+      memory_id: "mem_deploy",
+      diff: "@@ -1 +1 @@\n- old deploy note\n+ migration ordering drift",
+      engine_notes: [],
+    },
+  }),
 }));
 
 describe("MemoryGovernancePanel", () => {
   beforeEach(() => {
-    approveReviewMock.mockClear();
-    rejectReviewMock.mockClear();
-    batchReviewMock.mockClear();
-    resolveConflictMock.mockClear();
-    runBenchmarkMock.mockClear();
-    flushMemoryMock.mockClear();
-    governMemoryMock.mockClear();
-    batchGovernMemoryMock.mockClear();
-    runMaintenanceMock.mockClear();
-    runMaintenanceAutomationMock.mockClear();
-    governProfileFacetMock.mockClear();
-    rebuildProfileFacetsMock.mockClear();
-    refetch.mockClear();
-    Object.values(hookOptions).forEach((mock) => mock.mockClear());
+    refetchOverview.mockClear();
+    refetchHealth.mockClear();
+    recallMutate.mockClear();
+    whyMutate.mockClear();
+    traceMutate.mockClear();
+    refetchHcmsMemories.mockClear();
+    deleteMemoryMutate.mockClear();
+    governMemoryMutate.mockClear();
+    selectedMemoryLifecycleState = "active";
+    hcmsRecallItems = defaultRecallItems();
+    hcmsWhyPaths = defaultWhyPaths();
+    hcmsMemoryItems = [
+      {
+        memory_id: "mem_deploy",
+        version: 3,
+        parent_id: "mem_deploy_v2",
+        content: "Deployment failed because the canary database migration ran before schema validation.",
+        summary: "Canary deployment failed after migration ordering drift.",
+        category: "error_pattern",
+        confidence: 0.93,
+        salience: 0.82,
+        state: "active",
+        source_thread_id: "thread-deploy",
+        source_type: "observation",
+        tags: ["deploy", "canary"],
+        entities: ["canary", "schema validation"],
+        concepts: ["migration ordering"],
+        metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+        evidence: [
+          {
+            evidence_id: "ev_deploy",
+            type: "observation",
+            content: "Run log showed migration before validation.",
+            weight: 0.91,
+            timestamp: "2026-06-03T02:00:00Z",
+            source_id: "thread-deploy",
+            metadata: {},
+          },
+        ],
+        created_at: "2026-06-03T02:00:00Z",
+        updated_at: "2026-06-03T02:20:00Z",
+        accessed_at: "2026-06-03T02:25:00Z",
+      },
+      {
+        memory_id: "mem_migration",
+        version: 1,
+        parent_id: null,
+        content: "Schema validation was moved after the canary migration step.",
+        summary: "Schema validation moved after canary migration.",
+        category: "decision",
+        confidence: 0.85,
+        salience: 0.75,
+        state: "active",
+        source_thread_id: "thread-deploy",
+        source_type: "observation",
+        tags: ["deploy"],
+        entities: ["schema validation"],
+        concepts: ["migration ordering"],
+        metadata: { layer_id: "workspace", store_id: "hcms_workspace" },
+        evidence: [],
+        created_at: "2026-06-03T01:30:00Z",
+        updated_at: "2026-06-03T01:30:00Z",
+        accessed_at: "2026-06-03T02:25:00Z",
+      },
+    ];
   });
 
-  it("renders retention, review, conflict, and benchmark drilldowns", () => {
+  it("renders the HCMS-native management console", () => {
     render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
 
-    expect(screen.getAllByText("Hot: 1").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Cold: 2").length).toBeGreaterThan(0);
-    expect(screen.queryByText("User prefers durable memory drilldowns.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Use MiniMax for testing.")).not.toBeInTheDocument();
-    expect(screen.queryByText("mem-cold")).not.toBeInTheDocument();
-    expect(screen.queryByText("Expected memory was weakly recalled.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Temporary note without durable evidence.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Profile policy")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Candidate audit$/i }));
-    expect(screen.getByText("Temporary note without durable evidence.")).toBeInTheDocument();
-    expect(screen.getByText(/missing_durable_outcome_signal/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Profile facets$/i }));
-    expect(screen.getByText("Profile policy")).toBeInTheDocument();
-    expect(screen.getByText("identity:teams")).toBeInTheDocument();
-    expect(screen.getByText("Facet audit")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Review$/i }));
-    expect(screen.getByText("User prefers durable memory drilldowns.")).toBeInTheDocument();
-    expect(screen.getByText("Use MiniMax for testing.")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Retention tiers$/i }));
-    expect(screen.getAllByText("mem-cold").length).toBeGreaterThan(0);
-    expect(screen.getByText("maintenance-1")).toBeInTheDocument();
-    expect(screen.getByText("Background automation")).toBeInTheDocument();
-    expect(screen.getByText("automation-1")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Recall benchmark$/i }));
-    expect(screen.getByText("Expected memory was weakly recalled.")).toBeInTheDocument();
-    expect(screen.getByText("implementation summaries")).toBeInTheDocument();
-    expect(screen.getAllByText("User prefers concise implementation summaries.").length).toBeGreaterThan(0);
+    expect(screen.getByText("HCMS Console")).toBeInTheDocument();
+    expect(screen.getByText("hcms_workspace")).toBeInTheDocument();
+    expect(screen.getByText("Memory Atlas")).toBeInTheDocument();
+    expect(screen.getByText("HCMS Graph Atlas")).toBeInTheDocument();
+    expect(screen.getByText("Graph focus")).toBeInTheDocument();
+    expect(screen.getByText("Category constellation")).toBeInTheDocument();
+    expect(screen.getByText("Selected cluster")).toBeInTheDocument();
+    expect(screen.getByText("Categories")).toBeInTheDocument();
+    expect(screen.getByText("Lifecycle states")).toBeInTheDocument();
+    expect(screen.getByText("Graph neighborhood")).toBeInTheDocument();
+    expect(screen.getByText("visible nodes")).toBeInTheDocument();
+    expect(screen.getAllByText("graph links").length).toBeGreaterThan(0);
+    expect(screen.getByText("avg confidence")).toBeInTheDocument();
+    expect(screen.getByText("Sort")).toBeInTheDocument();
+    expect(screen.getAllByText("confidence 89%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("salience 78%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("evidence 1").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Filter graph category error_pattern" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select graph memory mem_migration" })).toBeInTheDocument();
+    expect(screen.getByText("0 out")).toBeInTheDocument();
+    expect(screen.getByText("1 in")).toBeInTheDocument();
+    expect(screen.getAllByText("error_pattern").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Canary deployment failed after migration ordering drift.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Run log showed migration before validation.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Review$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Retention tiers$/i })).not.toBeInTheDocument();
   });
 
-  it("enables only the visible memory governance section queries", () => {
+  it("uses Atlas distribution buckets and sorting controls as visual filters", () => {
     render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
 
-    expect(lastEnabled(hookOptions.useMemoryOverview)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryHealth)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryProviders)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryAdminAudit)).toBe(false);
-    expect(lastEnabled(hookOptions.useProfileFacets)).toBe(false);
-    expect(lastEnabled(hookOptions.useProfileFacetAudit)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryReview)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryConflicts)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryStaleness)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryBenchmarkSuites)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryBenchmarkRuns)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryMaintenanceAutomation)).toBe(false);
+    fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "confidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select category error_pattern" }));
+    expect(screen.getByLabelText("Category")).toHaveValue("error_pattern");
+    fireEvent.click(screen.getByRole("button", { name: "Show all categories" }));
+    expect(screen.getByLabelText("Category")).toHaveValue("all");
+    fireEvent.click(screen.getByRole("button", { name: "Filter graph category decision" }));
+    expect(screen.getByLabelText("Category")).toHaveValue("decision");
+    fireEvent.click(screen.getByRole("button", { name: "Filter graph category decision" }));
+    expect(screen.getByLabelText("Category")).toHaveValue("all");
+    fireEvent.click(screen.getByRole("button", { name: "Select graph memory mem_migration" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /decision 1 confidence 85% salience 75%/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: /active 2 confidence 89% salience 78% evidence 1/i }));
 
-    fireEvent.click(screen.getByRole("button", { name: /^Providers$/i }));
-    expect(lastEnabled(hookOptions.useMemoryHealth)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryProviders)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryAdminAudit)).toBe(false);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Candidate audit$/i }));
-    expect(lastEnabled(hookOptions.useMemoryHealth)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryProviders)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryAdminAudit)).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Review$/i }));
-    expect(lastEnabled(hookOptions.useMemoryOverview)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryReview)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryConflicts)).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Recall benchmark$/i }));
-    expect(lastEnabled(hookOptions.useMemoryReview)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryBenchmarkSuites)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryBenchmarkRuns)).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Retention tiers$/i }));
-    expect(lastEnabled(hookOptions.useMemoryBenchmarkSuites)).toBe(false);
-    expect(lastEnabled(hookOptions.useMemoryStaleness)).toBe(true);
-    expect(lastEnabled(hookOptions.useMemoryMaintenanceAutomation)).toBe(true);
+    expect(screen.getByLabelText("Sort")).toHaveValue("confidence");
+    expect(screen.getByLabelText("Category")).toHaveValue("decision");
+    expect(screen.getByLabelText("State")).toHaveValue("active");
   });
 
-  it("wires review and conflict actions to memory governance hooks", async () => {
+  it("runs recall, causal reasoning, and trace refresh from the HCMS query box", async () => {
     render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /^Review$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^Approve$/i }));
-    await waitFor(() => expect(approveReviewMock).toHaveBeenCalledWith("review-1"));
+    fireEvent.change(screen.getByPlaceholderText("why did the latest memory decision happen?"), {
+      target: { value: "why did deployment fail" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^HCMS Recall$/i }));
 
-    fireEvent.click(screen.getByRole("button", { name: /^Reject$/i }));
-    await waitFor(() => expect(rejectReviewMock).toHaveBeenCalledWith("review-1"));
+    await waitFor(() => expect(recallMutate).toHaveBeenCalledWith({ query: "why did deployment fail", limit: 10 }));
+    expect(whyMutate).toHaveBeenCalledWith({ query: "why did deployment fail", limit: 4 });
+    expect(traceMutate).toHaveBeenCalledWith({ targetId: "mem_deploy", limit: 12 });
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: /^Approve all$/i }));
-    await waitFor(() => expect(batchReviewMock).toHaveBeenCalledWith({ approve: ["review-1"], reject: [] }));
+  it("explains empty HCMS recall results instead of only showing engine notes", () => {
+    hcmsRecallItems = [];
+    hcmsWhyPaths = [];
+    render(<MemoryGovernancePanel copy={opsCopy("zh-CN")} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /^Keep left$/i }));
-    await waitFor(() => expect(resolveConflictMock).toHaveBeenCalledWith({ conflictId: "conflict-1", action: "keep_memory" }));
+    expect(screen.getByText("召回查询结果")).toBeInTheDocument();
+    expect(screen.getByText("没有找到匹配的 HCMS 记忆")).toBeInTheDocument();
+    expect(screen.getByText("四流召回和因果推理已运行，但当前存储层没有返回可展示的记忆或路径。请先沉淀记忆、换一个更具体的实体/原因查询，或执行刷新/Flush 后重试。")).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: /^Retention tiers$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^Reinforce$/i }));
-    await waitFor(() => expect(governMemoryMock).toHaveBeenCalledWith({ memoryId: "mem-cold", action: "reinforce" }));
+  it("shows causal chains, relation graph, version history, diff, and trace evidence", () => {
+    render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Causal$/i }));
+    expect(screen.getByText("Causal chains")).toBeInTheDocument();
+    expect(screen.getByText("direct_cause")).toBeInTheDocument();
+    expect(screen.getAllByText(/mem_migration/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Relations$/i }));
+    expect(screen.getByText("Relation graph")).toBeInTheDocument();
+    expect(screen.getByText("causes")).toBeInTheDocument();
+    expect(screen.getByText("Schema validation moved after canary migration.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Versions$/i }));
+    expect(screen.getByText("Version history")).toBeInTheDocument();
+    expect(screen.getByText("Latest diff")).toBeInTheDocument();
+    expect(screen.getAllByText(/migration ordering drift/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Evidence$/i }));
+    expect(screen.getByText("Trace evidence")).toBeInTheDocument();
+    expect(screen.getByText("hcms_recall")).toBeInTheDocument();
+  });
+
+  it("refreshes HCMS overview and health without old governance calls", async () => {
+    render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh$/i }));
+
+    await waitFor(() => expect(refetchOverview).toHaveBeenCalled());
+    expect(refetchHealth).toHaveBeenCalled();
+    expect(refetchHcmsMemories).toHaveBeenCalled();
+    expect(traceMutate).toHaveBeenCalledWith({ targetId: "mem_deploy", limit: 12 });
+  });
+
+  it("deletes the selected HCMS memory through the lifecycle action", async () => {
+    render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Delete$/i }));
+
+    await waitFor(() => expect(deleteMemoryMutate).toHaveBeenCalledWith("mem_deploy"));
+    expect(refetchOverview).toHaveBeenCalled();
+    expect(refetchHealth).toHaveBeenCalled();
+  });
+
+  it("governs the selected HCMS memory through soft lifecycle actions", async () => {
+    const { unmount } = render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
 
     fireEvent.click(screen.getByRole("button", { name: /^Archive$/i }));
-    await waitFor(() => expect(governMemoryMock).toHaveBeenCalledWith({ memoryId: "mem-cold", action: "archive" }));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Plan$/i }));
-    await waitFor(() => expect(batchGovernMemoryMock).toHaveBeenCalledWith(expect.objectContaining({ dry_run: true, policy: "balanced" })));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Plan maintenance$/i }));
-    await waitFor(() => expect(runMaintenanceMock).toHaveBeenCalledWith(expect.objectContaining({ dry_run: true, policy: "balanced" })));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Run due check$/i }));
-    await waitFor(() => expect(runMaintenanceAutomationMock).toHaveBeenCalledWith({ force_run: true }));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Recall benchmark$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^Run suite$/i }));
-    await waitFor(() => expect(runBenchmarkSuiteMock).toHaveBeenCalledWith({ suiteId: "northstar-regression", evidenceLimit: 4 }));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Profile facets$/i }));
-    fireEvent.click(screen.getAllByRole("button", { name: /^Pin$/i })[0]);
-    await waitFor(() => expect(governProfileFacetMock).toHaveBeenCalledWith({ facetId: "facet-1", action: "pin", reason: "ops profile facet pin" }));
-
-    fireEvent.click(screen.getByRole("button", { name: /^Rebuild facets$/i }));
-    await waitFor(() => expect(rebuildProfileFacetsMock).toHaveBeenCalled());
-  });
-
-  it("runs the recall benchmark from generated memory cases", async () => {
-    render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Recall benchmark$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^Run benchmark$/i }));
-
     await waitFor(() =>
-      expect(runBenchmarkMock).toHaveBeenCalledWith({
-        suite_id: "ops-memory-smoke",
-        cases: [
-          expect.objectContaining({
-            query: "User prefers concise implementation summaries",
-            expected_memory_ids: ["mem-1"],
-          }),
-        ],
-        evidence_limit: 4,
+      expect(governMemoryMutate).toHaveBeenCalledWith({
+        memoryId: "mem_deploy",
+        action: "archive",
+        reason: "HCMS lifecycle archive from Memory Governance panel",
       }),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Forget$/i }));
+    await waitFor(() =>
+      expect(governMemoryMutate).toHaveBeenCalledWith({
+        memoryId: "mem_deploy",
+        action: "forget",
+        reason: "HCMS lifecycle forget from Memory Governance panel",
+      }),
+    );
+
+    unmount();
+    selectedMemoryLifecycleState = "archived";
+    render(<MemoryGovernancePanel copy={opsCopy("en-US")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Restore$/i }));
+    await waitFor(() =>
+      expect(governMemoryMutate).toHaveBeenCalledWith({
+        memoryId: "mem_deploy",
+        action: "restore",
+        reason: "HCMS lifecycle restore from Memory Governance panel",
+      }),
+    );
+    expect(refetchOverview).toHaveBeenCalled();
+    expect(refetchHealth).toHaveBeenCalled();
+  });
+
+  it("switches primary atlas labels with zh-CN copy", () => {
+    render(<MemoryGovernancePanel copy={opsCopy("zh-CN")} />);
+
+    expect(screen.getByText("HCMS 控制台")).toBeInTheDocument();
+    expect(screen.getByText("记忆总览")).toBeInTheDocument();
+    expect(screen.getByText("当前记忆")).toBeInTheDocument();
+    expect(screen.getByText("生命周期操作")).toBeInTheDocument();
+    expect(screen.getByText("分类分布")).toBeInTheDocument();
+    expect(screen.getByText("生命周期状态")).toBeInTheDocument();
+    expect(screen.getByText("证据光谱")).toBeInTheDocument();
+    expect(screen.getByText("实体透镜")).toBeInTheDocument();
+    expect(screen.getByText("关系邻域")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "恢复" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "遗忘" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("例如：为什么最近这条记忆会形成？")).toBeInTheDocument();
+  });
+
+  it("shows one atlas-level empty state instead of repeated empty placeholders", () => {
+    hcmsMemoryItems = [];
+    render(<MemoryGovernancePanel copy={opsCopy("zh-CN")} />);
+
+    expect(screen.getByText("当前还没有可展示的 HCMS 记忆")).toBeInTheDocument();
+    expect(screen.getByText("请先沉淀记忆、刷新列表，或切换到 Recall 查询。图谱、分类和证据面板会在有记忆后自动展开。")).toBeInTheDocument();
+    expect(screen.queryAllByText("无").length).toBeLessThanOrEqual(1);
   });
 });
-
-function lastEnabled(mock: ReturnType<typeof vi.fn>): boolean | undefined {
-  const call = mock.mock.calls.at(-1);
-  const options = call?.at(-1);
-  if (!options || typeof options !== "object" || !("enabled" in options)) {
-    return true;
-  }
-  return Boolean((options as { enabled?: boolean }).enabled);
-}

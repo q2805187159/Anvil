@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from langchain.agents import create_agent
@@ -27,7 +28,6 @@ from anvil.agents.lead_agent.types import LeadAgentContext, LeadAgentState
 from anvil.agents.middlewares import (
     ApprovalMiddleware,
     ClarificationMiddleware,
-    CompactionMiddleware,
     DanglingToolCallMiddleware,
     DeferredToolFilterMiddleware,
     GuardrailMiddleware,
@@ -39,7 +39,6 @@ from anvil.agents.middlewares import (
     SandboxMiddleware,
     SandboxAuditMiddleware,
     SubagentLimitMiddleware,
-    SummarizationMiddleware,
     TitleMiddleware,
     # TimingMiddleware,  # Temporarily disabled
     TodoMiddleware,
@@ -54,13 +53,24 @@ from anvil.agents.middlewares import (
 )
 from anvil.agents.model_factory import create_chat_model
 from anvil.agents.runtime_snapshot import RuntimeAssemblySnapshot
-from anvil.config import ConfigResolutionResult, ResolvedModelRoute
+from anvil.config import ConfigResolutionResult, ResolvedModelRoute, resolve_internal_task_model_config
 from anvil.extensions import ExtensionsService
-from anvil.memory import DebouncedMemoryQueue, FileMemoryStore, HeuristicMemoryUpdater, MemoryService
-from anvil.memory_platform import MemoryManager
+from anvil.memory import MemoryManager
 from anvil.runtime.approvals import ApprovalService, NetworkApprovalService
 from anvil.runtime.checkpointers import Checkpointer
+from anvil.runtime.context_v2 import stable_context_id
+from anvil.runtime.state_v2 import (
+    EventLog,
+    GoalFrame,
+    GoalStack,
+    ReviewInbox,
+    RuntimeEventBus,
+    SalienceRouter,
+    ToolResultStore,
+    WorkspaceState,
+)
 from anvil.runtime.store import Store
+from anvil.runtime.token_budget import TokenBudgetService
 from anvil.runtime.tool_registry import CapabilityAssemblyService, CapabilityBundle, ToolRegistry
 from anvil.sandbox import PathService
 from anvil.subagents import SubagentService
@@ -80,6 +90,113 @@ def clone_chat_model_override_for_subagent(chat_model_override: BaseChatModel | 
         return deepcopy(chat_model_override)
     except Exception:
         return chat_model_override
+
+
+def _build_hcms_structured_update_provider(*, effective_config, tracing_service: Any | None = None):
+    updater_config = effective_config.hcms.updater
+    if not updater_config.enabled or updater_config.mode != "structured" or not updater_config.model_name:
+        return None
+    model_config = resolve_internal_task_model_config(effective_config, updater_config.model_name)
+    if model_config is None:
+        model_config = effective_config.models.get(updater_config.model_name)
+    if model_config is None:
+        return None
+
+    def _provider(_state, _envelope, prompt: str) -> str | None:
+        model = create_chat_model(model_config, thinking_enabled=False, tracing_service=tracing_service)
+        messages = [HumanMessage(content=prompt)]
+        try:
+            response = model.invoke(
+                messages,
+                config={
+                    "callbacks": [],
+                    "tags": ["anvil_internal_hcms_updater"],
+                    "metadata": {"anvil_internal": True, "anvil_internal_kind": "hcms_updater"},
+                },
+            )
+        except TypeError:
+            response = model.invoke(messages)
+        return str(getattr(response, "content", "") or "").strip() or None
+
+    return _provider
+
+
+def _build_initial_goal_stack(
+    *,
+    thread_id: str,
+    request_context: str | None,
+    turn_user_text: str | None,
+) -> GoalStack:
+    counter = TokenBudgetService()
+    raw_goal = str(turn_user_text or request_context or "").strip()
+    if not raw_goal:
+        return GoalStack(
+            stack_id=f"goals:{thread_id}",
+            thread_id=thread_id,
+            diagnostics={
+                "source": "factory_turn_context",
+                "goal_count": 0,
+            },
+        )
+    summary = counter.truncate_text(raw_goal, max_tokens=80, max_chars=360)
+    title = counter.truncate_text(" ".join(summary.split()), max_tokens=28, max_chars=140)
+    next_action = counter.truncate_text(raw_goal, max_tokens=40, max_chars=220)
+    goal_id = stable_context_id("goal", thread_id, summary)
+    return GoalStack(
+        stack_id=f"goals:{thread_id}",
+        thread_id=thread_id,
+        active_goal_id=goal_id,
+        goals=[
+            GoalFrame(
+                goal_id=goal_id,
+                title=title or "Current turn goal",
+                status="active",
+                summary=summary,
+                next_actions=[next_action] if next_action else [],
+                keywords=_goal_keywords(raw_goal),
+                priority=0.72,
+                metadata={
+                    "source": "factory_turn_context",
+                    "turn_text_tokens": counter.count_text(raw_goal),
+                },
+            )
+        ],
+        diagnostics={
+            "source": "factory_turn_context",
+            "goal_count": 1,
+            "raw_goal_chars": len(raw_goal),
+        },
+    )
+
+
+def _goal_keywords(text: str, *, limit: int = 12) -> list[str]:
+    stop_words = {
+        "about",
+        "active",
+        "after",
+        "context",
+        "current",
+        "goal",
+        "hello",
+        "into",
+        "memory",
+        "route",
+        "runtime",
+        "should",
+        "turn",
+        "user",
+        "with",
+    }
+    keywords: list[str] = []
+    for token in re.findall(r"[\w.-]+", text.lower()):
+        normalized = token.strip("._-")
+        if len(normalized) < 4 or normalized in stop_words:
+            continue
+        if normalized not in keywords:
+            keywords.append(normalized)
+        if len(keywords) >= limit:
+            break
+    return keywords
 
 
 @dataclass
@@ -112,6 +229,7 @@ def create_harness_agent(
     feature_set: RuntimeFeatureSet,
     thread_id: str,
     request_context: str | None = None,
+    turn_user_text: str | None = None,
     approval_context: str | None = None,
     upload_context: str | None = None,
     is_plan_mode: bool = False,
@@ -144,29 +262,22 @@ def create_harness_agent(
     feature_set = resolve_feature_set(feature_set, effective_config)
     mark_phase("factory_feature_set_resolved")
 
-    legacy_memory_enabled = effective_config.memory.enabled and not effective_config.memory_platform.enabled
     memory_service = None
-    if feature_set.memory and legacy_memory_enabled:
-        memory_store_path = effective_config.memory.store_path
-        if memory_store_path is None:
-            memory_store_path = str(path_service.base_root.parent / "memory")
-        memory_service = MemoryService(
-            store=FileMemoryStore(memory_store_path),
-            queue=DebouncedMemoryQueue(),
-            updater=HeuristicMemoryUpdater(max_facts=effective_config.memory.max_facts),
-            max_facts=effective_config.memory.max_facts,
-            injection_token_budget=effective_config.memory.injection_token_budget,
-        )
 
     if memory_manager is None and feature_set.memory:
-        platform_config = effective_config.memory_platform
-        if not platform_config.enabled and effective_config.memory.enabled:
-            platform_config = platform_config.from_legacy_memory(effective_config.memory)
+        platform_config = effective_config.hcms
         memory_manager = MemoryManager.from_config(
             config=platform_config,
-            base_path=path_service.base_root.parent / "memory-platform",
-            legacy_store_path=effective_config.memory.store_path,
+            base_path=path_service.base_root.parent / "hcms",
+            effective_config=effective_config,
+            structured_update_provider=_build_hcms_structured_update_provider(
+                effective_config=effective_config,
+                tracing_service=tracing_service,
+            ),
         )
+    if memory_manager is not None and getattr(memory_manager, "hcms_service", None) is not None:
+        memory_service = memory_manager.hcms_service
+    active_memory_namespace = "global/default" if memory_service is not None else None
     mark_phase("factory_memory_services_ready")
 
     skills_service = (skills_service or SkillsService()) if feature_set.skills else None
@@ -190,6 +301,7 @@ def create_harness_agent(
                     thread_id=thread_id,
                     feature_set=child_feature_set,
                     request_context=f"Delegated task: {prompt}",
+                    turn_user_text=prompt,
                     approval_context=approval_context,
                     upload_context=upload_context,
                     is_plan_mode=is_plan_mode,
@@ -238,6 +350,16 @@ def create_harness_agent(
         process_service=process_service,
         scheduled_task_service=scheduled_task_service,
     )
+    goal_stack = _build_initial_goal_stack(
+        thread_id=thread_id,
+        request_context=request_context,
+        turn_user_text=turn_user_text,
+    )
+    salience_route = SalienceRouter(
+        router_id=f"salience-router:{thread_id}",
+        thread_id=thread_id,
+    ).route_goal_stack(goal_stack, query=turn_user_text or request_context)
+    skill_retrieval_salience_route = salience_route if turn_user_text else None
     mark_phase("capability_assembly_started")
     if execution_mode is ThreadExecutionMode.CHAT:
         registry = ToolRegistry()
@@ -262,6 +384,8 @@ def create_harness_agent(
             run_trace_id=run_trace_id,
             run_id=run_id,
             resolved_route=resolved_route,
+            salience_route=skill_retrieval_salience_route,
+            use_request_context_for_skill_retrieval=bool(turn_user_text),
         )
         registry = assembly_result.registry
         capability_bundle = assembly_result.bundle
@@ -292,7 +416,7 @@ def create_harness_agent(
         config_fingerprint=config_result.fingerprint,
         capability_bundle=capability_bundle,
         feature_set=feature_set,
-        memory_namespace=effective_config.memory.namespace if legacy_memory_enabled else None,
+        memory_namespace=active_memory_namespace,
         memory_snapshot=memory_snapshot,
         memory_snapshot_fingerprint=memory_snapshot_fingerprint,
         project_context=project_context_snapshot.rendered if project_context_snapshot.has_content else None,
@@ -321,8 +445,77 @@ def create_harness_agent(
         promoted_capabilities=promoted_capabilities,
     )
     mark_phase("turn_injection_built")
-    system_prompt = compose_system_prompt(prompt_snapshot, prompt_injection_view)
+    direct_prompt_snapshot = _prompt_snapshot_for_direct_system_prompt(
+        prompt_snapshot,
+        memory_context_mode=effective_config.hcms.recall.injection_mode,
+    )
+    system_prompt = compose_system_prompt(direct_prompt_snapshot, prompt_injection_view)
     mark_phase("system_prompt_composed")
+    middleware_chain = build_middleware_chain(
+        feature_set,
+        middleware=middleware,
+        extra_middlewares=extra_middlewares,
+        subagent_limit_max_concurrency=effective_config.subagents.max_concurrency,
+        effective_config=effective_config,
+    )
+    mark_phase("middleware_chain_built")
+    workspace_state = WorkspaceState(
+        workspace_id=f"workspace:{thread_id}",
+        thread_id=thread_id,
+        project_root=str(path_service.base_root),
+        active_files=[
+            item.relative_path or item.virtual_path
+            for item in project_context_snapshot.files[:12]
+        ],
+        diagnostics={
+            "project_context_fingerprint": project_context_snapshot.fingerprint,
+            "project_context_file_count": len(project_context_snapshot.files),
+            "runtime_path_fingerprint": runtime_path_snapshot.fingerprint,
+            "runtime_path_root_count": runtime_path_snapshot.root_count,
+        },
+    )
+    tool_result_store = ToolResultStore(thread_id=thread_id)
+    review_inbox = ReviewInbox(inbox_id=f"review-inbox:{thread_id}", thread_id=thread_id)
+    event_log = EventLog(thread_id=thread_id)
+    runtime_event_bus = RuntimeEventBus(event_log=event_log)
+    mark_phase("runtime_state_v2_initialized")
+    assembly_snapshot = RuntimeAssemblySnapshot.from_runtime_parts(
+        thread_id=thread_id,
+        run_id=run_id,
+        execution_mode=execution_mode.value,
+        config_fingerprint=config_result.fingerprint,
+        resolved_route=resolved_route,
+        prompt_snapshot=prompt_snapshot,
+        prompt_injection_view=prompt_injection_view,
+        project_context_snapshot=project_context_snapshot,
+        runtime_path_snapshot=runtime_path_snapshot,
+        capability_bundle=capability_bundle,
+        middleware_chain=middleware_chain,
+        feature_set=feature_set,
+        system_prompt=system_prompt,
+        prompt_cache_before=prompt_cache_before,
+        prompt_cache_after=prompt_cache_after,
+        workspace_state=workspace_state,
+        tool_result_store=tool_result_store,
+        goal_stack=goal_stack,
+        salience_route=salience_route,
+        review_inbox=review_inbox,
+        event_log=event_log,
+        runtime_event_bus=runtime_event_bus,
+        turn_user_text=turn_user_text or request_context,
+        service_flags={
+            "approval_service": approval_service is not None,
+            "extensions_service": extensions_service is not None,
+            "hcms_service": memory_service is not None,
+            "memory_manager": memory_manager is not None,
+            "process_service": process_service is not None,
+            "scheduled_task_service": scheduled_task_service is not None,
+            "skills_service": skills_service is not None,
+            "subagent_service": subagent_service is not None,
+            "tracing_service": tracing_service is not None,
+        },
+    )
+    mark_phase("assembly_snapshot_built")
     context = LeadAgentContext(
         thread_id=thread_id,
         run_id=run_id,
@@ -337,7 +530,16 @@ def create_harness_agent(
         upload_context=upload_context,
         promoted_capabilities=promoted_capabilities,
         memory_context=None,
-        memory_namespace=effective_config.memory.namespace if legacy_memory_enabled else None,
+        memory_context_mode=effective_config.hcms.recall.injection_mode,
+        context_v2=assembly_snapshot.context_v2,
+        tool_result_store=tool_result_store,
+        workspace_state=workspace_state,
+        goal_stack=goal_stack,
+        salience_route=salience_route,
+        review_inbox=review_inbox,
+        event_log=event_log,
+        runtime_event_bus=runtime_event_bus,
+        memory_namespace=active_memory_namespace,
         enabled_skill_ids=capability_bundle.enabled_skill_ids,
         extension_statuses=capability_bundle.effective_extension_sources,
         initial_uploaded_files=tuple(),
@@ -378,14 +580,6 @@ def create_harness_agent(
         is_plan_mode=is_plan_mode,
     )
     mark_phase("lead_context_built")
-    middleware_chain = build_middleware_chain(
-        feature_set,
-        middleware=middleware,
-        extra_middlewares=extra_middlewares,
-        subagent_limit_max_concurrency=effective_config.subagents.max_concurrency,
-        effective_config=effective_config,
-    )
-    mark_phase("middleware_chain_built")
     tools = [entry.handler for entry in capability_bundle.visible_tools if entry.handler is not None]
     chat_model = create_chat_model(
         config_result.effective_config.models[resolved_route.model_name],
@@ -405,35 +599,6 @@ def create_harness_agent(
         name="anvil_lead_agent",
     )
     mark_phase("langgraph_agent_created")
-    assembly_snapshot = RuntimeAssemblySnapshot.from_runtime_parts(
-        thread_id=thread_id,
-        run_id=run_id,
-        execution_mode=execution_mode.value,
-        config_fingerprint=config_result.fingerprint,
-        resolved_route=resolved_route,
-        prompt_snapshot=prompt_snapshot,
-        prompt_injection_view=prompt_injection_view,
-        project_context_snapshot=project_context_snapshot,
-        runtime_path_snapshot=runtime_path_snapshot,
-        capability_bundle=capability_bundle,
-        middleware_chain=middleware_chain,
-        feature_set=feature_set,
-        prompt_cache_before=prompt_cache_before,
-        prompt_cache_after=prompt_cache_after,
-        service_flags={
-            "approval_service": approval_service is not None,
-            "extensions_service": extensions_service is not None,
-            "legacy_memory_service": memory_service is not None,
-            "memory_manager": memory_manager is not None,
-            "process_service": process_service is not None,
-            "scheduled_task_service": scheduled_task_service is not None,
-            "skills_service": skills_service is not None,
-            "subagent_service": subagent_service is not None,
-            "tracing_service": tracing_service is not None,
-        },
-    )
-    mark_phase("assembly_snapshot_built")
-
     return LeadAgentRuntime(
         agent=agent,
         resolved_route=resolved_route,
@@ -451,6 +616,47 @@ def create_harness_agent(
         checkpointer=checkpointer,
         store=store,
     )
+
+
+def _prompt_snapshot_for_direct_system_prompt(
+    prompt_snapshot: PromptSnapshot,
+    *,
+    memory_context_mode: str | None,
+) -> PromptSnapshot:
+    if not (
+        _context_v2_memory_context_mode(memory_context_mode)
+        or _legacy_memory_prompt_append_mode(memory_context_mode)
+    ):
+        return prompt_snapshot
+    stable_sections = [
+        section
+        for section in prompt_snapshot.stable_sections
+        if section.name != "memory_snapshot"
+    ]
+    if len(stable_sections) == len(prompt_snapshot.stable_sections):
+        return prompt_snapshot
+    return prompt_snapshot.model_copy(update={"stable_sections": stable_sections})
+
+
+def _context_v2_memory_context_mode(mode: str | None) -> bool:
+    normalized = _normalized_memory_context_mode(mode)
+    return normalized in {"", "context_v2", "runtime_context_v2", "context_v2_only", "block_assembly"}
+
+
+def _legacy_memory_prompt_append_mode(mode: str | None) -> bool:
+    return _normalized_memory_context_mode(mode) in {
+        "legacy",
+        "legacy_append",
+        "legacy_prompt_append",
+        "memory_context",
+        "memory_prompt",
+        "prompt_append",
+        "v1",
+    }
+
+
+def _normalized_memory_context_mode(mode: str | None) -> str:
+    return str(mode or "").strip().lower().replace("-", "_")
 
 
 def _append_feature(
@@ -475,6 +681,47 @@ def _ensure_clarification_last(chain: list[Any]) -> None:
         return
     clarification = chain.pop(clarification_indexes[-1])
     chain.append(clarification)
+
+
+def _hcms_context_v2_prefetch_required(feature_set: RuntimeFeatureSet, effective_config: Any) -> bool:
+    hcms_config = getattr(effective_config, "hcms", None)
+    if hcms_config is None or not bool(getattr(hcms_config, "enabled", False)):
+        return False
+    recall_config = getattr(hcms_config, "recall", None)
+    injection_mode = getattr(recall_config, "injection_mode", None)
+    return _context_v2_memory_context_mode(injection_mode)
+
+
+def _ensure_context_v2_prefetch_middleware(
+    chain: list[Any],
+    *,
+    feature_set: RuntimeFeatureSet,
+    effective_config: Any,
+) -> None:
+    if not _hcms_context_v2_prefetch_required(feature_set, effective_config):
+        return
+    if any(isinstance(middleware, MemoryPrefetchMiddleware) for middleware in chain):
+        return
+    insert_at = next(
+        (
+            index
+            for index, middleware in enumerate(chain)
+            if isinstance(
+                middleware,
+                (
+                    MemoryCaptureMiddleware,
+                    ViewImageMiddleware,
+                    ToolVisibilityMiddleware,
+                    DeferredToolFilterMiddleware,
+                    SubagentLimitMiddleware,
+                    LoopDetectionMiddleware,
+                    ClarificationMiddleware,
+                ),
+            )
+        ),
+        len(chain),
+    )
+    chain.insert(insert_at, MemoryPrefetchMiddleware())
 
 
 def _insert_extra_middlewares(chain: list[Any], extra_middlewares: list[Any]) -> None:
@@ -543,6 +790,11 @@ def build_middleware_chain(
         middleware = list(feature_set.middleware or ())
     if middleware:
         chain = list(middleware)
+        _ensure_context_v2_prefetch_middleware(
+            chain,
+            feature_set=feature_set,
+            effective_config=effective_config,
+        )
         _ensure_clarification_last(chain)
         return chain
 
@@ -567,27 +819,16 @@ def build_middleware_chain(
     _append_feature(middlewares, feature_set.tool_error_shaping, ToolErrorHandlingMiddleware)
     _append_feature(middlewares, feature_set.tool_output_budget, ToolOutputBudgetMiddleware)
 
-    _append_feature(middlewares, feature_set.summarization, SummarizationMiddleware)
     _append_feature(middlewares, feature_set.plan_mode, TodoMiddleware)
     _append_feature(middlewares, feature_set.token_usage, TokenUsageMiddleware)
     _append_feature(middlewares, feature_set.title, TitleMiddleware)
     _append_feature(middlewares, feature_set.memory_prefetch, MemoryPrefetchMiddleware)
 
-    # Add JIT context middleware before compaction
-    # JIT loads minimal context, compaction compresses history
     if feature_set.jit_context and effective_config:
         if feature_set.jit_context is True:
             middlewares.append(JITContextMiddleware(config=effective_config.jit_context))
         else:
             middlewares.append(feature_set.jit_context)
-
-    # Add compaction middleware after memory prefetch, before model call
-    # This ensures memory is loaded before compaction and compacted context is used for model
-    if feature_set.compaction and effective_config:
-        if feature_set.compaction is True:
-            middlewares.append(CompactionMiddleware(config=effective_config.compaction))
-        else:
-            middlewares.append(feature_set.compaction)
 
     _append_feature(middlewares, memory_capture_spec, MemoryCaptureMiddleware)
     _append_feature(middlewares, feature_set.view_image, ViewImageMiddleware)
@@ -621,5 +862,10 @@ def build_middleware_chain(
         extra.extend(extra_middlewares)
     if extra:
         _insert_extra_middlewares(middlewares, extra)
+    _ensure_context_v2_prefetch_middleware(
+        middlewares,
+        feature_set=feature_set,
+        effective_config=effective_config,
+    )
     _ensure_clarification_last(middlewares)
     return middlewares

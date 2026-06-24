@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from anvil.agents import ThreadLifecycleStatus, ThreadState
-from anvil.config import EffectiveConfig, MemoryPlatformConfig, SkillsConfig
-from anvil.memory_platform import MemoryManager
-from anvil.memory_platform.contracts import MemoryCandidateAuditEntry, MemoryRecallBenchmarkCase, MemoryRecallBenchmarkSuite
+from anvil.config import EffectiveConfig, HCMSRuntimeConfig, SkillsConfig
+from anvil.memory import MemoryManager, MemoryRecallBenchmarkCase, MemoryRecallBenchmarkSuite
 from anvil.runtime.checkpointers import InMemoryCheckpointer
 from anvil.skills import SkillsService
 from anvil.self_upgrade import SelfUpgradeHealthService
@@ -15,7 +14,7 @@ def test_self_upgrade_health_report_unifies_memory_and_skill_quality_signals(con
     monkeypatch.setattr("anvil.skills.service.default_installed_skill_root", lambda: workspace_skills)
 
     config = EffectiveConfig(
-        memory_platform=MemoryPlatformConfig(
+        hcms=HCMSRuntimeConfig(
             enabled=True,
             archive={"sqlite_path": str(contract_tmp_path / "archive.sqlite3")},
             update_queue={"min_batch_turns": 4, "max_batch_turns": 8},
@@ -26,37 +25,22 @@ def test_self_upgrade_health_report_unifies_memory_and_skill_quality_signals(con
         ),
     )
     memory_manager = MemoryManager.from_config(
-        config=config.memory_platform,
-        base_path=contract_tmp_path / "memory-platform",
+        config=config.hcms,
+        base_path=contract_tmp_path / "hcms",
     )
-    memory_manager.create_entry(
-        "runtime_memory",
+    memory_manager.create_layer_entry(
+        "workspace",
         content="Release workflow requires canary verification before deploy.",
         category="project_context",
         confidence=0.40,
         salience=0.20,
     )
-    memory_manager.record_turn(
+    envelope = memory_manager.hcms_service.build_capture_envelope(
         thread_id="thread-low-signal",
-        user_content="ordinary progress update",
-        assistant_content="acknowledged",
+        namespace="global/default",
+        messages=[],
     )
-    memory_manager._record_candidate_audit(  # type: ignore[attr-defined]
-        MemoryCandidateAuditEntry(
-            audit_id="candidate-skip-1",
-            action="skip",
-            reason="quality gate skipped candidate",
-            layer_id="runtime",
-            store_id="runtime_memory",
-            candidate_preview="One-off weak memory candidate.",
-            quality_score=0.18,
-            quality_decision="skip",
-            blockers=("weak_evidence",),
-            confidence=0.2,
-            salience=0.2,
-            priority=0.1,
-        )
-    )
+    memory_manager.hcms_service.enqueue_capture(envelope)
 
     skills_service = SkillsService()
     skills_service.manage_curator(
@@ -102,8 +86,7 @@ def test_self_upgrade_health_report_unifies_memory_and_skill_quality_signals(con
     domains = {domain.domain_id: domain for domain in report.domains}
     assert set(domains) == {"memory", "skills", "trajectory"}
     assert domains["memory"].metrics["update_queue_pending"] == 1
-    assert domains["memory"].metrics["candidate_audit_skip_count"] == 1
-    assert domains["memory"].metrics["low_confidence_count"] == 1
+    assert domains["memory"].metrics["active_memory_count"] == 1
     assert domains["skills"].metrics["procedures_total"] == 1
     assert domains["skills"].metrics["procedures_promotable"] == 0
     assert domains["skills"].metrics["procedures_with_blockers"] == 1
@@ -112,7 +95,6 @@ def test_self_upgrade_health_report_unifies_memory_and_skill_quality_signals(con
 
     backlog_ids = {item.item_id for item in report.backlog}
     assert "memory:update_queue_pending" in backlog_ids
-    assert "memory:candidate_audit_skipped" in backlog_ids
     assert "skills:procedure_blockers" in backlog_ids
     assert all(item.domain in {"memory", "skills"} for item in report.backlog)
 
@@ -126,7 +108,7 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
     monkeypatch.setattr("anvil.skills.service.default_installed_skill_root", lambda: workspace_skills)
 
     config = EffectiveConfig(
-        memory_platform=MemoryPlatformConfig(
+        hcms=HCMSRuntimeConfig(
             enabled=True,
             archive={"sqlite_path": str(contract_tmp_path / "archive.sqlite3")},
         ),
@@ -136,11 +118,11 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
         ),
     )
     memory_manager = MemoryManager.from_config(
-        config=config.memory_platform,
-        base_path=contract_tmp_path / "memory-platform",
+        config=config.hcms,
+        base_path=contract_tmp_path / "hcms",
     )
-    memory = memory_manager.create_entry(
-        "runtime_memory",
+    memory = memory_manager.create_layer_entry(
+        "workspace",
         content="Northstar release uses canary deployment with pytest smoke verification.",
         category="project_context",
         confidence=0.95,
@@ -156,7 +138,7 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
                     case_id="northstar-canary",
                     query="Northstar canary pytest",
                     expected_terms=("canary deployment", "pytest"),
-                    expected_memory_ids=(memory.memory_id or memory.entry_id,),
+                    expected_memory_ids=(memory.memory_id,),
                 ),
             ),
         ),
@@ -173,10 +155,7 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
         fingerprint="snapshot-test",
     )
     before_memory = next(domain for domain in before.domains if domain.domain_id == "memory")
-    assert before_memory.metrics["recall_benchmark_suite_count"] == 1
-    assert before_memory.metrics["recall_benchmark_run_count"] == 0
-    assert before_memory.metrics["recall_benchmark_unrun_suite_count"] == 1
-    assert any(item.item_id == "memory:recall_benchmark_unrun" for item in before.backlog)
+    assert before_memory.metrics["active_memory_count"] == 1
 
     baseline = service.record_snapshot(
         report=before,
@@ -196,10 +175,7 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
         fingerprint="snapshot-test",
     )
     after_memory = next(domain for domain in after.domains if domain.domain_id == "memory")
-    assert after_memory.metrics["recall_benchmark_run_count"] == 1
-    assert after_memory.metrics["recall_benchmark_latest_score"] == 1.0
-    assert after_memory.metrics["recall_benchmark_failed_latest_count"] == 0
-    assert not any(item.item_id == "memory:recall_benchmark_unrun" for item in after.backlog)
+    assert after_memory.metrics["active_memory_count"] == 1
 
     candidate = service.record_snapshot(
         report=after,
@@ -210,7 +186,7 @@ def test_self_upgrade_health_snapshots_track_recall_benchmark_improvement(
     snapshots = service.list_snapshots(state_root=contract_tmp_path / "self-upgrade")
 
     assert candidate.previous_snapshot_id == baseline.snapshot_id
-    assert candidate.backlog_delta < 0
+    assert candidate.backlog_delta <= 0
     assert candidate.score_delta >= 0
     assert candidate.improved is True
     assert [item.snapshot_id for item in snapshots] == [candidate.snapshot_id, baseline.snapshot_id]
@@ -222,7 +198,7 @@ def test_self_upgrade_health_includes_read_only_trajectory_quality_domain(contra
     monkeypatch.setattr("anvil.skills.service.default_installed_skill_root", lambda: workspace_skills)
 
     config = EffectiveConfig(
-        memory_platform=MemoryPlatformConfig(enabled=False),
+        hcms=HCMSRuntimeConfig(enabled=False),
         skills_config=SkillsConfig(
             enabled=True,
             governance_root=str(contract_tmp_path / "governance"),

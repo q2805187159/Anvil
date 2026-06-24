@@ -14,8 +14,36 @@ from anvil.agents.lead_agent.prompt import (
     prompt_snapshot_cache_stats,
 )
 from anvil.config import ResolvedModelRoute
+from anvil.memory.contracts import MemoryInjectionView, sanitize_memory_context_text
+from anvil.memory.hcms_v2 import (
+    memory_injection_view_v2_from_legacy,
+    memory_injection_view_v2_to_blocks,
+)
+from anvil.runtime.context_v2 import (
+    AttentionBudget,
+    capability_bundle_to_blocks,
+    prompt_injection_view_to_blocks,
+    prompt_snapshot_to_blocks,
+    stable_prompt_hash,
+    workspace_text_to_block,
+)
+from anvil.runtime.state_v2 import (
+    EventLog,
+    GoalStack,
+    ReviewInbox,
+    RuntimeEventBus,
+    SalienceRoute,
+    SalienceRouter,
+    ToolResultStore,
+    TurnPipeline,
+    TurnPipelineInput,
+    WorkspaceState,
+)
 from anvil.runtime.token_budget import TokenBudgetService
 from anvil.runtime.tool_registry.contracts import CapabilityBundle
+
+
+_RUNTIME_CONTEXT_V2_PROMPT_MODE = "runtime_context_v2"
 
 
 class RuntimeModelSnapshot(BaseModel):
@@ -99,6 +127,7 @@ class RuntimeAssemblySnapshot(BaseModel):
     prompt: RuntimePromptAssemblySnapshot
     capabilities: RuntimeCapabilityAssemblySnapshot
     middleware_names: tuple[str, ...] = ()
+    context_v2: dict[str, Any] = Field(default_factory=dict)
     memory_injection_diagnostics: dict[str, Any] = Field(default_factory=dict)
     enabled_feature_flags: tuple[str, ...] = ()
     disabled_feature_flags: tuple[str, ...] = ()
@@ -120,9 +149,18 @@ class RuntimeAssemblySnapshot(BaseModel):
         capability_bundle: CapabilityBundle,
         middleware_chain: list[Any],
         feature_set: RuntimeFeatureSet,
+        system_prompt: str | None = None,
         service_flags: dict[str, bool] | None = None,
         prompt_cache_before: PromptSnapshotCacheStats | None = None,
         prompt_cache_after: PromptSnapshotCacheStats | None = None,
+        workspace_state: WorkspaceState | None = None,
+        tool_result_store: ToolResultStore | None = None,
+        goal_stack: GoalStack | None = None,
+        salience_route: SalienceRoute | None = None,
+        review_inbox: ReviewInbox | None = None,
+        event_log: EventLog | None = None,
+        runtime_event_bus: RuntimeEventBus | None = None,
+        turn_user_text: str | None = None,
     ) -> "RuntimeAssemblySnapshot":
         capability_context = capability_bundle.capability_context
         active_promotions = (
@@ -134,6 +172,25 @@ class RuntimeAssemblySnapshot(BaseModel):
         stable_section_tokens = _section_token_counts(prompt_snapshot.stable_sections)
         volatile_sections = prompt_injection_view.sections()
         volatile_section_tokens = _section_token_counts(volatile_sections)
+        context_v2 = _context_v2_diagnostic_payload(
+            thread_id=thread_id,
+            run_id=run_id,
+            execution_mode=execution_mode,
+            prompt_snapshot=prompt_snapshot,
+            prompt_injection_view=prompt_injection_view,
+            project_context_snapshot=project_context_snapshot,
+            runtime_path_snapshot=runtime_path_snapshot,
+            capability_bundle=capability_bundle,
+            system_prompt=system_prompt,
+            workspace_state=workspace_state,
+            tool_result_store=tool_result_store,
+            goal_stack=goal_stack,
+            salience_route=salience_route,
+            review_inbox=review_inbox,
+            event_log=event_log,
+            runtime_event_bus=runtime_event_bus,
+            turn_user_text=turn_user_text,
+        )
         return cls(
             thread_id=thread_id,
             run_id=run_id,
@@ -201,6 +258,7 @@ class RuntimeAssemblySnapshot(BaseModel):
                 assembly_diagnostics=capability_bundle.assembly_diagnostics.model_dump(mode="json"),
             ),
             middleware_names=tuple(getattr(middleware, "name", type(middleware).__name__) for middleware in middleware_chain),
+            context_v2=context_v2,
             memory_injection_diagnostics={},
             enabled_feature_flags=_feature_flags(feature_set, enabled=True),
             disabled_feature_flags=_feature_flags(feature_set, enabled=False),
@@ -253,6 +311,194 @@ class RuntimeAssemblySnapshot(BaseModel):
             added=added,
             removed=removed,
         )
+
+
+def _context_v2_diagnostic_payload(
+    *,
+    thread_id: str,
+    run_id: str | None,
+    execution_mode: str,
+    prompt_snapshot: PromptSnapshot,
+    prompt_injection_view: PromptInjectionView,
+    project_context_snapshot: ProjectContextSnapshot | None,
+    runtime_path_snapshot: RuntimePathContextSnapshot | None,
+    capability_bundle: CapabilityBundle,
+    system_prompt: str | None = None,
+    workspace_state: WorkspaceState | None = None,
+    tool_result_store: ToolResultStore | None = None,
+    goal_stack: GoalStack | None = None,
+    salience_route: SalienceRoute | None = None,
+    review_inbox: ReviewInbox | None = None,
+    event_log: EventLog | None = None,
+    runtime_event_bus: RuntimeEventBus | None = None,
+    turn_user_text: str | None = None,
+) -> dict[str, Any]:
+    try:
+        namespace = prompt_snapshot.snapshot_key.memory_namespace or "default"
+        query_text = (
+            turn_user_text
+            or prompt_injection_view.request_context
+            or "runtime assembly snapshot"
+        )
+        local_salience_route = salience_route
+        if local_salience_route is None and goal_stack is not None:
+            local_salience_route = SalienceRouter(
+                router_id=f"salience-router:{thread_id}",
+                thread_id=thread_id,
+            ).route_goal_stack(goal_stack, query=query_text)
+        prompt_injection_without_memory = prompt_injection_view.model_copy(update={"memory_context": None})
+        hcms_v2_memory_view = _legacy_memory_context_to_hcms_v2_view(
+            namespace=namespace,
+            memory_context=prompt_injection_view.memory_context,
+            query=prompt_injection_view.request_context or "",
+        )
+        hcms_v2_memory_blocks = (
+            memory_injection_view_v2_to_blocks(hcms_v2_memory_view)
+            if hcms_v2_memory_view is not None
+            else []
+        )
+        blocks = [
+            *prompt_snapshot_to_blocks(prompt_snapshot),
+            *prompt_injection_view_to_blocks(
+                prompt_injection_without_memory,
+                namespace=namespace,
+            ),
+            *hcms_v2_memory_blocks,
+        ]
+        if project_context_snapshot is not None and project_context_snapshot.has_content:
+            blocks.append(
+                workspace_text_to_block(
+                    project_context_snapshot.rendered,
+                    name="project_context_files",
+                )
+            )
+        if runtime_path_snapshot is not None and runtime_path_snapshot.rendered.strip():
+            blocks.append(
+                workspace_text_to_block(
+                    runtime_path_snapshot.rendered,
+                    name="runtime_path_context",
+                )
+            )
+        blocks.extend(capability_bundle_to_blocks(capability_bundle, top_k=12, query=query_text))
+        local_event_log = event_log or EventLog(thread_id=thread_id)
+        event_bus = runtime_event_bus or RuntimeEventBus(event_log=local_event_log)
+        turn_id = run_id or stable_prompt_hash(
+            f"{thread_id}:{prompt_snapshot.snapshot_id}:{prompt_injection_view.request_context or ''}"
+        )
+        pipeline_result = TurnPipeline(event_bus=event_bus).prepare_llm_context(
+            TurnPipelineInput(
+                thread_id=thread_id,
+                run_id=run_id,
+                turn_id=turn_id,
+                user_text=turn_user_text
+                or prompt_injection_view.request_context
+                or "runtime assembly snapshot",
+                goal_stack=goal_stack,
+                salience_route=local_salience_route,
+                workspace_state=workspace_state,
+                tool_result_store=tool_result_store,
+                review_inbox=review_inbox,
+                extra_blocks=blocks,
+                budget=AttentionBudget(max_context_tokens=32768, reserved_response_tokens=0),
+                metadata={
+                    "execution_mode": execution_mode,
+                    "diagnostic_only": True,
+                    "actual_prompt_mode": _RUNTIME_CONTEXT_V2_PROMPT_MODE,
+                    "actual_system_prompt_hash": stable_prompt_hash(system_prompt or ""),
+                    "prompt_snapshot_id": prompt_snapshot.snapshot_id,
+                    "capability_bundle_fingerprint": capability_bundle.fingerprint,
+                },
+            )
+        )
+        assembled = pipeline_result.assembled_context
+        candidate_blocks = list(pipeline_result.candidate_blocks)
+        event_payload = [event.model_dump(mode="json") for event in local_event_log.events]
+        turn_state_payload = pipeline_result.turn_state.model_dump(mode="json")
+        turn_pipeline_payload = {
+            "enabled": True,
+            "turn_state": turn_state_payload,
+            "event_count": len(event_payload),
+            "event_types": [event["event_type"] for event in event_payload],
+            "event_refs": [event["event_id"] for event in event_payload],
+        }
+        return {
+            "enabled": True,
+            "diagnostic_only": True,
+            "fallback_used": bool(assembled.fallback_used),
+            "candidate_block_count": len(candidate_blocks),
+            "selected_block_count": len(assembled.blocks),
+            "hcms_v2_memory_candidate_count": len(hcms_v2_memory_blocks),
+            "hcms_v2_memory_block_ids": [block.block_id for block in hcms_v2_memory_blocks],
+            "hcms_v2_memory_diagnostics": (
+                hcms_v2_memory_view.diagnostics if hcms_v2_memory_view is not None else {}
+            ),
+            "salience_route": (
+                local_salience_route.model_dump(mode="json")
+                if local_salience_route is not None
+                else None
+            ),
+            "candidate_block_titles": [
+                block.title for block in candidate_blocks
+            ],
+            "selected_block_titles": [
+                block.title for block in assembled.blocks
+            ],
+            "rendered_context_hash": stable_prompt_hash(assembled.rendered_context),
+            "actual_system_prompt_hash": stable_prompt_hash(system_prompt or ""),
+            "actual_prompt_mode": _RUNTIME_CONTEXT_V2_PROMPT_MODE,
+            "assembled_context_token_count": assembled.trace.total_tokens,
+            "trace": assembled.trace.model_dump(mode="json"),
+            "turn_pipeline": turn_pipeline_payload,
+            "turn_state": turn_state_payload,
+            "event_log": event_payload,
+        }
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "fallback_used": True,
+            "error": type(exc).__name__,
+        }
+
+
+def _legacy_memory_context_to_hcms_v2_view(
+    *,
+    namespace: str,
+    memory_context: str | None,
+    query: str,
+) -> Any | None:
+    if not memory_context:
+        return None
+    sanitized = sanitize_memory_context_text(memory_context)
+    facts = _memory_context_facts(sanitized)
+    if not facts:
+        return None
+    legacy_view = MemoryInjectionView(
+        namespace=namespace,
+        summary=sanitized[:500],
+        facts=facts,
+        evidence=facts,
+        confidence=0.5,
+    )
+    return memory_injection_view_v2_from_legacy(legacy_view, query=query)
+
+
+def _memory_context_facts(memory_context: str) -> tuple[str, ...]:
+    facts: list[str] = []
+    for raw_line in memory_context.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("[memory") or lowered.startswith("[/memory"):
+            continue
+        if line.startswith(("-", "*")):
+            line = line[1:].strip()
+        if line:
+            facts.append(line)
+    if facts:
+        return tuple(facts)
+    compacted = memory_context.strip()
+    return (compacted,) if compacted else ()
 
 
 def _section_token_counts(sections: list[Any]) -> dict[str, int]:

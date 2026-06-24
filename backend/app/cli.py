@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--api-key", default=None, help="Provider API key value to write into the active profile .env.")
     setup.add_argument("--api-key-env", default=None, help="Environment variable that stores the provider API key.")
     setup.add_argument("--base-url", default=None, help="OpenAI-compatible base URL override.")
+    setup.add_argument("--git-token", default=None, help="Git provider token value to write into the active profile .env.")
+    setup.add_argument("--git-token-env", default=None, help="Environment variable that stores the Git provider token.")
+    setup.add_argument("--git-provider", default=None, help="Git provider id used by HCMS version control, default github.")
+    setup.add_argument("--git-user-name", default=None, help="Git author name for HCMS version metadata.")
+    setup.add_argument("--git-user-email", default=None, help="Git author email for HCMS version metadata.")
+    setup.add_argument("--git-remote-url", default=None, help="Optional Git remote URL for HCMS version metadata.")
     setup.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values.")
     setup.add_argument("--force", action="store_true", help="Replace existing config with a minimal Anvil config before applying setup values.")
 
@@ -123,14 +129,24 @@ def build_parser() -> argparse.ArgumentParser:
     plugins_sub = plugins.add_subparsers(dest="plugins_command")
     plugins_sub.add_parser("list", help="List installed plugins.")
 
-    memory = subparsers.add_parser("memory", help="Inspect memory stores, providers, and archive search.")
+    memory = subparsers.add_parser("memory", help="Inspect HCMS stores, engines, and archive search.")
     memory_sub = memory.add_subparsers(dest="memory_command")
     memory_sub.add_parser("overview", help="Show memory overview.")
     memory_sub.add_parser("stores", help="List memory stores.")
-    memory_sub.add_parser("providers", help="List memory providers.")
+    memory_sub.add_parser("engines", help="List HCMS engines.")
     memory_search = memory_sub.add_parser("search", help="Search archived memory turns.")
     memory_search.add_argument("query", nargs="+")
     memory_search.add_argument("--limit", type=int, default=5)
+    memory_migrate = memory_sub.add_parser("migrate", help="Migrate legacy memory source files into an HCMS store.")
+    memory_migrate.add_argument("--from", dest="source_system", choices=["agentmemory", "deerflow", "anvil"], required=True)
+    memory_migrate.add_argument("--source-file", default=None, help="Source JSON file, DeerFlow memory.json, or legacy Anvil JSON file.")
+    memory_migrate.add_argument("--source-dir", default=None, help="Source directory containing JSON memory files.")
+    memory_migrate.add_argument("--source-db", default=None, help="Legacy Anvil SQLite curated.db path.")
+    memory_migrate.add_argument("--target-dir", required=True, help="Target HCMS FileMemoryStore directory.")
+    memory_migrate.add_argument("--namespace", default="global/default", help="Target HCMS namespace.")
+    memory_migrate.add_argument("--source-agent", default=None, help="Optional source agent label for imported memories.")
+    memory_migrate.add_argument("--validate", action="store_true", help="Validate converted HCMS Markdown schema before reporting success.")
+    memory_migrate.add_argument("--dry-run", action="store_true", help="Convert and validate without writing the target store.")
     memory_sub.add_parser("reflections", help="List reflection jobs.")
 
     context = subparsers.add_parser("context", help="Show thread context and runtime path roots.")
@@ -244,6 +260,7 @@ def _handle_setup(args: argparse.Namespace, *, config_path: Path) -> str:
         if api_key and api_key_env:
             _upsert_dotenv_value(config_path.parent / ".env", api_key_env, api_key)
             os.environ[api_key_env] = api_key
+    _configure_git_basics(payload, args=args, config_path=config_path)
     _write_config(config_path, payload)
     load_dotenv_file(config_path.parent / ".env", override=True)
     return f"Config ready: {config_path}"
@@ -459,24 +476,44 @@ def _handle_plugins(args: argparse.Namespace, *, config_path: Path, profile: She
         if not plugins:
             return "No plugins installed."
         return "\n".join(
-            f"{item.plugin_id} enabled={item.enabled} tools={item.tool_count} skills={len(item.skill_roots)} memory={item.memory_provider_count}"
+            f"{item.plugin_id} enabled={item.enabled} tools={item.tool_count} skills={len(item.skill_roots)}"
             for item in plugins
         )
 
 
 def _handle_memory(args: argparse.Namespace, *, config_path: Path, profile: ShellProfile) -> str:
     subcommand = args.memory_command or "overview"
+    if subcommand == "migrate":
+        from anvil.memory import run_memory_migration
+
+        source_path = _memory_migration_source_path(args)
+        result = run_memory_migration(
+            source_system=args.source_system,
+            source_path=source_path,
+            target_dir=Path(args.target_dir),
+            namespace=args.namespace,
+            source_agent=args.source_agent,
+            validate=bool(args.validate),
+            dry_run=bool(args.dry_run),
+        )
+        validation = "passed" if result.validation_valid else "failed"
+        suffix = " dry_run=true" if args.dry_run else ""
+        return (
+            f"Migration complete: source={result.source_system} seen={result.total_seen} "
+            f"migrated={result.migrated_count} written={result.written_count} "
+            f"errors={result.error_count} validation={validation}{suffix}"
+        )
     with EmbeddedClient(_client_config(config_path, profile=profile)) as client:
         if subcommand == "stores":
             stores = client.list_memory_stores()
             if not stores:
                 return "No memory stores."
             return "\n".join(f"{item.store_id} entries={item.entry_count} usage={item.usage_tokens} tokens" for item in stores)
-        if subcommand == "providers":
-            providers = client.list_memory_providers()
-            if not providers:
-                return "No memory providers."
-            return "\n".join(f"{item.provider_id} [{item.family}] active={item.active}" for item in providers)
+        if subcommand == "engines":
+            engines = client.list_memory_engines()
+            if not engines:
+                return "No HCMS engines."
+            return "\n".join(f"{item.engine_id} [{item.family}] active={item.active}" for item in engines)
         if subcommand == "search":
             result = client.search_memory_archive(" ".join(args.query), limit=args.limit)
             if not result.hits:
@@ -489,13 +526,20 @@ def _handle_memory(args: argparse.Namespace, *, config_path: Path, profile: Shel
             return "\n".join(f"{item.job_id} [{item.template}] enabled={item.enabled}" for item in jobs)
         overview = client.get_memory_overview()
         lines = [
-            f"Provider: {overview.active_provider_id or 'none'}",
+            f"Engine: {overview.active_engine_id or 'none'}",
             f"Stores: {overview.store_count}",
             f"Archive turns: {overview.archive_turn_count}",
             f"Reflection jobs: {overview.reflection_job_count}",
         ]
         lines.extend(f"- {store.store_id}: {store.entry_count} entries" for store in overview.stores)
         return "\n".join(lines)
+
+
+def _memory_migration_source_path(args: argparse.Namespace) -> Path:
+    supplied = [value for value in (args.source_file, args.source_dir, args.source_db) if value]
+    if len(supplied) != 1:
+        raise SystemExit("memory migrate requires exactly one of --source-file, --source-dir, or --source-db")
+    return Path(supplied[0])
 
 
 def _handle_context(args: argparse.Namespace, *, config_path: Path, profile: ShellProfile) -> str:
@@ -713,6 +757,58 @@ def _upsert_model_provider(
     if bootstrap_default:
         llm["default"] = name
         payload["default_model"] = name
+
+
+def _configure_git_basics(payload: dict[str, Any], *, args: argparse.Namespace, config_path: Path) -> None:
+    git_payload = payload.setdefault("git", {})
+    if not isinstance(git_payload, dict):
+        raise ValueError("config key 'git' must be a mapping")
+    git_payload["enabled"] = True
+    git_payload["required"] = True
+    git_payload["provider"] = (args.git_provider or git_payload.get("provider") or "github").strip().lower()
+    token_env = args.git_token_env or str(git_payload.get("token_env") or "GITHUB_TOKEN")
+    if not args.non_interactive:
+        token_env = _prompt("Git token env", default=token_env)
+    token_env = _clean_env_name(token_env) or "GITHUB_TOKEN"
+    git_payload["token_env"] = token_env
+
+    git_token = args.git_token
+    if git_token is None and not args.non_interactive:
+        git_token = _prompt_secret(f"{token_env} value", default="")
+    if git_token:
+        _upsert_dotenv_value(config_path.parent / ".env", token_env, git_token)
+        os.environ[token_env] = git_token
+
+    user_name = args.git_user_name
+    if user_name is None and not args.non_interactive:
+        user_name = _prompt("Git user name", default=str(git_payload.get("user_name") or ""))
+    _set_optional_payload_value(git_payload, "user_name", user_name)
+
+    user_email = args.git_user_email
+    if user_email is None and not args.non_interactive:
+        user_email = _prompt("Git user email", default=str(git_payload.get("user_email") or ""))
+    _set_optional_payload_value(git_payload, "user_email", user_email)
+
+    _set_optional_payload_value(git_payload, "remote_url", args.git_remote_url)
+
+
+def _clean_env_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if cleaned.startswith("${") and cleaned.endswith("}"):
+        cleaned = cleaned[2:-1].strip()
+    return cleaned or None
+
+
+def _set_optional_payload_value(payload: dict[str, Any], key: str, value: str | None) -> None:
+    if value is None:
+        return
+    cleaned = str(value).strip()
+    if cleaned:
+        payload[key] = cleaned
+    else:
+        payload.pop(key, None)
 
 
 def _has_default_model_provider(payload: dict[str, Any]) -> bool:

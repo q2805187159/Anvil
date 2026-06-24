@@ -42,9 +42,13 @@ nav:
       - Doctor, Smoke, and Tracing: guides/doctor-smoke-and-tracing.md
       - Document Pipeline: guides/document-pipeline.md
       - Extensions and Capability Surfaces: guides/extensions-and-capability-surfaces.md
+      - HCMS Memory API: guides/hcms-memory-api.md
       - Local Docker Workspace: guides/local-docker-workspace.md
       - Open Source Release Checklist: guides/open-source-release.md
       - Release Verification: guides/release-verification.md
+  - Memory:
+      - HCMS Benchmark Report: memory/hcms-benchmark-report.md
+      - HCMS Implementation Audit: memory/hcms-implementation-audit.md
   - ADRs:
       - ADR Index: adr/index.md
       - Baseline and Extension Policy: adr/ADR-001-architecture-baseline-and-extension-policy.md

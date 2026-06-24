@@ -1,6 +1,7 @@
 import type {
   ApprovalCancelRequest,
   ApprovalResumeRequest,
+  EvaluationThreadReportView,
   ProcessLogView,
   ProcessResizeRequest,
   ProcessSessionView,
@@ -96,6 +97,10 @@ export function getThreadDetail(threadId: string, options: ThreadDetailOptions =
   const query = params.toString();
   const suffix = query ? `?${query}` : "";
   return apiRequest<ThreadDetailView>(`/threads/${threadId}/detail${suffix}`);
+}
+
+export function getThreadEvaluationReport(threadId: string) {
+  return apiRequest<EvaluationThreadReportView>(`/threads/${threadId}/evaluation-report`);
 }
 
 export function getThreadSettings(threadId: string) {

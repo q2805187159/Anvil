@@ -1,0 +1,18 @@
+name: memory-http-integration-notes
+display_name: Memory HTTP Integration Notes
+description: Example documentation plugin for external HTTP memory integration.
+version: 0.1.0
+author: Anvil
+tags:
+  - memory
+  - hcms
+  - integration
+resources:
+  - resource_id: memory-http-integration-notes-readme
+    title: HTTP Memory Integration Notes
+    path: README.md
+catalog_metadata:
+  publisher: Anvil
+  trust_level: example
+  permissions:
+    - Documentation only; does not install or activate an external memory engine.

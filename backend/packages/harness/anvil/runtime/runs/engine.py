@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -25,14 +25,23 @@ from anvil.config import ConfigResolutionResult, ConfigService, ConfigLayer, Mod
 from anvil.extensions import ExtensionsService
 from anvil.runtime.checkpointers import Checkpointer
 from anvil.runtime.context_envelope import ContextAssembler, is_image_upload
+from anvil.runtime.context_v2 import stable_context_id
 from anvil.runtime.serialization import deserialize_messages, normalize_message_content, serialize_messages, strip_inline_thinking_tags, translate_message_for_runtime
+from anvil.runtime.state_v2 import (
+    EventLog,
+    RuntimeEvent,
+    RuntimeEventBus,
+    ToolResultStore,
+    WorkspaceState,
+    tool_result_record_to_event,
+)
 from anvil.runtime.store import Store
 from anvil.runtime.token_usage import aggregate_token_usage_from_messages, enrich_token_usage_summary
 from anvil.runtime.tool_registry import CapabilityAssemblyService, ToolRegistry
 from anvil.runtime.approvals import ApprovalDecision, ApprovalRequest
 from anvil.sandbox import PathService
 from anvil.skills import ProcedureLearningService, SkillsService
-from anvil.memory_platform.pollution import tool_activity_pollution_reason
+from anvil.memory.pollution import tool_activity_pollution_reason
 
 from .events import (
     InMemoryRunEventLogStore,
@@ -47,6 +56,128 @@ EMPTY_FINAL_ASSISTANT_MESSAGE = (
     "The model stopped after tool execution without producing a final answer. "
     "The run was marked interrupted so you can continue from the available tool results."
 )
+
+_CONTEXT_V2_MEMORY_ACCOUNTING_MODES = {
+    "",
+    "block_assembly",
+    "context_v2",
+    "context_v2_only",
+    "runtime_context_v2",
+    "v2",
+}
+_DISABLED_MEMORY_CONTEXT_ACCOUNTING_MODES = {"0", "disabled", "false", "no", "none", "off"}
+_SUBAGENT_STREAM_FINALIZE_SETTLE_SECONDS = 1.5
+_SUBAGENT_STREAM_FINALIZE_POLL_SECONDS = 0.02
+
+_HCMS_RUNTIME_EVENT_CAPTURE_TYPES = {
+    "action_dispatch",
+    "capability_result",
+    "capability_usage",
+    "capability_used",
+    "conflict_alert",
+    "maintenance_scheduling",
+    "mcp_result",
+    "mcp_usage",
+    "observation_handling",
+    "runtime_warning",
+    "skill_result",
+    "skill_usage",
+    "state_update",
+    "tool_call",
+    "tool_result",
+    "tool_usage",
+    "workspace_state",
+    "workspace_state_updated",
+}
+_HCMS_RUNTIME_EVENT_CAPTURE_SKIP_TYPES = {
+    "attention_budgeting",
+    "context_assembled",
+    "context_assembly",
+    "intake",
+    "intent_profiling",
+    "llm_call",
+    "parallel_retrieval",
+    "query_planning",
+    "user_message",
+    "user_message_received",
+}
+_HCMS_CAPABILITY_EVENT_TYPES = {
+    "capability_usage",
+    "capability_used",
+    "capability_result",
+    "mcp_result",
+    "mcp_usage",
+    "skill_result",
+    "skill_usage",
+    "tool_call",
+    "tool_result",
+    "tool_usage",
+}
+_HCMS_CAPABILITY_SOURCE_KINDS = {"capability", "mcp", "skill", "tool"}
+_HCMS_CAPABILITY_METADATA_KEYS = {
+    "capability_id",
+    "capability_kind",
+    "capability_usage_id",
+    "mcp_server_id",
+    "resource_id",
+    "server_id",
+    "skill_id",
+    "skill_ids",
+    "skills",
+    "tool_call_id",
+    "tool_name",
+    "usage_id",
+}
+
+
+def _hcms_runtime_event_type(event: object) -> str:
+    return str(
+        getattr(event, "event_type", None)
+        or getattr(event, "type", None)
+        or ""
+    ).strip().lower()
+
+
+def _hcms_runtime_event_source_kind(event: object) -> str:
+    return str(getattr(event, "source_kind", None) or "").strip().lower()
+
+
+def _hcms_runtime_event_metadata(event: object) -> Mapping[str, object]:
+    metadata = getattr(event, "metadata", None)
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _hcms_runtime_event_has_refs(event: object) -> bool:
+    return bool(
+        getattr(event, "tool_result_refs", None)
+        or getattr(event, "workspace_refs", None)
+        or getattr(event, "capability_usage_refs", None)
+        or getattr(event, "payload_ref", None)
+        or getattr(event, "goal_stack_ref", None)
+    )
+
+
+def _hcms_runtime_event_has_capability_signal(event: object) -> bool:
+    event_type = _hcms_runtime_event_type(event)
+    source_kind = _hcms_runtime_event_source_kind(event)
+    metadata = _hcms_runtime_event_metadata(event)
+    return bool(
+        event_type in _HCMS_CAPABILITY_EVENT_TYPES
+        or source_kind in _HCMS_CAPABILITY_SOURCE_KINDS
+        or getattr(event, "capability_usage_refs", None)
+        or any(metadata.get(key) for key in _HCMS_CAPABILITY_METADATA_KEYS)
+    )
+
+
+def _hcms_runtime_event_capture_candidate(event: object) -> bool:
+    event_type = _hcms_runtime_event_type(event)
+    if event_type in _HCMS_RUNTIME_EVENT_CAPTURE_SKIP_TYPES:
+        return False
+    if event_type in _HCMS_RUNTIME_EVENT_CAPTURE_TYPES:
+        return True
+    if _hcms_runtime_event_has_refs(event):
+        return True
+    return _hcms_runtime_event_has_capability_signal(event)
 
 
 _RUN_PHASE_LABELS: dict[str, str] = {
@@ -368,6 +499,7 @@ class RunEngine:
         requires_vision = any(is_image_upload(item) for item in current_turn_uploads)
 
         trace_id = request.tracing_service.new_trace_id() if request.tracing_service is not None else request.thread_id
+        turn_user_text = self._turn_user_text(request)
         runtime = make_lead_agent(
             config_result=config_result,
             path_service=request.path_service,
@@ -385,6 +517,7 @@ class RunEngine:
                 ),
             ),
             request_context=request.request_context,
+            turn_user_text=turn_user_text,
             approval_context=request.approval_context,
             upload_context=request.upload_context,
             is_plan_mode=bool(
@@ -512,6 +645,44 @@ class RunEngine:
                     runtime=runtime,
                     event_adapter=event_adapter,
                 )
+                if run_event_envelopes:
+                    existing_steps = list(partial_state.conversation.steps)
+                    partial_state = RunSnapshotProjector().project(partial_state, list(run_event_envelopes))
+                    projected_steps_by_key = {
+                        (str(step.get("message_id") or ""), str(step.get("step_id") or "")): step
+                        for step in partial_state.conversation.steps
+                        if isinstance(step, dict)
+                    }
+                    merged_steps: list[dict[str, object]] = []
+                    seen_step_keys: set[tuple[str, str]] = set()
+                    for step in existing_steps:
+                        if not isinstance(step, dict):
+                            continue
+                        key = (str(step.get("message_id") or ""), str(step.get("step_id") or ""))
+                        projected_step = projected_steps_by_key.get(key)
+                        if projected_step is not None and projected_step.get("payload"):
+                            step = {**step, "payload": projected_step["payload"]}
+                        merged_steps.append(step)
+                        seen_step_keys.add(key)
+                    for key, step in projected_steps_by_key.items():
+                        if key not in seen_step_keys:
+                            merged_steps.append(step)
+                    for envelope in run_event_envelopes:
+                        if envelope.kind != "step_delta":
+                            continue
+                        step_id = str(envelope.payload.get("step_id") or envelope.block_id or "")
+                        message_id = str(envelope.payload.get("message_id") or envelope.message_id or "")
+                        delta = str(envelope.payload.get("payload_delta") or "")
+                        if not step_id or not delta:
+                            continue
+                        for step in merged_steps:
+                            if str(step.get("step_id") or "") == step_id and str(step.get("message_id") or "") == message_id:
+                                current = str(step.get("payload") or "")
+                                if not current.endswith(delta):
+                                    step["payload"] = f"{current}{delta}"
+                    partial_state.conversation.steps = merged_steps
+                    partial_state.lifecycle.status = ThreadLifecycleStatus.RUNNING
+                    partial_state.lifecycle.completed_at = None
                 request.checkpointer.put_thread_state(partial_state)
                 request.store.put_thread_metadata(ThreadMetadataView.from_thread_state(partial_state))
                 last_partial_persist_at = now
@@ -519,6 +690,7 @@ class RunEngine:
 
             def emit_events(events: list[RunEvent]):
                 for event in events:
+                    emitted = append_event(event)
                     if event.event in {
                         "step_started",
                         "summary_update",
@@ -527,9 +699,11 @@ class RunEngine:
                         "run_failed",
                     }:
                         persist_partial_state(force=True)
-                    elif event.event in {"step_delta", "step_updated"}:
+                    elif event.event == "step_delta":
+                        persist_partial_state(force=True)
+                    elif event.event == "step_updated":
                         persist_partial_state()
-                    yield append_event(event)
+                    yield emitted
 
             def drain_subagent_events_throttled() -> list[RunEvent]:
                 nonlocal last_subagent_drain_at
@@ -589,18 +763,21 @@ class RunEngine:
                     self._raise_if_cancelled(request)
                     if mode == "messages":
                         phase_recorder.mark("first_message_event")
+                        self._record_runtime_tool_observations(runtime, payload)
                         events = event_adapter.handle_message_stream(payload)
                         self._mark_first_visible_output(phase_recorder, events)
                         yield from emit_events(events)
                         yield from emit_events(drain_subagent_events_throttled())
                     elif mode == "updates":
                         phase_recorder.mark("first_update_event")
+                        self._record_runtime_tool_observations(runtime, payload)
                         events = event_adapter.handle_update_stream(payload)
                         self._mark_first_visible_output(phase_recorder, events)
                         yield from emit_events(events)
                         yield from emit_events(drain_subagent_events_throttled())
                     elif mode == "values" and isinstance(payload, dict):
                         phase_recorder.mark("first_values_event")
+                        self._record_runtime_tool_observations(runtime, payload)
                         final_values = payload
 
                 if final_values is None:
@@ -725,6 +902,14 @@ class RunEngine:
                 if request.subagent_service is not None:
                     request.subagent_service.reconcile_timeouts()
 
+            self._ensure_emergency_summary(runtime, updated_state)
+            if bool(getattr(runtime.context, "summarization_triggered", False)):
+                updated_state.conversation.summary = runtime.context.summary_context or updated_state.conversation.summary
+                updated_state.execution.context_window_usage = self._build_context_window_usage(
+                    token_usage=updated_state.execution.token_usage,
+                    runtime=runtime,
+                    messages=deserialize_messages(updated_state.conversation.messages),
+                )
             updated_state.execution.recent_tool_activity = self._merge_recent_tool_activity(
                 updated_state.execution.recent_tool_activity,
                 event_adapter.snapshot_recent_tool_activity(),
@@ -737,6 +922,7 @@ class RunEngine:
                         approval_profile=approval_req.approval_profile,
                         risk_category=approval_req.risk_category,
                         capability_group=approval_req.capability_group,
+                        requested_permissions=tuple(approval_req.requested_permissions),
                     )
                     if grant_key and grant_key not in updated_state.approvals.session_approval_grants:
                         updated_state.approvals.session_approval_grants.append(grant_key)
@@ -753,6 +939,23 @@ class RunEngine:
                 request=request,
                 runtime=runtime,
                 require_assistant=False,
+            )
+            self._publish_runtime_phase_event(
+                runtime,
+                phase="state_update",
+                source_kind="thread_state",
+                source_ref=request.run_id,
+                payload_summary="Thread state finalized for run.",
+                metadata={
+                    "status": updated_state.lifecycle.status.value,
+                    "message_count": len(
+                        list(getattr(updated_state.conversation, "messages", []) or [])
+                    ),
+                    "tool_activity_count": len(
+                        list(getattr(updated_state.execution, "recent_tool_activity", []) or [])
+                    ),
+                },
+                dedupe_key="thread_state_final",
             )
             persisted_state = request.checkpointer.get_thread_state(request.thread_id)
             if persisted_state is not None:
@@ -804,7 +1007,24 @@ class RunEngine:
                     )
                 )
                 completed_envelopes = event_log_store.list_events(thread_id=request.thread_id, run_id=request.run_id)
+                session_approval_grants = list(updated_state.approvals.session_approval_grants)
+                conversation_summary = updated_state.conversation.summary
                 updated_state = RunSnapshotProjector().project(updated_state, completed_envelopes)
+                persisted_after_projection = request.checkpointer.get_thread_state(request.thread_id)
+                updated_state.approvals.session_approval_grants = list(
+                    dict.fromkeys(
+                        [
+                            *session_approval_grants,
+                            *updated_state.approvals.session_approval_grants,
+                            *(
+                                persisted_after_projection.approvals.session_approval_grants
+                                if persisted_after_projection is not None
+                                else []
+                            ),
+                        ]
+                    )
+                )
+                updated_state.conversation.summary = conversation_summary or runtime.context.summary_context or updated_state.conversation.summary
                 runtime.context.run_phase_timings = updated_state.execution.runtime_phase_timings
                 request.checkpointer.put_thread_state(updated_state)
                 metadata = ThreadMetadataView.from_thread_state(updated_state)
@@ -888,6 +1108,19 @@ class RunEngine:
         if state.approvals.pending_approval is None:
             raise ValueError(f"thread '{thread_id}' has no pending approval to resume")
 
+        approval_grants = list(state.approvals.session_approval_grants)
+        if _approval_context_requests_session_grant(approval_context) and state.approvals.approval_request is not None:
+            approval_request = state.approvals.approval_request
+            grant_key = _compute_session_grant_key(
+                tool_name=approval_request.tool_name,
+                approval_profile=approval_request.approval_profile,
+                risk_category=approval_request.risk_category,
+                capability_group=approval_request.capability_group,
+                requested_permissions=tuple(approval_request.requested_permissions),
+            )
+            if grant_key and grant_key not in approval_grants:
+                approval_grants.append(grant_key)
+
         return self.run(
             RunRequest(
                 thread_id=thread_id,
@@ -921,7 +1154,7 @@ class RunEngine:
                 recent_upload_filenames=(),
                 chat_model_override=chat_model_override,
                 run_event_log_store=run_event_log_store,
-                approval_session_grants=tuple(state.approvals.session_approval_grants),
+                approval_session_grants=tuple(approval_grants),
             )
         )
 
@@ -987,6 +1220,9 @@ class RunEngine:
         updated.capabilities.capability_bundle_fingerprint = bundle.fingerprint
         updated.memory.memory_namespace = runtime.context.memory_namespace or updated.memory.memory_namespace
         updated.thread_data = runtime.context.thread_data or updated.thread_data
+        updated.approvals.session_approval_grants = list(
+            dict.fromkeys([*updated.approvals.session_approval_grants, *request.approval_session_grants])
+        )
         return self._sync_subagent_state(updated, request=request)
 
     def _current_user_message_ref(self, state: ThreadState, *, request: RunRequest) -> dict[str, object] | None:
@@ -1050,6 +1286,38 @@ class RunEngine:
                 }
             )
             known_message_ids.add(message_id)
+
+    def _ensure_emergency_summary(self, runtime, state: ThreadState) -> None:
+        if not bool(getattr(runtime.context, "emergency_summarize_triggered", False)):
+            return
+        reason = str(getattr(runtime.context, "emergency_summarize_reason", None) or "context length exceeded")
+        if not getattr(runtime.context, "summary_context", None):
+            runtime.context.summary_context = (
+                state.conversation.summary
+                or f"Emergency compacted conversation after model overload: {reason}"
+            )
+        runtime.context.summarization_triggered = True
+        runtime.context.compaction_level = int(getattr(runtime.context, "compaction_level", 0) or 0) or 3
+        runtime.context.compaction_level_label = getattr(runtime.context, "compaction_level_label", None) or "emergency"
+        runtime.context.compaction_reason = getattr(runtime.context, "compaction_reason", None) or reason
+        summarization_config = getattr(
+            getattr(getattr(runtime.context, "config_result", None), "effective_config", None),
+            "summarization",
+            None,
+        )
+        configured_keep_recent = (
+            getattr(summarization_config, "keep_recent_turns", None)
+            if summarization_config is not None
+            else None
+        )
+        runtime.context.compaction_keep_recent_turns = (
+            getattr(runtime.context, "compaction_keep_recent_turns", None)
+            or configured_keep_recent
+        )
+        diagnostics = dict(getattr(runtime.context, "compaction_diagnostics", {}) or {})
+        diagnostics.setdefault("compaction_level", runtime.context.compaction_level)
+        diagnostics.setdefault("summary_source", "empty_fallback")
+        runtime.context.compaction_diagnostics = diagnostics
 
     def _build_input_payload(
         self,
@@ -1373,6 +1641,32 @@ class RunEngine:
         trace_error: str | None,
         trace_exception: Exception | None,
     ) -> None:
+        self._publish_runtime_phase_event(
+            runtime,
+            phase="maintenance_scheduling",
+            source_kind="run_engine",
+            source_ref=request.run_id,
+            payload_summary="Post-run maintenance scheduled.",
+            metadata={
+                "post_run_maintenance": True,
+                "trace_error": bool(trace_error),
+                "title_refinement": trace_error is None,
+                "skill_feedback": True,
+                "procedure_learning": trace_error is None,
+                "hcms_record_turn": bool(
+                    request.memory_manager or getattr(runtime.context, "memory_manager", None)
+                ),
+            },
+            dedupe_key="post_run",
+        )
+        state.execution.runtime_assembly_snapshot = self._runtime_assembly_snapshot_payload(runtime)
+        state.execution.runtime_assembly_diff = self._runtime_assembly_diff_payload(runtime=runtime)
+        try:
+            request.checkpointer.put_thread_state(state)
+            request.store.put_thread_metadata(ThreadMetadataView.from_thread_state(state))
+        except Exception:
+            pass
+        self._record_hcms_turn(state, request=request, runtime=runtime)
         state_snapshot = state.model_copy(deep=True)
 
         self._schedule_async_title_refinement(
@@ -1381,7 +1675,6 @@ class RunEngine:
             runtime=runtime,
             require_assistant=trace_error is None,
         )
-        self._record_memory_platform_turn(state_snapshot, request=request, runtime=runtime)
 
         def run_maintenance() -> None:
             if trace_error is not None:
@@ -1627,7 +1920,23 @@ class RunEngine:
 
     def _finalize_stream_subagent_events(self, *, request: RunRequest, event_adapter=None) -> list[RunEvent]:
         events = self._drain_subagent_events(request=request, event_adapter=event_adapter)
-        if not self._has_active_subagents_for_run(request=request) and event_adapter is not None:
+        if request.subagent_service is None:
+            return events
+
+        had_active_subagents = self._has_active_subagents_for_run(request=request)
+        if had_active_subagents:
+            deadline = time.monotonic() + _SUBAGENT_STREAM_FINALIZE_SETTLE_SECONDS
+            while self._has_active_subagents_for_run(request=request) and time.monotonic() < deadline:
+                if hasattr(request.subagent_service, "reconcile_timeouts"):
+                    request.subagent_service.reconcile_timeouts()
+                if hasattr(request.subagent_service, "schedule_ready_tasks"):
+                    request.subagent_service.schedule_ready_tasks(parent_thread_id=request.thread_id)
+                time.sleep(_SUBAGENT_STREAM_FINALIZE_POLL_SECONDS)
+                events.extend(self._drain_subagent_events(request=request, event_adapter=event_adapter))
+
+        if had_active_subagents:
+            events.extend(self._drain_subagent_events(request=request, event_adapter=event_adapter))
+        if event_adapter is not None:
             events.extend(self._sync_subagent_step_snapshots(request=request, event_adapter=event_adapter))
         return events
 
@@ -1931,17 +2240,10 @@ class RunEngine:
         mentioned = getattr(bundle, "mentioned_skill_ids", ())
         return tuple(dict.fromkeys(str(item) for item in mentioned if str(item).strip()))
 
-    def _record_memory_platform_turn(self, updated_state: ThreadState, *, request: RunRequest, runtime) -> None:
-        memory_manager = request.memory_manager
+    def _record_hcms_turn(self, updated_state: ThreadState, *, request: RunRequest, runtime) -> None:
+        memory_manager = request.memory_manager or getattr(runtime.context, "memory_manager", None)
         if memory_manager is None:
             return
-
-        if request.include_user_message:
-            user_content = request.user_message
-        elif request.approval_context:
-            user_content = f"[approval-resume] {request.approval_context}"
-        else:
-            user_content = "[system-turn]"
 
         assistant_content = self._latest_assistant_content(updated_state)
         if assistant_content is None:
@@ -1950,11 +2252,15 @@ class RunEngine:
         try:
             memory_manager.record_turn(
                 thread_id=request.thread_id,
-                user_content=user_content,
+                user_content=self._turn_user_text(request),
                 assistant_content=assistant_content,
                 status=updated_state.lifecycle.status.value,
                 source_metadata=self._memory_source_metadata(updated_state),
+                capture=not bool(getattr(runtime.context, "memory_capture_processed", False)),
             )
+            self._record_hcms_runtime_events(memory_manager, runtime)
+            self._sync_hcms_workspace_state(memory_manager, runtime)
+            self._sync_hcms_conflict_alerts(memory_manager, runtime)
             memory_manager.record_prompt_snapshot(
                 thread_id=request.thread_id,
                 snapshot_id=runtime.prompt_snapshot.snapshot_id,
@@ -1964,8 +2270,211 @@ class RunEngine:
                 memory_fingerprint=runtime.prompt_snapshot.snapshot_key.memory_snapshot_fingerprint,
                 config_fingerprint=runtime.prompt_snapshot.snapshot_key.config_fingerprint,
             )
+            updated_state.execution.runtime_assembly_snapshot = self._runtime_assembly_snapshot_payload(runtime)
+            updated_state.execution.runtime_assembly_diff = self._runtime_assembly_diff_payload(runtime=runtime)
+            request.checkpointer.put_thread_state(updated_state)
+            request.store.put_thread_metadata(ThreadMetadataView.from_thread_state(updated_state))
         except Exception:
             return
+
+    def _record_hcms_runtime_events(self, memory_manager: object, runtime) -> None:
+        capture_runtime_event = getattr(memory_manager, "capture_runtime_event", None)
+        capture_runtime_events = getattr(memory_manager, "capture_runtime_events", None)
+        mine_capability_usage_events = getattr(memory_manager, "mine_capability_usage_events", None)
+        if (
+            not callable(capture_runtime_event)
+            and not callable(capture_runtime_events)
+            and not callable(mine_capability_usage_events)
+        ):
+            return
+        context = getattr(runtime, "context", None)
+        event_log = getattr(context, "event_log", None)
+        events = list(getattr(event_log, "events", []) or [])
+        if not events:
+            return
+        captured = set(getattr(context, "hcms_v2_captured_event_ids", set()) or set())
+        mined = set(getattr(context, "hcms_v2_mined_event_ids", set()) or set())
+        captured_event_types: list[str] = []
+        capture_failures: list[dict[str, str]] = []
+        skipped_event_types: list[str] = []
+        capture_candidates: list[object] = []
+        capture_candidate_types: list[str] = []
+        for event in events:
+            event_id = str(getattr(event, "event_id", "") or "")
+            if not event_id or event_id in captured:
+                continue
+            event_type = _hcms_runtime_event_type(event) or "runtime_event"
+            if not _hcms_runtime_event_capture_candidate(event):
+                captured.add(event_id)
+                skipped_event_types.append(event_type)
+                continue
+            capture_candidates.append(event)
+            capture_candidate_types.append(event_type)
+
+        if capture_candidates and callable(capture_runtime_events):
+            try:
+                capture_runtime_events(capture_candidates, namespace="global/default")
+            except Exception as exc:
+                for event, event_type in zip(capture_candidates, capture_candidate_types, strict=False):
+                    capture_failures.append(
+                        {
+                            "event_id": str(getattr(event, "event_id", "") or ""),
+                            "event_type": event_type,
+                            "error_type": exc.__class__.__name__,
+                        }
+                    )
+            else:
+                for event, event_type in zip(capture_candidates, capture_candidate_types, strict=False):
+                    event_id = str(getattr(event, "event_id", "") or "")
+                    if event_id:
+                        captured.add(event_id)
+                    captured_event_types.append(event_type)
+        elif callable(capture_runtime_event):
+            for event, event_type in zip(capture_candidates, capture_candidate_types, strict=False):
+                event_id = str(getattr(event, "event_id", "") or "")
+                try:
+                    capture_runtime_event(event, namespace="global/default")
+                except Exception as exc:
+                    capture_failures.append(
+                        {
+                            "event_id": event_id,
+                            "event_type": event_type,
+                            "error_type": exc.__class__.__name__,
+                        }
+                    )
+                    continue
+                captured.add(event_id)
+                captured_event_types.append(event_type)
+
+        mining_diagnostics: dict[str, object] = {"status": "skipped_no_miner"}
+        if callable(mine_capability_usage_events):
+            mining_events = []
+            mining_seen: set[str] = set()
+            skipped_mining_event_types: list[str] = []
+            for event in events:
+                event_id = str(getattr(event, "event_id", "") or "")
+                if not event_id or event_id in mined or event_id in mining_seen:
+                    continue
+                mining_seen.add(event_id)
+                event_type = _hcms_runtime_event_type(event) or "runtime_event"
+                if not _hcms_runtime_event_has_capability_signal(event):
+                    mined.add(event_id)
+                    skipped_mining_event_types.append(event_type)
+                    continue
+                mining_events.append(event)
+            if mining_events:
+                try:
+                    batch = mine_capability_usage_events(mining_events, namespace="global/default")
+                except Exception as exc:
+                    mining_diagnostics = {
+                        "status": "failed",
+                        "candidate_event_count": len(mining_events),
+                        "error_type": exc.__class__.__name__,
+                    }
+                else:
+                    event_count = int(getattr(batch, "event_count", 0) or 0)
+                    persisted_ids = list(getattr(batch, "persisted_memory_ids", []) or [])
+                    for event in mining_events:
+                        event_id = str(getattr(event, "event_id", "") or "")
+                        if event_id:
+                            mined.add(event_id)
+                    mining_diagnostics = {
+                        "status": "mined" if event_count else "skipped_no_capability_events",
+                        "candidate_event_count": len(mining_events),
+                        "event_count": event_count,
+                        "persisted_memory_count": len(persisted_ids),
+                        "persisted_memory_ids": persisted_ids,
+                        "skipped_event_types": sorted(set(skipped_mining_event_types)),
+                        "diagnostics": dict(getattr(batch, "diagnostics", {}) or {}),
+                    }
+            else:
+                mining_diagnostics = {
+                    "status": "skipped_no_new_events",
+                    "skipped_event_types": sorted(set(skipped_mining_event_types)),
+                }
+        setattr(context, "hcms_v2_captured_event_ids", captured)
+        setattr(context, "hcms_v2_mined_event_ids", mined)
+        setattr(
+            context,
+            "hcms_v2_runtime_event_capture_diagnostics",
+            {
+                "status": "captured"
+                if captured_event_types
+                else ("failed" if capture_failures else "skipped_no_new_events"),
+                "candidate_event_count": len(events),
+                "captured_event_count": len(captured_event_types),
+                "captured_event_types": sorted(set(captured_event_types)),
+                "skipped_event_types": sorted(set(skipped_event_types)),
+                "capture_failures": capture_failures[:8],
+                "capability_mining": mining_diagnostics,
+            },
+        )
+
+    def _sync_hcms_workspace_state(self, memory_manager: object, runtime) -> None:
+        sync_workspace_state = getattr(memory_manager, "sync_workspace_state", None)
+        if not callable(sync_workspace_state):
+            return
+        context = getattr(runtime, "context", None)
+        workspace_state = getattr(context, "workspace_state", None)
+        if workspace_state is None:
+            setattr(context, "workspace_memory_sync_diagnostics", {"status": "skipped_no_workspace_state"})
+            return
+        active_files = list(getattr(workspace_state, "active_files", []) or [])
+        variables = dict(getattr(workspace_state, "variables", {}) or {})
+        intermediate_results = list(getattr(workspace_state, "intermediate_results", []) or [])
+        if not active_files and not variables and not intermediate_results:
+            setattr(context, "workspace_memory_sync_diagnostics", {"status": "skipped_no_workspace_signal"})
+            return
+        try:
+            memory = sync_workspace_state(workspace_state, namespace="global/default")
+        except Exception:
+            setattr(context, "workspace_memory_sync_diagnostics", {"status": "failed"})
+            return
+        if memory is None:
+            setattr(context, "workspace_memory_sync_diagnostics", {"status": "skipped_no_workspace_signal"})
+            return
+        setattr(
+            context,
+            "workspace_memory_sync_diagnostics",
+            {
+                "status": "synced",
+                "memory_id": getattr(memory, "memory_id", None),
+                "layer_id": getattr(memory, "metadata", {}).get("layer_id"),
+                "workspace_state_ref": getattr(memory, "metadata", {}).get("workspace_state_ref"),
+                "active_file_count": getattr(memory, "metadata", {}).get("active_file_count"),
+                "variable_count": getattr(memory, "metadata", {}).get("variable_count"),
+                "intermediate_result_count": getattr(memory, "metadata", {}).get("intermediate_result_count"),
+            },
+        )
+
+    def _sync_hcms_conflict_alerts(self, memory_manager: object, runtime) -> None:
+        sync_conflict_alerts = getattr(memory_manager, "sync_conflict_alerts", None)
+        if not callable(sync_conflict_alerts):
+            return
+        context = getattr(runtime, "context", None)
+        review_inbox = getattr(context, "review_inbox", None)
+        if review_inbox is None:
+            setattr(context, "conflict_alert_sync_diagnostics", {"status": "skipped_no_review_inbox"})
+            return
+        try:
+            items = sync_conflict_alerts(review_inbox, namespace="global/default")
+        except Exception:
+            setattr(context, "conflict_alert_sync_diagnostics", {"status": "failed"})
+            return
+        diagnostics = dict(getattr(review_inbox, "diagnostics", {}).get("hcms_conflict_alert_sync", {}) or {})
+        if not diagnostics:
+            diagnostics = {
+                "status": "synced" if items else "skipped_no_conflicts",
+                "synced_count": len(items),
+            }
+        setattr(context, "conflict_alert_sync_diagnostics", diagnostics)
+
+    def _turn_user_text(self, request: RunRequest) -> str:
+        if request.include_user_message:
+            return request.user_message
+        if request.approval_context:
+            return f"[approval-resume] {request.approval_context}"
+        return "[system-turn]"
 
     def _latest_assistant_content(self, state: ThreadState) -> str | None:
         for step in reversed(state.conversation.steps):
@@ -2293,6 +2802,7 @@ class RunEngine:
     def _estimate_volatile_context_tokens(self, runtime) -> dict[str, int]:
         text_by_category: dict[str, list[str]] = {}
         seen: set[tuple[str, str]] = set()
+        context_v2_memory_enabled = self._context_v2_memory_accounting_enabled(runtime)
 
         def add_text(category: str, value: object) -> None:
             text = self._context_accounting_text(value)
@@ -2310,7 +2820,6 @@ class RunEngine:
             add_text("upload_context", getattr(injection_view, "upload_context", None))
             add_text("approval_context", getattr(injection_view, "approval_context", None))
             add_text("plan_context", getattr(injection_view, "plan_context", None))
-            add_text("memory_context", getattr(injection_view, "memory_context", None))
             add_text("promoted_capabilities", getattr(injection_view, "promoted_capabilities", ()))
 
         context = getattr(runtime, "context", None)
@@ -2318,7 +2827,8 @@ class RunEngine:
             add_text("request_context", getattr(context, "request_context", None))
             add_text("upload_context", getattr(context, "upload_context", None))
             add_text("approval_context", getattr(context, "approval_context", None))
-            add_text("memory_context", getattr(context, "memory_context", None))
+            if context_v2_memory_enabled:
+                add_text("context_v2_memory", self._context_v2_memory_accounting_text(context))
             add_text("conversation_summary", getattr(context, "summary_context", None))
             add_text("todo_state", getattr(context, "todo_context", None))
             add_text("view_image_context", getattr(context, "view_image_context", None))
@@ -2330,6 +2840,53 @@ class RunEngine:
             if token_count is not None and token_count > 0:
                 tokens[category] = token_count
         return tokens
+
+    def _context_v2_memory_accounting_enabled(self, runtime) -> bool:
+        context = getattr(runtime, "context", None)
+        if getattr(context, "context_v2_memory_blocks", None):
+            return True
+        if bool(getattr(context, "context_v2_memory_enabled", False)):
+            return True
+        mode = self._memory_context_mode_for_accounting(runtime)
+        if mode in _DISABLED_MEMORY_CONTEXT_ACCOUNTING_MODES:
+            return False
+        return mode in _CONTEXT_V2_MEMORY_ACCOUNTING_MODES or bool(mode)
+
+    def _memory_context_mode_for_accounting(self, runtime) -> str:
+        context = getattr(runtime, "context", None)
+        mode = getattr(context, "memory_context_mode", None)
+        diagnostics = getattr(context, "memory_injection_diagnostics", None)
+        if not mode and isinstance(diagnostics, dict):
+            mode = diagnostics.get("injection_mode")
+        return str(mode or "").strip().lower().replace("-", "_")
+
+    def _context_v2_memory_accounting_text(self, context) -> str | None:
+        parts: list[str] = []
+        for block in getattr(context, "context_v2_memory_blocks", ()) or ():
+            text = self._context_v2_memory_block_accounting_text(block)
+            if text:
+                parts.append(text)
+        return "\n".join(parts) if parts else None
+
+    def _context_v2_memory_block_accounting_text(self, block: object) -> str | None:
+        if hasattr(block, "model_dump"):
+            try:
+                payload = block.model_dump(mode="json")
+            except TypeError:
+                payload = block.model_dump()
+        elif isinstance(block, dict):
+            payload = block
+        else:
+            payload = {
+                "title": getattr(block, "title", None),
+                "content": getattr(block, "content", None),
+            }
+        if not isinstance(payload, dict):
+            return self._context_accounting_text(payload)
+        title = str(payload.get("title") or "").strip()
+        content = str(payload.get("content") or payload.get("summary") or "").strip()
+        block_parts = [part for part in (title, content) if part]
+        return "\n".join(block_parts) if block_parts else None
 
     def _context_accounting_text(self, value: object) -> str | None:
         if value is None:
@@ -2370,6 +2927,207 @@ class RunEngine:
     def _effective_active_reasoning_effort(self, runtime) -> str | None:
         return getattr(runtime.context, "active_reasoning_effort", None) or runtime.resolved_route.reasoning_effort
 
+    def _record_runtime_tool_observations(self, runtime, payload) -> None:
+        for message in self._tool_messages_from_stream_payload(payload):
+            self._record_runtime_tool_message(runtime, message)
+
+    def _tool_messages_from_stream_payload(self, payload) -> list[ToolMessage]:
+        messages: list[ToolMessage] = []
+        if isinstance(payload, ToolMessage):
+            return [payload]
+        if isinstance(payload, tuple) and payload:
+            return self._tool_messages_from_stream_payload(payload[0])
+        if isinstance(payload, dict):
+            for key in ("tools", "ToolNode", "tool"):
+                value = payload.get(key)
+                if isinstance(value, dict):
+                    messages.extend(self._tool_messages_from_stream_payload(value.get("messages")))
+            raw_messages = payload.get("messages")
+            if isinstance(raw_messages, list):
+                for item in raw_messages:
+                    messages.extend(self._tool_messages_from_stream_payload(item))
+            return messages
+        if isinstance(payload, list):
+            for item in payload:
+                messages.extend(self._tool_messages_from_stream_payload(item))
+        return messages
+
+    def _publish_runtime_phase_event(
+        self,
+        runtime,
+        *,
+        phase: str,
+        actor: str = "runtime",
+        source_kind: str = "run_engine",
+        source_ref: str | None = None,
+        payload_summary: str | None = None,
+        metadata: dict[str, object] | None = None,
+        tool_result_refs: list[str | None] | tuple[str | None, ...] = (),
+        workspace_refs: list[str | None] | tuple[str | None, ...] = (),
+        capability_usage_refs: list[str | None] | tuple[str | None, ...] = (),
+        dedupe_key: str | None = None,
+    ) -> RuntimeEvent | None:
+        context = getattr(runtime, "context", None)
+        if context is None:
+            return None
+        thread_id = str(getattr(context, "thread_id", "") or "thread")
+        run_id_value = getattr(context, "run_id", None)
+        run_id = str(run_id_value) if run_id_value is not None else None
+        turn_id = str(run_id or getattr(context, "turn_index", None) or "turn-unknown")
+        event_log = getattr(context, "event_log", None)
+        if event_log is None:
+            event_log = EventLog(thread_id=thread_id)
+            setattr(context, "event_log", event_log)
+        event_bus = getattr(context, "runtime_event_bus", None)
+        if event_bus is None:
+            event_bus = RuntimeEventBus(event_log=event_log)
+            setattr(context, "runtime_event_bus", event_bus)
+        event_id = stable_context_id(
+            "event",
+            thread_id,
+            turn_id,
+            "runtime_phase",
+            phase,
+            source_ref or "",
+            dedupe_key or "",
+        )
+        if any(getattr(event, "event_id", None) == event_id for event in getattr(event_log, "events", []) or []):
+            return None
+        goal_stack = getattr(context, "goal_stack", None)
+        event_metadata = {"phase": phase, **dict(metadata or {})}
+        event = RuntimeEvent(
+            event_id=event_id,
+            event_type=phase,
+            actor=actor,
+            thread_id=thread_id,
+            run_id=run_id,
+            turn_id=turn_id,
+            source_kind=source_kind,
+            source_ref=source_ref or phase,
+            payload_summary=self._bounded_runtime_state_text(
+                payload_summary or f"RunEngine phase completed: {phase}.",
+                max_chars=480,
+            )
+            or phase,
+            trace_id=getattr(context, "run_trace_id", None),
+            tool_result_refs=[str(ref) for ref in tool_result_refs if ref],
+            workspace_refs=[str(ref) for ref in workspace_refs if ref],
+            goal_stack_ref=getattr(goal_stack, "stack_id", None),
+            capability_usage_refs=[str(ref) for ref in capability_usage_refs if ref],
+            metadata=self._bounded_runtime_state_mapping(event_metadata),
+        )
+        try:
+            return event_bus.publish(event)
+        except Exception:
+            return None
+
+    def _record_runtime_tool_message(self, runtime, message: ToolMessage) -> None:
+        context = getattr(runtime, "context", None)
+        if context is None:
+            return
+        thread_id = str(getattr(context, "thread_id", "") or "thread")
+        tool_result_store = getattr(context, "tool_result_store", None)
+        if tool_result_store is None:
+            tool_result_store = ToolResultStore(thread_id=thread_id)
+            setattr(context, "tool_result_store", tool_result_store)
+        workspace_state = getattr(context, "workspace_state", None)
+        if workspace_state is None:
+            workspace_state = WorkspaceState(
+                workspace_id=f"workspace:{thread_id}",
+                thread_id=thread_id,
+                project_root=str(getattr(getattr(context, "path_service", None), "base_root", "") or "") or None,
+            )
+            setattr(context, "workspace_state", workspace_state)
+        event_log = getattr(context, "event_log", None)
+        if event_log is None:
+            event_log = EventLog(thread_id=thread_id)
+            setattr(context, "event_log", event_log)
+        event_bus = getattr(context, "runtime_event_bus", None)
+        if event_bus is None:
+            event_bus = RuntimeEventBus(event_log=event_log)
+            setattr(context, "runtime_event_bus", event_bus)
+        turn_id = str(getattr(context, "run_id", None) or getattr(context, "turn_index", None) or "turn-unknown")
+        tool_name = str(getattr(message, "name", None) or "tool")
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        self._publish_runtime_phase_event(
+            runtime,
+            phase="action_dispatch",
+            actor="runtime",
+            source_kind="tool",
+            source_ref=tool_call_id or tool_name,
+            payload_summary=f"Tool action dispatched: {tool_name}.",
+            metadata={
+                "capability_id": f"tool:{tool_name}",
+                "capability_kind": "tool",
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id or None,
+                "status": "dispatched",
+            },
+            dedupe_key=tool_call_id or tool_name,
+        )
+        record = tool_result_store.ingest_tool_message(
+            message,
+            tool_name=tool_name,
+            run_id=getattr(context, "run_id", None),
+            turn_id=turn_id,
+            workspace_state=workspace_state,
+        )
+        event_id = tool_result_record_to_event(
+            record,
+            thread_id=thread_id,
+            workspace_refs=[record.workspace_ref],
+            trace_id=getattr(context, "run_trace_id", None),
+        ).event_id
+        if any(event.event_id == event_id for event in event_log.events):
+            return
+        event_bus.publish(
+            tool_result_record_to_event(
+                record,
+                thread_id=thread_id,
+                workspace_refs=[record.workspace_ref],
+                trace_id=getattr(context, "run_trace_id", None),
+            )
+        )
+        self._publish_runtime_phase_event(
+            runtime,
+            phase="observation_handling",
+            actor="runtime",
+            source_kind="tool",
+            source_ref=record.tool_call_id or record.result_id,
+            payload_summary=f"Tool observation summarized: {record.tool_name}.",
+            metadata={
+                "capability_id": record.capability_id or f"tool:{record.tool_name}",
+                "capability_kind": "tool",
+                "tool_name": record.tool_name,
+                "tool_call_id": record.tool_call_id,
+                "tool_result_id": record.result_id,
+                "status": record.status,
+                "compacted": record.compacted,
+            },
+            tool_result_refs=[record.result_id],
+            workspace_refs=[record.workspace_ref],
+            dedupe_key=record.result_id,
+        )
+        self._publish_runtime_phase_event(
+            runtime,
+            phase="state_update",
+            actor="runtime",
+            source_kind="workspace_state",
+            source_ref=record.workspace_ref or record.result_id,
+            payload_summary=f"Workspace state updated from tool result: {record.tool_name}.",
+            metadata={
+                "capability_id": record.capability_id or f"tool:{record.tool_name}",
+                "capability_kind": "tool",
+                "tool_name": record.tool_name,
+                "tool_result_id": record.result_id,
+                "workspace_ref": record.workspace_ref,
+                "intermediate_result_count": len(list(getattr(workspace_state, "intermediate_results", []) or [])),
+            },
+            tool_result_refs=[record.result_id],
+            workspace_refs=[record.workspace_ref],
+            dedupe_key=f"{record.result_id}:workspace_state",
+        )
+
     def _runtime_assembly_snapshot_payload(self, runtime) -> dict[str, object]:
         snapshot = getattr(runtime, "assembly_snapshot", None)
         if snapshot is None:
@@ -2377,6 +3135,9 @@ class RunEngine:
         if hasattr(snapshot, "model_dump"):
             payload = snapshot.model_dump(mode="json")
             if isinstance(payload, dict):
+                context_v2 = payload.get("context_v2")
+                if isinstance(context_v2, dict):
+                    context_v2["runtime_state"] = self._runtime_state_v2_payload(runtime)
                 diagnostics = getattr(getattr(runtime, "context", None), "memory_injection_diagnostics", None)
                 if isinstance(diagnostics, dict) and diagnostics:
                     payload["memory_injection_diagnostics"] = dict(diagnostics)
@@ -2387,6 +3148,9 @@ class RunEngine:
             return payload if isinstance(payload, dict) else {}
         if isinstance(snapshot, dict):
             payload = dict(snapshot)
+            context_v2 = payload.get("context_v2")
+            if isinstance(context_v2, dict):
+                context_v2["runtime_state"] = self._runtime_state_v2_payload(runtime)
             diagnostics = getattr(getattr(runtime, "context", None), "memory_injection_diagnostics", None)
             if isinstance(diagnostics, dict) and diagnostics:
                 payload["memory_injection_diagnostics"] = dict(diagnostics)
@@ -2395,6 +3159,249 @@ class RunEngine:
                 payload["compaction_diagnostics"] = dict(compaction_diagnostics)
             return payload
         return {}
+
+    def _runtime_state_v2_payload(self, runtime) -> dict[str, object]:
+        context = getattr(runtime, "context", None)
+        tool_result_store = getattr(context, "tool_result_store", None)
+        workspace_state = getattr(context, "workspace_state", None)
+        goal_stack = getattr(context, "goal_stack", None)
+        salience_route = getattr(context, "salience_route", None)
+        review_inbox = getattr(context, "review_inbox", None)
+        event_log = getattr(context, "event_log", None)
+        capability_registry = getattr(context, "tool_registry", None)
+        skill_feedback_decisions = list(getattr(context, "skill_selection_feedback_decisions", []) or [])
+        records = list(getattr(tool_result_store, "records", []) or [])
+        intermediate_results = list(getattr(workspace_state, "intermediate_results", []) or [])
+        goals = list(getattr(goal_stack, "goals", []) or [])
+        review_items = list(getattr(review_inbox, "items", []) or [])
+        warning_blocks = list(getattr(review_inbox, "to_context_blocks", lambda: [])() or [])
+        events = list(getattr(event_log, "events", []) or [])
+        return {
+            "tool_result_store": {
+                "thread_id": getattr(tool_result_store, "thread_id", None),
+                "record_count": len(records),
+                "records": [record.model_dump(mode="json") for record in records[-16:]],
+            },
+            "workspace_state": {
+                "workspace_id": getattr(workspace_state, "workspace_id", None),
+                "thread_id": getattr(workspace_state, "thread_id", None),
+                "project_root": getattr(workspace_state, "project_root", None),
+                "active_files": list(getattr(workspace_state, "active_files", []) or [])[:16],
+                "intermediate_results": [item.model_dump(mode="json") for item in intermediate_results[-16:]],
+                "diagnostics": dict(getattr(workspace_state, "diagnostics", {}) or {}),
+                "working_memory_sync": self._bounded_runtime_state_mapping(
+                    dict(getattr(context, "workspace_memory_sync_diagnostics", {}) or {})
+                ),
+            },
+            "goal_stack": {
+                "stack_id": getattr(goal_stack, "stack_id", None),
+                "thread_id": getattr(goal_stack, "thread_id", None),
+                "active_goal_id": getattr(goal_stack, "active_goal_id", None),
+                "goal_count": len(goals),
+                "goals": [self._goal_frame_payload(goal) for goal in goals[-16:]],
+                "updated_at": getattr(goal_stack, "updated_at", None).isoformat()
+                if getattr(goal_stack, "updated_at", None) is not None
+                else None,
+                "diagnostics": self._bounded_runtime_state_mapping(
+                    dict(getattr(goal_stack, "diagnostics", {}) or {})
+                ),
+            },
+            "salience_route": self._salience_route_payload(salience_route),
+            "review_inbox": {
+                "inbox_id": getattr(review_inbox, "inbox_id", None),
+                "thread_id": getattr(review_inbox, "thread_id", None),
+                "item_count": len(review_items),
+                "open_item_count": sum(1 for item in review_items if item.is_unresolved()),
+                "items": [self._review_inbox_item_payload(item) for item in review_items[-16:]],
+                "warning_blocks": [block.model_dump(mode="json") for block in warning_blocks[-16:]],
+                "diagnostics": dict(getattr(review_inbox, "diagnostics", {}) or {}),
+            },
+            "event_log": {
+                "thread_id": getattr(event_log, "thread_id", None),
+                "event_count": len(events),
+                "event_types": [event.event_type for event in events],
+                "events": [event.model_dump(mode="json") for event in events[-32:]],
+            },
+            "capability_registry": self._capability_registry_payload(
+                capability_registry,
+                skill_feedback_decisions=skill_feedback_decisions,
+            ),
+        }
+
+    def _goal_frame_payload(self, goal) -> dict[str, object]:
+        return {
+            "goal_id": getattr(goal, "goal_id", None),
+            "title": self._bounded_runtime_state_text(getattr(goal, "title", None), max_chars=180),
+            "status": getattr(goal, "status", None),
+            "summary": self._bounded_runtime_state_text(getattr(goal, "summary", None), max_chars=360),
+            "blockers": [
+                self._bounded_runtime_state_text(item, max_chars=240)
+                for item in list(getattr(goal, "blockers", []) or [])[:12]
+            ],
+            "next_actions": [
+                self._bounded_runtime_state_text(item, max_chars=240)
+                for item in list(getattr(goal, "next_actions", []) or [])[:12]
+            ],
+            "keywords": list(getattr(goal, "keywords", []) or [])[:24],
+            "priority": getattr(goal, "priority", None),
+            "metadata": self._bounded_runtime_state_mapping(dict(getattr(goal, "metadata", {}) or {})),
+        }
+
+    def _salience_route_payload(self, route) -> dict[str, object] | None:
+        if route is None:
+            return None
+        if hasattr(route, "model_dump"):
+            payload = route.model_dump(mode="json")
+        else:
+            payload = {
+                "route_id": getattr(route, "route_id", None),
+                "goal_stack_ref": getattr(route, "goal_stack_ref", None),
+                "active_goal_id": getattr(route, "active_goal_id", None),
+                "memory_query": getattr(route, "memory_query", None),
+                "boost_terms": getattr(route, "boost_terms", {}) or {},
+                "blocker_terms": getattr(route, "blocker_terms", []) or [],
+                "next_action_terms": getattr(route, "next_action_terms", []) or [],
+                "suppressed_goal_refs": getattr(route, "suppressed_goal_refs", []) or [],
+                "diagnostics": getattr(route, "diagnostics", {}) or {},
+            }
+        payload["memory_query"] = self._bounded_runtime_state_text(payload.get("memory_query"), max_chars=1800)
+        payload["blocker_terms"] = [
+            self._bounded_runtime_state_text(item, max_chars=240)
+            for item in list(payload.get("blocker_terms") or [])[:24]
+        ]
+        payload["next_action_terms"] = [
+            self._bounded_runtime_state_text(item, max_chars=240)
+            for item in list(payload.get("next_action_terms") or [])[:24]
+        ]
+        payload["suppressed_goal_refs"] = list(payload.get("suppressed_goal_refs") or [])[:32]
+        payload["boost_terms"] = dict(list(dict(payload.get("boost_terms") or {}).items())[:32])
+        payload["diagnostics"] = self._bounded_runtime_state_mapping(dict(payload.get("diagnostics") or {}))
+        return payload
+
+    def _review_inbox_item_payload(self, item) -> dict[str, object]:
+        return {
+            "review_inbox_id": getattr(item, "review_inbox_id", None),
+            "alert_id": getattr(item, "alert_id", None),
+            "conflict_id": getattr(item, "conflict_id", None),
+            "severity": getattr(item, "severity", None),
+            "status": getattr(item, "status", None),
+            "affected_claims": list(getattr(item, "affected_claims", []) or [])[:24],
+            "affected_memories": list(getattr(item, "affected_memories", []) or [])[:24],
+            "preferred_claim_id": getattr(item, "preferred_claim_id", None),
+            "unresolved_reason": self._bounded_runtime_state_text(getattr(item, "unresolved_reason", None)),
+            "injection_policy": getattr(item, "injection_policy", None),
+            "conflict_type": getattr(item, "conflict_type", None),
+            "created_at": getattr(item, "created_at", None).isoformat()
+            if getattr(item, "created_at", None) is not None
+            else None,
+            "metadata": self._bounded_runtime_state_mapping(getattr(item, "metadata", {}) or {}),
+        }
+
+    def _capability_registry_payload(
+        self,
+        registry,
+        *,
+        skill_feedback_decisions: list[object],
+    ) -> dict[str, object]:
+        entries_method = getattr(registry, "entries", None)
+        entries = list(entries_method() or []) if callable(entries_method) else []
+        feedback_entries = []
+        for entry in entries:
+            provenance = getattr(entry, "provenance", {}) or {}
+            stats = provenance.get("skill_selection_feedback") if isinstance(provenance, dict) else None
+            if isinstance(stats, dict):
+                feedback_entries.append(self._capability_feedback_entry_payload(entry, stats))
+
+        skill_feedback_count = 0
+        for entry in feedback_entries:
+            feedback = entry.get("feedback")
+            if not isinstance(feedback, dict):
+                continue
+            try:
+                skill_feedback_count += int(feedback.get("feedback_count") or 0)
+            except (TypeError, ValueError):
+                continue
+
+        return {
+            "entry_count": len(entries),
+            "feedback_entry_count": len(feedback_entries),
+            "skill_feedback_count": skill_feedback_count,
+            "feedback_entries": feedback_entries[-16:],
+            "feedback_decisions": [
+                self._capability_feedback_decision_payload(decision)
+                for decision in skill_feedback_decisions[-16:]
+            ],
+        }
+
+    def _capability_feedback_entry_payload(
+        self,
+        entry,
+        stats: dict[str, object],
+    ) -> dict[str, object]:
+        source_kind = getattr(entry, "source_kind", None)
+        if hasattr(source_kind, "value"):
+            source_kind = source_kind.value
+        return {
+            "name": self._bounded_runtime_state_text(getattr(entry, "name", None), max_chars=160),
+            "display_name": self._bounded_runtime_state_text(
+                getattr(entry, "display_name", None),
+                max_chars=180,
+            ),
+            "source_kind": self._bounded_runtime_state_text(source_kind, max_chars=80),
+            "source_id": self._bounded_runtime_state_text(getattr(entry, "source_id", None), max_chars=160),
+            "capability_id": self._bounded_runtime_state_text(getattr(entry, "capability_id", None), max_chars=240),
+            "feedback": self._bounded_runtime_state_mapping(stats),
+        }
+
+    def _capability_feedback_decision_payload(self, decision) -> dict[str, object]:
+        if hasattr(decision, "model_dump"):
+            payload = decision.model_dump(mode="json")
+        else:
+            payload = {
+                "skill_id": getattr(decision, "skill_id", None),
+                "capability_ids": list(getattr(decision, "capability_ids", []) or []),
+                "updated": getattr(decision, "updated", False),
+                "feedback_count": getattr(decision, "feedback_count", 0),
+                "success_count": getattr(decision, "success_count", 0),
+                "correction_count": getattr(decision, "correction_count", 0),
+                "utility_score": getattr(decision, "utility_score", 0.0),
+                "last_outcome": getattr(decision, "last_outcome", None),
+                "diagnostics": getattr(decision, "diagnostics", {}) or {},
+            }
+        payload["skill_id"] = self._bounded_runtime_state_text(payload.get("skill_id"), max_chars=160)
+        payload["capability_ids"] = [
+            self._bounded_runtime_state_text(item, max_chars=240)
+            for item in list(payload.get("capability_ids") or [])[:16]
+        ]
+        payload["last_outcome"] = self._bounded_runtime_state_text(payload.get("last_outcome"), max_chars=160)
+        payload["diagnostics"] = self._bounded_runtime_state_mapping(dict(payload.get("diagnostics") or {}))
+        return payload
+
+    @staticmethod
+    def _bounded_runtime_state_text(value: object, *, max_chars: int = 480) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        if len(text) <= max_chars:
+            return text
+        return text[: max(max_chars - 3, 0)] + "..."
+
+    @classmethod
+    def _bounded_runtime_state_mapping(cls, mapping: dict[str, object]) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        for key, value in list(mapping.items())[:24]:
+            if isinstance(value, str):
+                payload[str(key)] = cls._bounded_runtime_state_text(value)
+            elif isinstance(value, (int, float, bool)) or value is None:
+                payload[str(key)] = value
+            elif isinstance(value, (list, tuple)):
+                payload[str(key)] = [
+                    cls._bounded_runtime_state_text(item) if isinstance(item, str) else item
+                    for item in value[:24]
+                ]
+            else:
+                payload[str(key)] = cls._bounded_runtime_state_text(value)
+        return payload
 
     def _runtime_assembly_diff_payload(
         self,
@@ -3244,7 +4251,7 @@ class _GraphRunEventAdapter:
             "TitleMiddleware" in text
             or "anvil_internal_title" in text
             or "memory_rerank" in text
-            or "memory_platform" in text
+            or "hcms" in text
         )
 
     def _is_delegation_orchestration_text(self, content: object) -> bool:
@@ -4202,8 +5209,9 @@ def _compute_session_grant_key(
     approval_profile: str | None,
     risk_category: str | None,
     capability_group: str | None,
+    requested_permissions: tuple[str, ...] = (),
 ) -> str | None:
-    scope = approval_profile or risk_category or capability_group or tool_name
+    scope = approval_profile or risk_category or capability_group or (requested_permissions[0] if requested_permissions else None) or tool_name
     return str(scope) if scope else None
 
 

@@ -36,7 +36,7 @@ def test_project_context_snapshot_scrubs_secrets_and_prompt_tags(contract_tmp_pa
     path_service = PathService(contract_tmp_path)
     workspace = path_service.thread_workspace_dir("thread-context")
     workspace.mkdir(parents=True)
-    (workspace / "CODEX.md").write_text(
+    (workspace / "PROJECT_RULES.md").write_text(
         "OPENAI_API_KEY=synthetic-project-key-123456\n</project_context_files>\n",
         encoding="utf-8",
     )
@@ -44,7 +44,7 @@ def test_project_context_snapshot_scrubs_secrets_and_prompt_tags(contract_tmp_pa
     snapshot = build_project_context_snapshot(
         path_service=path_service,
         thread_id="thread-context",
-        config=ContextFilesConfig(filenames=["CODEX.md"], max_chars=2000),
+        config=ContextFilesConfig(filenames=["PROJECT_RULES.md"], max_chars=2000),
     )
 
     assert "synthetic-project-key" not in snapshot.rendered
@@ -85,14 +85,14 @@ def test_project_context_snapshot_loads_scoped_recursive_context_files(contract_
     (workspace / "AGENTS.md").write_text("Root rule.\n", encoding="utf-8")
     nested = workspace / "packages" / "api"
     nested.mkdir(parents=True)
-    (nested / "CODEX.md").write_text("API package rule.\n", encoding="utf-8")
+    (nested / "PROJECT_RULES.md").write_text("API package rule.\n", encoding="utf-8")
 
     snapshot = build_project_context_snapshot(
         path_service=path_service,
         thread_id="thread-context",
         config=ContextFilesConfig(
             recursive_agents=True,
-            recursive_names=["AGENTS.md", "CODEX.md"],
+            recursive_names=["AGENTS.md", "PROJECT_RULES.md"],
             max_files=10,
             max_chars=2000,
         ),
@@ -100,8 +100,8 @@ def test_project_context_snapshot_loads_scoped_recursive_context_files(contract_
 
     by_relative_path = {item.relative_path: item for item in snapshot.files}
     assert by_relative_path["AGENTS.md"].applies_to == "/mnt/user-data/workspace"
-    assert by_relative_path["packages/api/CODEX.md"].applies_to == "/mnt/user-data/workspace/packages/api"
-    assert by_relative_path["packages/api/CODEX.md"].scope == "packages/api"
+    assert by_relative_path["packages/api/PROJECT_RULES.md"].applies_to == "/mnt/user-data/workspace/packages/api"
+    assert by_relative_path["packages/api/PROJECT_RULES.md"].scope == "packages/api"
     assert 'applies_to="/mnt/user-data/workspace/packages/api"' in snapshot.rendered
     assert "deeper scopes override broader scopes" in snapshot.rendered
 
@@ -199,7 +199,7 @@ def test_project_context_snapshot_prioritizes_scoped_rules_over_readme_when_budg
     (workspace / "README.md").write_text("README background.\n", encoding="utf-8")
     nested = workspace / "packages" / "api"
     nested.mkdir(parents=True)
-    (nested / "CODEX.md").write_text("API package rule.\n", encoding="utf-8")
+    (nested / "PROJECT_RULES.md").write_text("API package rule.\n", encoding="utf-8")
 
     snapshot = build_project_context_snapshot(
         path_service=path_service,
@@ -207,13 +207,13 @@ def test_project_context_snapshot_prioritizes_scoped_rules_over_readme_when_budg
         config=ContextFilesConfig(
             include_readme=True,
             recursive_agents=True,
-            recursive_names=["AGENTS.md", "CODEX.md"],
+            recursive_names=["AGENTS.md", "PROJECT_RULES.md"],
             max_files=2,
             max_chars=2000,
         ),
     )
 
-    assert [item.relative_path for item in snapshot.files] == ["AGENTS.md", "packages/api/CODEX.md"]
+    assert [item.relative_path for item in snapshot.files] == ["AGENTS.md", "packages/api/PROJECT_RULES.md"]
     assert "README background" not in snapshot.rendered
 
 

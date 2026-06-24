@@ -15,7 +15,9 @@ from anvil.config import (
     resolve_model_route,
 )
 from anvil.extensions import ExtensionsService
+from anvil.runtime.state_v2 import GoalFrame, GoalStack, SalienceRouter
 from anvil.runtime.tool_registry import CapabilityAssemblyService
+from anvil.runtime.tool_registry import service as tool_registry_service
 from anvil.sandbox import PathService, create_sandbox_provider
 from anvil.skills import SkillsService
 from anvil.subagents import SubagentService
@@ -25,6 +27,15 @@ def write_skill(root: Path, slug: str, title: str, body: str) -> None:
     skill_dir = root / slug
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(f"# {title}\n\n{body}\n", encoding="utf-8")
+
+
+def write_manifest_skill(root: Path, slug: str, frontmatter: str, body: str) -> None:
+    skill_dir = root / slug
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\n{frontmatter.strip()}\n---\n# {slug}\n\n{body}\n",
+        encoding="utf-8",
+    )
 
 
 def make_config(contract_tmp_path) -> object:
@@ -758,6 +769,241 @@ def test_capability_bundle_injects_only_mentioned_skill_summaries(contract_tmp_p
     assert all(summary.startswith("$demo-skill") for summary in skill_summaries)
 
 
+def test_capability_assembly_uses_skill_retrieval_top_k_without_broad_enabled_ids(contract_tmp_path) -> None:
+    skills_root = contract_tmp_path / "skills"
+    write_manifest_skill(
+        skills_root,
+        "code-review",
+        """
+title: Code Review
+summary: Review code regressions and missing tests.
+tags: [review, regression, tests]
+domain: engineering
+task_type: review
+allowed_tools: [shell_command, rg]
+related_skills: [test-driven-development]
+risk_level: low
+""",
+        "Review code for regressions. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "test-driven-development",
+        """
+title: Test Driven Development
+summary: Write failing tests before implementation.
+tags: [tests, regression]
+domain: engineering
+task_type: implementation
+allowed_tools: [shell_command]
+risk_level: low
+""",
+        "Use red green refactor loops. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "ppt-generation",
+        """
+title: Presentation Generation
+summary: Create presentation decks and slide layouts.
+tags: [slides]
+domain: presentation
+task_type: generation
+risk_level: normal
+""",
+        "Make slides. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    config_result = ConfigService().resolve(
+        [
+            ConfigLayer(
+                name="default",
+                kind=ConfigLayerKind.DEFAULT,
+                data={
+                    "default_model": "openai",
+                    "models": {
+                        "openai": {
+                            "name": "openai",
+                            "provider": "openai",
+                            "provider_kind": "openai_compatible",
+                            "model_name": "gpt-5.4",
+                        }
+                    },
+                    "skills_config": {
+                        "enabled": True,
+                        "external_dirs": [str(skills_root)],
+                        "enabled_ids": ["code-review", "test-driven-development", "ppt-generation"],
+                    },
+                },
+            )
+        ]
+    )
+    path_service = PathService(contract_tmp_path / "threads")
+    sandbox_provider = create_sandbox_provider(config_result.effective_config)
+    sandbox_handle = sandbox_provider.acquire(thread_id="thread-skill-retrieval-top-k", path_service=path_service)
+    skills_service = SkillsService()
+    skills_service.resolve_roots = lambda _config: [skills_root.resolve()]  # type: ignore[method-assign]
+    service = CapabilityAssemblyService(
+        skills_service=skills_service,
+        extensions_service=ExtensionsService(),
+        subagent_service=SubagentService(),
+    )
+
+    result = service.assemble(
+        sandbox_handle=sandbox_handle,
+        config_result=config_result,
+        feature_set=RuntimeFeatureSet(skills=True, capability_mentions=True),
+        request_context="review code regression tests",
+    )
+
+    skill_summaries = [summary for summary in result.bundle.prompt_safe_summaries if summary.startswith("$")]
+    diagnostics = result.bundle.assembly_diagnostics
+
+    assert result.bundle.mentioned_skill_ids == ()
+    assert result.bundle.enabled_skill_ids == ("code-review", "test-driven-development")
+    assert "$code-review: Review code regressions and missing tests." in skill_summaries
+    assert "$test-driven-development: Write failing tests before implementation." in skill_summaries
+    assert all(not summary.startswith("$ppt-generation") for summary in skill_summaries)
+    assert diagnostics.skill_retrieval_selected_ids == ("code-review", "test-driven-development")
+    assert diagnostics.skill_retrieval_tiers_used == ("L0", "L1", "L2", "L3")
+    assert diagnostics.skill_retrieval_candidate_count == 3
+    assert diagnostics.skill_retrieval_loaded_full_content is False
+    assert "FULL BODY SENTINEL" not in "\n".join(result.bundle.prompt_safe_summaries)
+
+
+def test_capability_assembly_routes_skill_retrieval_through_goal_salience(
+    contract_tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_root = contract_tmp_path / "skills"
+
+    monkeypatch.setattr(tool_registry_service, "DEFAULT_SKILL_RETRIEVAL_TOP_K", 1)
+    write_manifest_skill(
+        skills_root,
+        "runtime-context",
+        """
+title: Runtime Context
+summary: Assemble ContextBlock budgets and trace runtime context diagnostics.
+tags: [runtime-context, contextblock, salience]
+domain: runtime
+task_type: implementation
+risk_level: low
+""",
+        "Runtime context body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "skill-retrieval-prefetch",
+        """
+title: Skill Retrieval Prefetch
+summary: Continue wiring capability assembly skill retrieval prefetch diagnostics.
+tags: [capability, assembly, skill, retrieval, prefetch]
+domain: runtime
+task_type: implementation
+risk_level: low
+""",
+        "Skill retrieval body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    write_manifest_skill(
+        skills_root,
+        "presentation-generation",
+        """
+title: Presentation Generation
+summary: Create slide decks and presentation layouts.
+tags: [slides, deck]
+domain: presentation
+task_type: generation
+risk_level: normal
+""",
+        "Presentation body. FULL BODY SENTINEL SHOULD NOT LOAD.",
+    )
+    config_result = ConfigService().resolve(
+        [
+            ConfigLayer(
+                name="default",
+                kind=ConfigLayerKind.DEFAULT,
+                data={
+                    "default_model": "openai",
+                    "models": {
+                        "openai": {
+                            "name": "openai",
+                            "provider": "openai",
+                            "provider_kind": "openai_compatible",
+                            "model_name": "gpt-5.4",
+                        }
+                    },
+                    "skills_config": {
+                        "enabled": True,
+                        "external_dirs": [str(skills_root)],
+                        "enabled_ids": [
+                            "runtime-context",
+                            "skill-retrieval-prefetch",
+                            "presentation-generation",
+                        ],
+                    },
+                },
+            )
+        ]
+    )
+    path_service = PathService(contract_tmp_path / "threads")
+    sandbox_provider = create_sandbox_provider(config_result.effective_config)
+    sandbox_handle = sandbox_provider.acquire(thread_id="thread-skill-goal-salience", path_service=path_service)
+    skills_service = SkillsService()
+    skills_service.resolve_roots = lambda _config: [skills_root.resolve()]  # type: ignore[method-assign]
+    service = CapabilityAssemblyService(
+        skills_service=skills_service,
+        extensions_service=ExtensionsService(),
+        subagent_service=SubagentService(),
+    )
+    goal_stack = GoalStack(
+        stack_id="goals:thread-skill-goal-salience",
+        thread_id="thread-skill-goal-salience",
+        active_goal_id="goal-runtime-context",
+        goals=[
+            GoalFrame(
+                goal_id="goal-runtime-context",
+                title="Continue Runtime Context V2 salience wiring",
+                summary="GoalStack should route skill retrieval toward runtime-context ContextBlock work.",
+                next_actions=["wire salience route into capability assembly skill retrieval"],
+                keywords=["runtime-context", "contextblock", "salience"],
+                priority=0.95,
+            )
+        ],
+    )
+    salience_route = SalienceRouter(
+        router_id="salience-router:thread-skill-goal-salience",
+        thread_id="thread-skill-goal-salience",
+    ).route_goal_stack(goal_stack, query="continue implementation")
+
+    result = service.assemble(
+        sandbox_handle=sandbox_handle,
+        config_result=config_result,
+        feature_set=RuntimeFeatureSet(skills=True, capability_mentions=True),
+        request_context="continue implementation",
+        salience_route=salience_route,
+    )
+
+    diagnostics = result.bundle.assembly_diagnostics
+
+    assert result.bundle.enabled_skill_ids == ("runtime-context",)
+    assert "$runtime-context: Assemble ContextBlock budgets and trace runtime context diagnostics." in (
+        result.bundle.prompt_safe_summaries
+    )
+    assert all(not summary.startswith("$presentation-generation") for summary in result.bundle.prompt_safe_summaries)
+    assert all(not summary.startswith("$skill-retrieval-prefetch") for summary in result.bundle.prompt_safe_summaries)
+    assert diagnostics.skill_retrieval_selected_ids == ("runtime-context",)
+    assert diagnostics.skill_retrieval_tiers_used == ("L0", "L1", "L2", "L3", "L5", "L6")
+    assert diagnostics.skill_retrieval_l4_rerank_triggered is False
+    assert diagnostics.skill_retrieval_l5_hyde_triggered is True
+    assert diagnostics.skill_retrieval_l6_prefetch_triggered is True
+    assert "contextblock" in diagnostics.skill_retrieval_expanded_query_terms
+    assert diagnostics.skill_retrieval_prefetch_ids == ("skill-retrieval-prefetch",)
+    assert diagnostics.skill_retrieval_salience_route_id == salience_route.route_id
+    assert diagnostics.skill_retrieval_goal_stack_ref == "goals:thread-skill-goal-salience"
+    assert diagnostics.skill_retrieval_active_goal_id == "goal-runtime-context"
+    assert "goal=Continue Runtime Context V2 salience wiring" in diagnostics.skill_retrieval_query
+    assert "FULL BODY SENTINEL" not in "\n".join(result.bundle.prompt_safe_summaries)
+
+
 def test_skills_list_exposes_curator_metadata(contract_tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_result = make_config(contract_tmp_path)
     skills_root = contract_tmp_path / "skills"
@@ -1336,8 +1582,10 @@ def test_skill_management_is_model_visible_curator_tool(contract_tmp_path) -> No
     visible_by_name = {entry.name: entry for entry in result.bundle.visible_tools}
     catalog_by_name = {entry.name: entry for entry in result.registry.catalog_entries(result.bundle)}
     assert catalog_by_name["skill_manage"].risk_category == "skill_curator"
+    assert catalog_by_name["skill_manage"].approval is not None
+    assert catalog_by_name["skill_manage"].approval.mode == "runtime"
     actions = visible_by_name["skill_manage"].input_schema["properties"]["action"]["enum"]
-    assert "review_plan" in actions
+    assert "quality_plan" in actions
     assert "review_apply" in actions
     assert "merge_plan" in actions
     assert "merge_apply" in actions

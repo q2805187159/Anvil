@@ -22,6 +22,7 @@ from anvil.runtime.runs.engine import EMPTY_FINAL_ASSISTANT_MESSAGE, _GraphRunEv
 from anvil.runtime.tool_registry import ToolRegistry, ToolRegistryEntry, ToolSourceKind
 from anvil.runtime.store import StoreBackend, create_store
 from anvil.sandbox import PathService
+from anvil.subagents.contracts import SubagentResult, SubagentTaskRecord, SubagentTaskStatus
 from fake_models import BindableFakeMessagesListChatModel
 
 
@@ -321,13 +322,71 @@ class RuntimeFallbackChatModel(BaseChatModel):
 class _ActiveSubagentDrainRecorder:
     def __init__(self) -> None:
         self.drain_calls = 0
+        self.active_checks = 0
 
     def list_active_tasks(self, *, parent_thread_id: str):
+        self.active_checks += 1
         return [SimpleNamespace(task_id="sub-1", parent_run_id="run-tail")]
 
     def drain_events(self, *, parent_thread_id: str, parent_run_id: str | None = None):
         self.drain_calls += 1
         return []
+
+
+class _SettlingSubagentService:
+    def __init__(self) -> None:
+        self.drain_calls = 0
+        self.active_checks = 0
+        self.schedule_calls = 0
+        self.reconcile_calls = 0
+        self.task = SubagentTaskRecord(
+            task_id="sub-1",
+            parent_thread_id="thread-tail-budget",
+            parent_run_id="run-tail",
+            prompt_preview="inspect config",
+            status=SubagentTaskStatus.RUNNING,
+            started_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
+        )
+        self.result: SubagentResult | None = None
+
+    def list_active_tasks(self, *, parent_thread_id: str):
+        self.active_checks += 1
+        if self.active_checks >= 3 and self.result is None:
+            self.task = self.task.model_copy(
+                update={
+                    "status": SubagentTaskStatus.COMPLETED,
+                    "completed_at": datetime(2026, 6, 12, 1, 0, 1, tzinfo=timezone.utc),
+                }
+            )
+            self.result = SubagentResult(
+                task_id=self.task.task_id,
+                status=SubagentTaskStatus.COMPLETED,
+                summary="inspected",
+                child_thread_id="child-thread",
+                child_run_id="child-run",
+                started_at=self.task.started_at,
+                completed_at=self.task.completed_at,
+            )
+        if self.result is not None:
+            return []
+        return [self.task]
+
+    def drain_events(self, *, parent_thread_id: str, parent_run_id: str | None = None):
+        self.drain_calls += 1
+        return []
+
+    def reconcile_timeouts(self) -> None:
+        self.reconcile_calls += 1
+
+    def schedule_ready_tasks(self, *, parent_thread_id: str | None = None):
+        self.schedule_calls += 1
+        return ()
+
+    def list_tasks(self, *, parent_thread_id: str):
+        return [self.task]
+
+    def get_result(self, task_id: str):
+        return self.result
 
 
 class _SubagentDrainCounter:
@@ -386,7 +445,7 @@ def test_run_engine_stream_emits_incremental_content_steps(contract_tmp_path) ->
     assert session.final_result.thread_state.conversation.steps[-1]["payload"] == "Hello"
 
 
-def test_run_engine_stream_finalizer_does_not_wait_for_active_subagents(contract_tmp_path) -> None:
+def test_run_engine_stream_finalizer_uses_bounded_settle_for_active_subagents(contract_tmp_path) -> None:
     service = _ActiveSubagentDrainRecorder()
 
     events = RunEngine()._finalize_stream_subagent_events(
@@ -403,7 +462,46 @@ def test_run_engine_stream_finalizer_does_not_wait_for_active_subagents(contract
     )
 
     assert events == []
-    assert service.drain_calls == 1
+    assert service.drain_calls > 1
+    assert service.active_checks > 1
+
+
+def test_run_engine_stream_finalizer_projects_terminal_subagent_snapshot(contract_tmp_path) -> None:
+    service = _SettlingSubagentService()
+    adapter = _GraphRunEventAdapter(
+        thread_id="thread-tail-budget",
+        run_id="run-tail",
+        execution_mode=ThreadExecutionMode.AGENT,
+        tool_registry=ToolRegistry(),
+    )
+
+    events = RunEngine()._finalize_stream_subagent_events(
+        request=RunRequest(
+            thread_id="thread-tail-budget",
+            run_id="run-tail",
+            user_message="hello",
+            config_layers=base_layers(),
+            path_service=PathService(contract_tmp_path / "threads"),
+            checkpointer=create_checkpointer(CheckpointerBackend.IN_MEMORY),
+            store=create_store(StoreBackend.IN_MEMORY),
+            subagent_service=service,
+        ),
+        event_adapter=adapter,
+    )
+
+    terminal_steps = [
+        event.data["step"]
+        for event in events
+        if event.event in {"step_started", "step_updated"}
+        and event.data["step"].get("metadata", {}).get("subagent_task_id") == "sub-1"
+    ]
+    assert terminal_steps
+    assert terminal_steps[-1]["tool_name"] == "subagent"
+    assert terminal_steps[-1]["status"] == "success"
+    assert terminal_steps[-1]["payload"] == "inspected"
+    assert terminal_steps[-1]["metadata"]["child_thread_id"] == "child-thread"
+    assert service.schedule_calls >= 1
+    assert service.reconcile_calls >= 1
 
 
 def test_run_engine_throttles_empty_subagent_drains_during_token_stream(contract_tmp_path) -> None:

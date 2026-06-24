@@ -19,13 +19,19 @@ make release-readiness
 make release-readiness-full
 ```
 
-The quick profile runs Docker mount safety, contract drift check, release-facing backend smoke/packaging tests, frontend process preflight, frontend tests, frontend typecheck, and local smoke. The full profile replaces backend smoke with the full backend wrapper suite and adds frontend build plus docs build.
+The quick profile runs Docker mount safety, contract drift check, release-facing backend smoke/packaging tests, focused HCMS V2 / Runtime Context V2 backend tests, evaluation/trace replay report checks, deterministic HCMS recall/latency/fallback benchmark gates, frontend package-script preflight, `npm test`, frontend typecheck, and local smoke. The full profile replaces backend smoke with deterministic backend full-suite shards, runs the same HCMS benchmark gate with the full iteration count, and adds frontend build plus docs build. The full-profile `docs-build` stage uses `scripts/build-release-docs.py`, which builds MkDocs into a per-run `.omx/release-docs/docs-<timestamp>-<pid>` directory so release evidence does not depend on deleting an older local `site/` tree.
 
 For focused verification, select stages explicitly:
 
 ```bash
 python scripts/run-release-readiness.py --stage contracts --stage local-smoke
+python scripts/run-release-readiness.py --profile full --stage backend-full --json
+python scripts/run-release-readiness.py --profile full --stage backend-full-3 --json
 ```
+
+Use `--stage-timeout-seconds` when diagnosing long-running gates. A timed-out stage exits with a machine-readable `timed_out` result instead of leaving callers waiting indefinitely. The default stage timeout is the release evidence timeout; reducing it is useful for diagnostics but is not a substitute for a passing full profile. `backend-full` is a compatibility selector that expands to all backend shards (`backend-full-1` through `backend-full-16`); use a numbered shard id to rerun or isolate one backend shard. The full-suite backend gate uses 16 deterministic shards so stream/runtime-heavy modules remain below the default release timeout without weakening the timeout gate.
+
+The `hcms-benchmark` stage runs `scripts/run-hcms-benchmark-report.py` as a deterministic release regression gate. It fails release readiness when recall@10 drops below `0.85`, warm cached p95 latency reaches `200ms`, degraded retrieval does not fail open, or the semantic-negative probe scores above `0.05`. The generated report is a medium-fixture gate for release regressions, not a production-scale corpus or soak-test substitute.
 
 ## Backend Verification
 
@@ -51,6 +57,13 @@ anvil-doctor --config ./config.yaml
 anvil-smoke local --config ./config.yaml
 ```
 
+The repository wrapper keeps backend tests on a stable temp path and supports deterministic full-suite sharding from the repository root:
+
+```bash
+python scripts/run-backend-tests.py --backend-shard-index 1 --backend-shard-count 16 -q
+python scripts/run-backend-tests.py --backend-shard-index 1 --backend-shard-count 16 --collect-only -q
+```
+
 ## Frontend Verification
 
 Makefile path:
@@ -70,7 +83,7 @@ npm run typecheck
 npm run build
 ```
 
-The process preflight checks that Node can spawn child processes and that esbuild can start. If it fails with `EPERM`, run frontend tests in an environment that allows Node child process creation before treating Vitest failures as product regressions.
+The process preflight verifies the release frontend test contract: `package.json` must route tests through `scripts/vitest-node-pipe-shim.cjs` and Vitest native config loading, and required Next/TypeScript/Vitest packages must resolve. Some locked-down Windows runners block nested Node `child_process` spawn from inside Node; in that case the preflight emits a warning and the authoritative verification remains `npm test`, `npm run typecheck`, and `npm run build`. A failure in those stages still blocks release readiness.
 
 ## Docker Workspace Verification
 

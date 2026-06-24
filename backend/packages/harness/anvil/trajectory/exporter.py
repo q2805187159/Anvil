@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from anvil.agents import ThreadLifecycleStatus, ThreadState
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 from .contracts import (
     ToolUsageStats,

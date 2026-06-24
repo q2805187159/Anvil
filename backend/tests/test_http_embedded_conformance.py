@@ -10,6 +10,10 @@ from conformance_helpers import normalize_payload, to_json_payload
 from fake_models import BindableFakeMessagesListChatModel
 
 
+def _stable_run_payload(payload):
+    return {key: payload[key] for key in ("thread_id", "status", "assistant_message", "last_error", "thread")}
+
+
 def make_embedded_client(gateway_app, contract_tmp_path: Path):
     from app.sdk import EmbeddedClient, EmbeddedClientConfig
 
@@ -44,7 +48,7 @@ def test_http_and_embedded_surfaces_match_stable_contracts(gateway_app_factory, 
         try:
             thread = client.create_thread(thread_id="shared-thread")
             http_thread = http_client.get("/threads/shared-thread")
-            http_state = http_client.get("/threads/shared-thread/state")
+            http_state = http_client.get("/threads/shared-thread/state", params={"state_scope": "full"})
 
             assert normalize_payload(to_json_payload(thread)) == normalize_payload(http_thread.json())
             assert normalize_payload(to_json_payload(client.get_thread_state("shared-thread"))) == normalize_payload(
@@ -99,15 +103,54 @@ def test_http_and_embedded_run_views_match_after_normalizing_transport_specific_
             from app.sdk import EmbeddedRunRequest
 
             sdk_result = client.run(EmbeddedRunRequest(thread_id="sdk-thread", message="say hello"))
-            http_result = http_client.post("/threads/http-thread/runs", json={"message": "say hello"})
+            sdk_state_via_embedded = client.get_thread_state("sdk-thread")
+            sdk_state_via_http = http_client.get("/threads/sdk-thread/state", params={"state_scope": "full"})
+            assert sdk_state_via_http.status_code == 200
 
-            replacements = {
-                "sdk-thread": "<thread_id>",
-                "http-thread": "<thread_id>",
-            }
-            assert normalize_payload(to_json_payload(sdk_result), replacements=replacements) == normalize_payload(
-                http_result.json(),
-                replacements=replacements,
+            http_result = http_client.post("/threads/http-thread/runs", json={"message": "say hello"})
+            assert http_result.status_code == 200
+            http_payload = http_result.json()
+            http_state_via_http = http_client.get("/threads/http-thread/state", params={"state_scope": "full"})
+            assert http_state_via_http.status_code == 200
+            http_state_via_embedded = client.get_thread_state("http-thread")
+
+            sdk_replacements = {"sdk-thread": "<thread_id>"}
+            http_replacements = {"http-thread": "<thread_id>"}
+
+            assert sdk_result.status == "completed"
+            assert sdk_result.assistant_message == "parity hello"
+            assert http_payload["status"] == "completed"
+            assert http_payload["assistant_message"] == "parity hello"
+
+            normalized_sdk_run = normalize_payload(
+                _stable_run_payload(to_json_payload(sdk_result)),
+                replacements=sdk_replacements,
+                normalize_runtime_volatiles=True,
+            )
+            normalized_http_run = normalize_payload(
+                _stable_run_payload(http_payload),
+                replacements=http_replacements,
+                normalize_runtime_volatiles=True,
+            )
+            assert normalized_http_run == normalized_sdk_run
+
+            assert normalize_payload(
+                to_json_payload(sdk_state_via_embedded),
+                replacements=sdk_replacements,
+                normalize_runtime_volatiles=True,
+            ) == normalize_payload(
+                sdk_state_via_http.json(),
+                replacements=sdk_replacements,
+                normalize_runtime_volatiles=True,
+            )
+            assert normalize_payload(
+                to_json_payload(http_state_via_embedded),
+                replacements=http_replacements,
+                normalize_runtime_volatiles=True,
+            ) == normalize_payload(
+                http_state_via_http.json(),
+                replacements=http_replacements,
+                normalize_runtime_volatiles=True,
             )
         finally:
             client.close()

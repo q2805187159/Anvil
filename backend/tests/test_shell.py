@@ -25,9 +25,10 @@ def test_shell_command_registry_resolves_aliases_and_help_groups() -> None:
     sections = command_help_sections()
     assert "Session" in sections
     assert any(command.name == "threads" for command in sections["Session"])
-    assert resolve_command("/memory-provider") is not None
+    assert resolve_command("/memory-engine") is not None
     assert resolve_command("/memory-search") is not None
     assert resolve_command("/memory-reflect") is not None
+    assert resolve_command("/setup") is not None
     assert resolve_command("/ps").name == "processes"
     assert resolve_command("/stream").stream_output is True
     assert resolve_command("/term").name == "terminal"
@@ -42,6 +43,76 @@ def test_shell_command_registry_resolves_aliases_and_help_groups() -> None:
     assert "Capability" in public_catalog["groups"]
     assert "/stream" in known_command_tokens(scope="tui")
     assert all(str(item["name"]).startswith("/") for item in public_catalog["commands"])
+
+
+def test_shell_setup_command_guides_required_git_token_configuration(contract_tmp_path: Path) -> None:
+    from app.sdk import EmbeddedClientConfig
+    from app.shell import AnvilShell, bootstrap_profile_home
+
+    anvil_home = contract_tmp_path / ".anvil-home"
+    profile = bootstrap_profile_home("coder", anvil_home=anvil_home)
+    shell = AnvilShell(
+        profile=profile,
+        client_config=EmbeddedClientConfig(
+            config_layers=[
+                ConfigLayer(
+                    name="default",
+                    kind=ConfigLayerKind.DEFAULT,
+                    data={"hcms": {"enabled": True}},
+                )
+            ],
+            thread_root=contract_tmp_path / "runtime-threads",
+            state_db_path=contract_tmp_path / "runtime.sqlite3",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello")]),
+        ),
+    )
+
+    output = shell.execute_input("/setup")
+
+    assert "Git token" in output
+    assert "GITHUB_TOKEN" in output
+    assert "anvil setup" in output
+    assert "Basic Configuration" in output
+
+
+def test_shell_setup_command_writes_required_git_token_configuration(contract_tmp_path: Path) -> None:
+    from app.sdk import EmbeddedClientConfig
+    from app.shell import AnvilShell, bootstrap_profile_home
+    import yaml
+
+    anvil_home = contract_tmp_path / ".anvil-home"
+    profile = bootstrap_profile_home("coder", anvil_home=anvil_home)
+    shell = AnvilShell(
+        profile=profile,
+        client_config=EmbeddedClientConfig(
+            thread_root=contract_tmp_path / "runtime-threads",
+            state_db_path=contract_tmp_path / "runtime.sqlite3",
+            chat_model_override=BindableFakeMessagesListChatModel(responses=[AIMessage(content="hello")]),
+        ),
+    )
+
+    try:
+        output = shell.execute_input(
+            "/setup --git-token test-git-token --git-token-env ANVIL_GIT_TOKEN "
+            "--git-user-name Operator --git-user-email operator@example.test "
+            "--git-remote-url https://github.com/example/anvil-memory.git"
+        )
+    finally:
+        shell.close()
+
+    payload = yaml.safe_load(profile.config_path.read_text(encoding="utf-8"))
+    dotenv = profile.config_path.parent / ".env"
+
+    assert "Git token configured" in output
+    assert payload["git"]["enabled"] is True
+    assert payload["git"]["required"] is True
+    assert payload["git"]["provider"] == "github"
+    assert payload["git"]["token_env"] == "ANVIL_GIT_TOKEN"
+    assert payload["git"]["user_name"] == "Operator"
+    assert payload["git"]["user_email"] == "operator@example.test"
+    assert payload["git"]["remote_url"] == "https://github.com/example/anvil-memory.git"
+    assert "ANVIL_GIT_TOKEN=test-git-token" in dotenv.read_text(encoding="utf-8").splitlines()
+    assert "test-git-token" not in output
 
 
 def test_shell_help_mentions_top_level_anvil_commands() -> None:

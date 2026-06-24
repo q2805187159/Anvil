@@ -24,7 +24,6 @@ const enqueueFollowupMock = vi.fn().mockResolvedValue({ queue_id: "queue-1", mod
 const updateFollowupMock = vi.fn().mockResolvedValue({ queue_id: "queue-1", mode: "followup" });
 const deleteFollowupMock = vi.fn().mockResolvedValue({ deleted: true });
 const popNextFollowupMock = vi.fn().mockResolvedValue(null);
-const activateProviderMock = vi.fn().mockResolvedValue({});
 const runReflectionJobMock = vi.fn().mockResolvedValue({});
 const pauseReflectionJobMock = vi.fn().mockResolvedValue({});
 const resumeReflectionJobMock = vi.fn().mockResolvedValue({});
@@ -43,7 +42,7 @@ const rejectSkillProcedureMock = vi.fn().mockResolvedValue({ accepted: true, sta
 const restoreSkillProcedureMock = vi.fn().mockResolvedValue({ accepted: true, status: "restored" });
 const runSkillCuratorMaintenanceMock = vi.fn().mockResolvedValue({ status: "completed" });
 const runSkillCuratorAutomationMock = vi.fn().mockResolvedValue({ queued: true });
-const installPluginMock = vi.fn().mockResolvedValue({ plugin_id: "memory-http-provider-plugin", installed: true, enabled: true });
+const installPluginMock = vi.fn().mockResolvedValue({ plugin_id: "memory-http-integration-notes", installed: true, enabled: true });
 const upsertPluginRegistryMock = vi.fn().mockResolvedValue({ status: "updated" });
 const refreshPluginRegistryMock = vi.fn().mockResolvedValue({ status: "refreshed" });
 const deletePluginRegistryMock = vi.fn().mockResolvedValue({ status: "deleted" });
@@ -65,13 +64,13 @@ const uploadFilesMock = vi.fn().mockResolvedValue({
 const searchArchiveMock = vi.fn().mockResolvedValue({
   query: "Northstar",
   hits: [{ archive_id: "a1", thread_id: "thread-a", excerpt: "Northstar context", score: 1 }],
-  provider_notes: [],
+  engine_notes: [],
 });
 const sessionSearchResultFixture = {
   query: "Northstar",
   thread_id: "thread-a",
   scope: "exclude_current",
-  provider_notes: ["FactGraph found a prior thread."],
+  engine_notes: ["HCMS found a prior thread."],
   current_thread_snapshot: { snapshot_id: "snap-current", prompt_hash: "hash-current", skills_fingerprint: null, memory_fingerprint: "mem-current", config_fingerprint: "cfg-current", created_at: "" },
   groups: [
     {
@@ -227,22 +226,20 @@ const pluginsFixture = [
     tool_names: ["governance.audit", "governance.reload"],
     resources: [{ resource_id: "plugin-doc", title: "Plugin Doc" }],
     prompts: [{ prompt_id: "plugin-prompt", title: "Plugin Prompt" }],
-    memory_providers: [{ provider_id: "core-memory", display_name: "Core Memory", kind: "local_curated" }],
-    memory_provider_count: 1,
     catalog_metadata: { publisher: "forge-labs" },
   },
 ];
 const pluginCatalogFixture = [
   {
-    plugin_id: "memory-http-provider-plugin",
-    name: "Memory HTTP Provider",
-    description: "Registers a generic HTTP memory provider with lifecycle hooks.",
-    source: "/plugins/memory-http-provider-plugin",
+    plugin_id: "memory-http-integration-notes",
+    name: "Memory HTTP Integration Notes",
+    description: "Documentation-only memory integration notes that keep HCMS as the active engine.",
+    source: "/plugins/memory-http-integration-notes",
     source_kind: "local",
     version: "0.1.0",
     author: "Anvil",
     homepage: null,
-    tags: ["memory", "provider", "http"],
+    tags: ["memory", "hcms", "integration"],
     trust_level: "curated",
     registry_id: "project-plugins",
     registry_name: "Anvil curated plugins",
@@ -254,14 +251,12 @@ const pluginCatalogFixture = [
     skill_count: 0,
     tool_count: 0,
     mcp_server_count: 0,
-    memory_provider_count: 1,
     resource_count: 0,
     prompt_count: 0,
     skill_roots: [],
     tool_names: [],
     mcp_servers: [],
-    memory_providers: ["http_memory"],
-    permissions: ["sends memory lifecycle JSON payloads to the configured provider endpoint"],
+    permissions: ["documentation only; does not activate an external memory engine"],
     catalog_metadata: { publisher: "Anvil" },
     discovery_source: "catalog",
   },
@@ -923,6 +918,11 @@ vi.mock("@/src/core/threads/hooks", () => ({
     editLatestAndResend: runStreamFixture.editLatestAndResend,
     stop: runStreamFixture.stop,
   }),
+  useThreadEvaluationReport: () => ({
+    data: null,
+    error: null,
+    isFetching: false,
+  }),
   useEnqueueThreadFollowup: () => ({
     mutateAsync: enqueueFollowupMock,
     isPending: false,
@@ -1188,16 +1188,16 @@ vi.mock("@/src/core/mcp/hooks", () => ({
 vi.mock("@/src/core/memory/hooks", () => ({
   useMemoryOverview: () => ({
     data: {
-      active_provider_id: "factgraph_provider",
-      runtime_mode: "memory_platform",
-      legacy_capture_enabled: false,
+      active_engine_id: "hcms",
+      runtime_mode: "hcms",
+      capture_status: "native",
       migration_status: {},
       store_count: 2,
       archive_turn_count: 3,
       reflection_job_count: 4,
       stores: [
-        { store_id: "runtime_memory", display_name: "Runtime Memory", max_chars: 2800, injection_chars: 1400, max_tokens: 700, injection_tokens: 350, effective_max_tokens: 700, effective_injection_tokens: 350, budget_source: "migrated", actual_injection_tokens: 88, actual_injection_chars: 352, usage_chars: 320, usage_tokens: 80, entry_count: 2, summary: "runtime summary", summary_sections: { runtime_memory: { recentMonths: "Northstar work is active." } }, snapshot_status: "frozen", updated_at: "" },
-        { store_id: "user_profile", display_name: "User Profile", max_chars: 1800, injection_chars: 1000, max_tokens: 450, injection_tokens: 250, effective_max_tokens: 450, effective_injection_tokens: 250, budget_source: "config", actual_injection_tokens: 45, actual_injection_chars: 180, usage_chars: 180, usage_tokens: 45, entry_count: 1, summary: "profile summary", summary_sections: { user_profile: { topOfMind: "Prefers concise updates." } }, snapshot_status: "frozen", updated_at: "" },
+        { store_id: "hcms_workspace", display_name: "HCMS Workspace Layer", max_chars: 2800, injection_chars: 1400, max_tokens: 700, injection_tokens: 350, effective_max_tokens: 700, effective_injection_tokens: 350, budget_source: "hcms", actual_injection_tokens: 88, actual_injection_chars: 352, usage_chars: 320, usage_tokens: 80, entry_count: 2, summary: "workspace summary", summary_sections: { hcms_workspace: { recentMonths: "Northstar work is active." } }, snapshot_status: "frozen", updated_at: "" },
+        { store_id: "hcms_user", display_name: "HCMS User Layer", max_chars: 1800, injection_chars: 1000, max_tokens: 450, injection_tokens: 250, effective_max_tokens: 450, effective_injection_tokens: 250, budget_source: "hcms", actual_injection_tokens: 45, actual_injection_chars: 180, usage_chars: 180, usage_tokens: 45, entry_count: 1, summary: "user summary", summary_sections: { hcms_user: { topOfMind: "Prefers concise updates." } }, snapshot_status: "frozen", updated_at: "" },
       ],
     },
     refetch: vi.fn(),
@@ -1206,8 +1206,8 @@ vi.mock("@/src/core/memory/hooks", () => ({
   useMemoryLayers: () => ({
     data: [
       { layer_id: "session", display_name: "Session Memory", description: "Current thread history and prompt snapshots.", writable: false, entry_count: 0, store_id: null, summary: "Session recall is derived." },
-      { layer_id: "user", display_name: "User Memory", description: "User preferences.", writable: true, entry_count: 1, store_id: "user_profile", summary: "user summary" },
-      { layer_id: "workspace", display_name: "Workspace Memory", description: "Global work context.", writable: true, entry_count: 2, store_id: "runtime_memory", summary: "workspace summary" },
+      { layer_id: "user", display_name: "HCMS User Layer", description: "User preferences.", writable: true, entry_count: 1, store_id: "hcms_user", summary: "user summary" },
+      { layer_id: "workspace", display_name: "HCMS Workspace Layer", description: "Global work context.", writable: true, entry_count: 2, store_id: "hcms_workspace", summary: "workspace summary" },
     ],
   }),
   useSessionMemory: () => ({
@@ -1226,100 +1226,37 @@ vi.mock("@/src/core/memory/hooks", () => ({
   }),
   useMemoryStores: () => ({
     data: [
-      { store_id: "runtime_memory", display_name: "Runtime Memory", max_chars: 2800, injection_chars: 1400, max_tokens: 700, injection_tokens: 350, effective_max_tokens: 700, effective_injection_tokens: 350, budget_source: "migrated", actual_injection_tokens: 88, actual_injection_chars: 352, usage_chars: 320, usage_tokens: 80, entry_count: 2, summary: "runtime summary", summary_sections: { runtime_memory: { recentMonths: "Northstar work is active." } }, snapshot_status: "frozen", updated_at: "" },
-      { store_id: "user_profile", display_name: "User Profile", max_chars: 1800, injection_chars: 1000, max_tokens: 450, injection_tokens: 250, effective_max_tokens: 450, effective_injection_tokens: 250, budget_source: "config", actual_injection_tokens: 45, actual_injection_chars: 180, usage_chars: 180, usage_tokens: 45, entry_count: 1, summary: "profile summary", summary_sections: { user_profile: { topOfMind: "Prefers concise updates." } }, snapshot_status: "frozen", updated_at: "" },
+      { store_id: "hcms_workspace", display_name: "HCMS Workspace Layer", max_chars: 2800, injection_chars: 1400, max_tokens: 700, injection_tokens: 350, effective_max_tokens: 700, effective_injection_tokens: 350, budget_source: "hcms", actual_injection_tokens: 88, actual_injection_chars: 352, usage_chars: 320, usage_tokens: 80, entry_count: 2, summary: "workspace summary", summary_sections: { hcms_workspace: { recentMonths: "Northstar work is active." } }, snapshot_status: "frozen", updated_at: "" },
+      { store_id: "hcms_user", display_name: "HCMS User Layer", max_chars: 1800, injection_chars: 1000, max_tokens: 450, injection_tokens: 250, effective_max_tokens: 450, effective_injection_tokens: 250, budget_source: "hcms", actual_injection_tokens: 45, actual_injection_chars: 180, usage_chars: 180, usage_tokens: 45, entry_count: 1, summary: "user summary", summary_sections: { hcms_user: { topOfMind: "Prefers concise updates." } }, snapshot_status: "frozen", updated_at: "" },
     ],
   }),
   useMemoryLayerEntries: (layerId: "user" | "workspace" | "session") => ({
     data:
       layerId === "user"
-        ? [{ entry_id: "entry-profile", memory_id: "entry-profile", store_id: "user_profile", layer_id: "user", content: "Prefers concise implementation updates.", category: "preference", source_kind: "turn_sync", priority: 0.8, confidence: 0.92, salience: 0.86, metadata: { profile_class: "style" }, last_accessed_at: "", evidence_refs: ["turn-profile"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.9, status: "active", created_at: "", updated_at: "" }]
-        : [{ entry_id: "entry-1", memory_id: "entry-1", store_id: "runtime_memory", layer_id: "workspace", content: "Northstar is active", category: "project_context", source_kind: "turn_sync", priority: 0.7, confidence: 0.92, salience: 0.7, metadata: {}, last_accessed_at: "", evidence_refs: ["turn-1"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.88, status: "active", created_at: "", updated_at: "" }],
+        ? [{ entry_id: "entry-profile", memory_id: "entry-profile", store_id: "hcms_user", layer_id: "user", content: "Prefers concise implementation updates.", category: "preference", source_kind: "turn_sync", priority: 0.8, confidence: 0.92, salience: 0.86, metadata: { profile_class: "style" }, last_accessed_at: "", evidence_refs: ["turn-profile"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.9, status: "active", created_at: "", updated_at: "" }]
+        : [{ entry_id: "entry-1", memory_id: "entry-1", store_id: "hcms_workspace", layer_id: "workspace", content: "Northstar is active", category: "project_context", source_kind: "turn_sync", priority: 0.7, confidence: 0.92, salience: 0.7, metadata: {}, last_accessed_at: "", evidence_refs: ["turn-1"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.88, status: "active", created_at: "", updated_at: "" }],
     refetch: vi.fn(),
     isFetching: false,
   }),
   useMemoryStoreEntries: () => ({
-    data: [{ entry_id: "entry-1", memory_id: "entry-1", store_id: "runtime_memory", layer_id: "workspace", content: "Northstar is active", category: "project_context", source_kind: "turn_sync", priority: 0.7, confidence: 0.92, salience: 0.7, metadata: {}, last_accessed_at: "", evidence_refs: ["turn-1"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.88, status: "active", created_at: "", updated_at: "" }],
-  }),
-  useProfileFacets: () => ({
-    data: {
-      policy: {
-        active_threshold: 1.5,
-        provisional_threshold: 0.7,
-        candidate_threshold: 0.4,
-        require_review_classes: ["identity", "veto"],
-        class_budgets: { style: 4 },
-        default_class_budget: 5,
-        max_facets: 80,
-        pollution_requires_review: true,
-      },
-      items: [
-        {
-          facet_id: "facet-1",
-          source_memory_id: "entry-profile",
-          entry_id: "entry-profile",
-          store_id: "user_profile",
-          class_id: "style",
-          key: "style:summary",
-          value: "Prefers concise implementation updates",
-          source_category: "preference",
-          evidence_refs: ["turn-profile"],
-          confidence: 0.92,
-          salience: 0.86,
-          priority: 0.8,
-          stability_score: 1.7,
-          state: "active",
-          user_state: "auto",
-          prompt_visible: true,
-          source_polluted: false,
-          pollution_reasons: [],
-          reason: "stable preference",
-          last_seen_at: "",
-          created_at: "",
-          updated_at: "",
-        },
-      ],
-    },
-    refetch: vi.fn(),
-    isFetching: false,
-  }),
-  useProfileFacetAudit: () => ({
-    data: { items: [] },
-    refetch: vi.fn(),
-    isFetching: false,
-  }),
-  useGovernProfileFacet: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useRebuildProfileFacets: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useMemoryProviders: () => ({
-    data: [
-      { provider_id: "factgraph_provider", display_name: "FactGraph Provider", kind: "local_curated", origin: "builtin", family: "local_fact_graph", description: "provider", active: true, configured: true, available: true, supports_prefetch: true, supports_sync: true, supports_index: true, supports_reflection: true, supports_explain: true, supports_archive_search: true, roles: ["prefetch", "sync_turn"], health: "ok", diagnostics: [], last_sync_at: null },
-      { provider_id: "reflect_provider", display_name: "Reflect Provider", kind: "http", origin: "plugin", family: "knowledge_reflect", description: "provider", active: false, configured: true, available: true, supports_prefetch: true, supports_sync: true, supports_index: true, supports_reflection: true, supports_explain: true, supports_archive_search: true, roles: ["prefetch"], health: "unknown", diagnostics: ["not tested"], last_sync_at: null },
-    ],
-    refetch: vi.fn(),
-    isFetching: false,
+    data: [{ entry_id: "entry-1", memory_id: "entry-1", store_id: "hcms_workspace", layer_id: "workspace", content: "Northstar is active", category: "project_context", source_kind: "turn_sync", priority: 0.7, confidence: 0.92, salience: 0.7, metadata: {}, last_accessed_at: "", evidence_refs: ["turn-1"], supersedes: [], conflicts_with: [], expires_at: null, effective_score: 0.88, status: "active", created_at: "", updated_at: "" }],
   }),
   useMemoryAdminAudit: () => ({
-    data: { snapshot: {}, pending_review_count: 1, conflict_count: 1, staleness_count: 1, health: {}, providers: [{ provider_id: "factgraph_provider", health: "ok" }] },
+    data: { snapshot: {}, observation_queue_count: 1, conflict_count: 1, staleness_count: 1, health: {}, engines: [{ engine_id: "hcms", health: "ok" }] },
   }),
   useMemoryHealth: () => ({
     data: {
       status: "healthy",
       quality_score: 0.86,
       archive_turn_count: 3,
-      pending_review_count: 1,
+      observation_queue_count: 1,
       conflict_count: 1,
       stale_count: 1,
-      provider_count: 2,
-      provider_health: { factgraph_provider: "ok", reflect_provider: "unknown" },
+      engine_count: 1,
+      engine_health: { hcms: "ok" },
       stores: [
         {
-          store_id: "runtime_memory",
+          store_id: "hcms_workspace",
           layer_id: "workspace",
           status: "warning",
           entry_count: 2,
@@ -1338,7 +1275,7 @@ vi.mock("@/src/core/memory/hooks", () => ({
               issue_id: "issue-1",
               severity: "warning",
               kind: "missing_evidence",
-              store_id: "runtime_memory",
+              store_id: "hcms_workspace",
               layer_id: "workspace",
               memory_id: "entry-1",
               related_memory_ids: [],
@@ -1353,24 +1290,19 @@ vi.mock("@/src/core/memory/hooks", () => ({
         {
           issue_id: "global-issue-1",
           severity: "warning",
-          kind: "pending_review",
+          kind: "low_confidence",
           store_id: null,
           layer_id: null,
           memory_id: null,
           related_memory_ids: [],
-          message: "Review queue contains pending candidates.",
-          recommendation: "Approve or reject candidates during routine cleanup.",
+          message: "HCMS confidence is below the publication target.",
+          recommendation: "Reinforce or archive low-confidence memories during maintenance.",
           score: 0.5,
         },
       ],
-      recommendations: ["Review pending candidates before they age out."],
+      recommendations: ["Reinforce or archive low-confidence memories during maintenance."],
       generated_at: "2026-05-14T00:00:00Z",
     },
-    refetch: vi.fn(),
-    isFetching: false,
-  }),
-  useMemoryConflicts: () => ({
-    data: [{ conflict_id: "conflict-1", memory_id: "memory-a", conflicting_memory_id: "memory-b", reason: "conflicting memory content detected", recommended_action: "review", memory_content: "Use pytest", conflicting_content: "Use unittest", created_at: "", resolved: false }],
     refetch: vi.fn(),
     isFetching: false,
   }),
@@ -1379,17 +1311,8 @@ vi.mock("@/src/core/memory/hooks", () => ({
     refetch: vi.fn(),
     isFetching: false,
   }),
-  useMemoryReview: () => ({
-    data: [{ review_id: "review-1", layer_id: "workspace", store_id: "runtime_memory", action: "add", content: "Use token budgets for memory.", category: "project_context", priority: 0.5, confidence: 0.78, salience: 0.6, evidence_refs: ["turn-2"], supersedes: [], conflicts_with: [], rationale: "Needs review", created_at: "", updated_at: "", status: "pending" }],
-    refetch: vi.fn(),
-    isFetching: false,
-  }),
   useFlushMemory: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ thread_id: null, candidates_seen: 0, entries_written: 0, review_items_created: 0, entries_skipped: 0, facts_removed: 0, errors: [], written_memory_ids: [], review_ids: [] }),
-    isPending: false,
-  }),
-  useGovernMemory: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({ thread_id: null, observations_processed: 0, entries_written: 0, quality_issues_created: 0, entries_skipped: 0, facts_removed: 0, errors: [], written_memory_ids: [], quality_issue_ids: [] }),
     isPending: false,
   }),
   useBatchGovernMemory: () => ({
@@ -1479,39 +1402,12 @@ vi.mock("@/src/core/memory/hooks", () => ({
     }),
     isPending: false,
   }),
-  useApproveMemoryReview: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useRejectMemoryReview: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useBatchMemoryReview: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ approved: ["review-1"], rejected: [], errors: [] }),
-    isPending: false,
-  }),
-  useResolveMemoryConflict: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useActivateMemoryProvider: () => ({
-    mutateAsync: activateProviderMock,
-  }),
-  useReloadMemoryProviders: () => ({
-    mutateAsync: vi.fn().mockResolvedValue([]),
-    isPending: false,
-  }),
-  useTestMemoryProvider: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ provider_id: "factgraph_provider", ok: true, health: "ok", diagnostics: [] }),
-    isPending: false,
-  }),
   useExportMemoryAdmin: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ stores: {}, review_queue: [], providers: [], archive_turn_count: 0 }),
+    mutateAsync: vi.fn().mockResolvedValue({ hcms: {}, quality_issues: [], archive_turn_count: 0 }),
     isPending: false,
   }),
   useImportMemoryAdmin: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ entries_imported: 0, review_items_created: 0 }),
+    mutateAsync: vi.fn().mockResolvedValue({ memories_imported: 0, quality_issues_imported: 0, status: "ok" }),
     isPending: false,
   }),
   useCreateMemoryEntry: () => ({
@@ -1552,12 +1448,12 @@ vi.mock("@/src/core/memory/hooks", () => ({
           query: "Northstar",
           trace_kind: "recall",
           target_id: null,
-          provider_notes: ["FactGraph surfaced evidence."],
+          engine_notes: ["HCMS surfaced evidence."],
           evidence: [
             {
               evidence_id: "ev-1",
               source_kind: "memory",
-              source_id: "runtime_memory",
+              source_id: "hcms_workspace",
               layer_id: "workspace",
               memory_id: "mem-1",
               archive_id: null,
@@ -1573,8 +1469,224 @@ vi.mock("@/src/core/memory/hooks", () => ({
     },
     isPending: false,
   }),
+  useHCMSRecall: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ items: [] }),
+    data: {
+      query: "Northstar",
+      items: [
+        {
+          memory_id: "mem-1",
+          score: 0.97,
+          raw_scores: { lexical: 0.8, graph: 0.7 },
+          ranks: { lexical: 1, graph: 1 },
+          explanation: "four-stream merged match",
+          memory: {
+            memory_id: "mem-1",
+            version: 2,
+            parent_id: null,
+            content: "Northstar is active",
+            summary: "Northstar rollout context",
+            category: "project_context",
+            confidence: 0.92,
+            salience: 0.7,
+            state: "active",
+            source_thread_id: "thread-a",
+            source_type: "manual",
+            tags: [],
+            entities: ["Northstar"],
+            concepts: ["rollout"],
+            evidence: [{ evidence_id: "hcms-ev-1", type: "observation", content: "User stated Northstar is active", weight: 0.9, timestamp: "", source_id: "thread-a", metadata: {} }],
+            metadata: {},
+            created_at: "",
+            updated_at: "",
+            accessed_at: "",
+          },
+        },
+      ],
+      metrics: { llm_calls_avoided: 2, deterministic_updates: 2, recall_count: 1, last_latency_ms: 14, recall_hit_rate: 1 },
+      engine_notes: ["HCMS four-stream recall active"],
+    },
+    isPending: false,
+  }),
+  useHCMSWhy: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ paths: [] }),
+    data: {
+      query: "Northstar",
+      paths: [
+        {
+          nodes: [
+            { memory_id: "mem-1", event_type: "memory", timestamp: "", confidence: 0.92 },
+            { memory_id: "mem-2", event_type: "memory", timestamp: "", confidence: 0.88 },
+          ],
+          edges: [],
+          total_strength: 0.8,
+          confidence: 0.9,
+        },
+      ],
+      engine_notes: ["HCMS causal reasoning active"],
+    },
+    isPending: false,
+  }),
+  useHCMSMemories: () => ({
+    data: {
+      items: [
+        {
+          memory_id: "mem-1",
+          version: 2,
+          parent_id: null,
+          content: "Northstar is active",
+          summary: "Northstar rollout context",
+          category: "project_context",
+          confidence: 0.92,
+          salience: 0.7,
+          state: "active",
+          source_thread_id: "thread-a",
+          source_type: "manual",
+          tags: [],
+          entities: ["Northstar"],
+          concepts: ["rollout"],
+          evidence: [{ evidence_id: "hcms-ev-1", type: "observation", content: "User stated Northstar is active", weight: 0.9, timestamp: "", source_id: "thread-a", metadata: {} }],
+          metadata: {},
+          created_at: "",
+          updated_at: "",
+          accessed_at: "",
+        },
+        {
+          memory_id: "mem-2",
+          version: 1,
+          parent_id: null,
+          content: "Northstar rollout depends on the Forge thread context.",
+          summary: "Forge context supports Northstar rollout.",
+          category: "project_context",
+          confidence: 0.88,
+          salience: 0.68,
+          state: "active",
+          source_thread_id: "thread-b",
+          source_type: "manual",
+          tags: [],
+          entities: ["Forge"],
+          concepts: ["rollout"],
+          evidence: [],
+          metadata: {},
+          created_at: "",
+          updated_at: "",
+          accessed_at: "",
+        },
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+      query: null,
+      state: "all",
+      category: null,
+      layer_id: "all",
+      engine_notes: ["HCMS memory list"],
+    },
+    refetch: vi.fn(),
+    isFetching: false,
+  }),
+  useDeleteHCMSMemory: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ memory_id: "mem-1", status: "deleted", deleted: true, engine_notes: [] }),
+    data: null,
+    isPending: false,
+  }),
+  useGovernMemory: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ action: "archive", memory_id: "mem-1", status: "ok" }),
+    isPending: false,
+  }),
+  useHCMSMemory: () => ({
+    data: {
+      memory: {
+        memory_id: "mem-1",
+        version: 2,
+        parent_id: null,
+        content: "Northstar is active",
+        summary: "Northstar rollout context",
+        category: "project_context",
+        confidence: 0.92,
+        salience: 0.7,
+        state: "active",
+        source_thread_id: "thread-a",
+        source_type: "manual",
+        tags: [],
+        entities: ["Northstar"],
+        concepts: ["rollout"],
+        evidence: [{ evidence_id: "hcms-ev-1", type: "observation", content: "User stated Northstar is active", weight: 0.9, timestamp: "", source_id: "thread-a", metadata: {} }],
+        metadata: {},
+        created_at: "",
+        updated_at: "",
+        accessed_at: "",
+      },
+      engine_notes: ["HCMS memory detail active"],
+    },
+    isFetching: false,
+  }),
+  useHCMSMemoryRelations: () => ({
+    data: {
+      memory_id: "mem-1",
+      relations: [
+        {
+          relation_id: "rel-1",
+          source_memory_id: "mem-1",
+          target_memory_id: "mem-2",
+          relation_type: "supports",
+          weight: 0.82,
+          confidence: 0.88,
+          bidirectional: false,
+          metadata: {},
+          created_at: "",
+          updated_at: "",
+          source_memory: null,
+          target_memory: {
+            memory_id: "mem-2",
+            version: 1,
+            parent_id: null,
+            content: "Northstar rollout depends on the Forge thread context.",
+            summary: "Forge context supports Northstar rollout.",
+            category: "project_context",
+            confidence: 0.88,
+            salience: 0.68,
+            state: "active",
+            source_thread_id: "thread-b",
+            source_type: "manual",
+            tags: [],
+            entities: ["Forge"],
+            concepts: ["rollout"],
+            evidence: [],
+            metadata: {},
+            created_at: "",
+            updated_at: "",
+            accessed_at: "",
+          },
+        },
+      ],
+      engine_notes: ["HCMS relation graph active"],
+    },
+    isFetching: false,
+  }),
+  useHCMSMemoryHistory: () => ({
+    data: {
+      memory_id: "mem-1",
+      versions: [
+        { version_id: "ver-1", memory_id: "mem-1", version: 1, parent_id: null, content: "Northstar is active", summary: "Northstar rollout context", diff: "", reason: "manual_create", created_at: "" },
+      ],
+      engine_notes: [],
+    },
+  }),
+  useHCMSMemoryDiff: () => ({
+    data: {
+      memory_id: "mem-1",
+      from_version: 1,
+      to_version: 2,
+      diff: "@@ -1 +1 @@\n-Northstar was draft\n+Northstar is active",
+      confidence_delta: 0.16,
+      evidence_added: ["hcms-ev-2"],
+      evidence_removed: ["hcms-ev-old"],
+      engine_notes: [],
+    },
+  }),
   useReflectionJobs: () => ({
-    data: [{ job_id: "system-project-recap", name: "Project Recap", schedule_kind: "interval", target_store_id: "runtime_memory", enabled: true, system_managed: true, template: "project_recap", instructions: null, source_query: null, interval_seconds: 3600, cron: null, next_run_at: null, last_run_at: null, last_status: "completed" }],
+    data: [{ job_id: "system-project-recap", name: "Project Recap", schedule_kind: "interval", target_store_id: "hcms_workspace", enabled: true, system_managed: true, template: "project_recap", instructions: null, source_query: null, interval_seconds: 3600, cron: null, next_run_at: null, last_run_at: null, last_status: "completed" }],
   }),
   useRunReflectionJob: () => ({
     mutateAsync: runReflectionJobMock,
@@ -2034,7 +2146,7 @@ describe("WorkspaceShell", () => {
     });
   });
 
-  it("shows memory governance health in the configuration center", async () => {
+  it("shows HCMS health in the configuration center", async () => {
     render(
       <ThemeProvider>
         <I18nProvider>
@@ -2052,11 +2164,12 @@ describe("WorkspaceShell", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /^memory$/i }));
     });
 
-    expect(within(dialog).getByText(/memory governance/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/hcms console/i)).toBeInTheDocument();
     expect(within(dialog).getAllByText(/quality score/i).length).toBeGreaterThan(0);
-    expect(within(dialog).getByText(/runtime_memory/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/profile facets/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Review pending candidates before they age out/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/hcms_workspace/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/stores 2/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/issues 1/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/evidence gaps 1/i)).toBeInTheDocument();
   });
 
   it("runs skill governance actions through the action dialog", async () => {
@@ -2168,14 +2281,14 @@ describe("WorkspaceShell", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /^plugins$/i }));
     });
 
-    expect(within(dialog).getAllByText("Memory HTTP Provider").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Memory HTTP Integration Notes").length).toBeGreaterThan(0);
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /^install$/i }));
     });
 
     expect(installPluginMock).toHaveBeenCalledWith({
-      source: "/plugins/memory-http-provider-plugin",
-      plugin_id: "memory-http-provider-plugin",
+      source: "/plugins/memory-http-integration-notes",
+      plugin_id: "memory-http-integration-notes",
       enable: true,
       force: true,
     });
@@ -2608,20 +2721,31 @@ describe("WorkspaceShell", () => {
 
     expect(screen.getByText(/memory workspace/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /session memory/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /user memory/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /workspace memory/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /HCMS User Layer/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /HCMS Workspace Layer/i })).toBeInTheDocument();
     expect(screen.getByText(/focused summary: northstar/i)).toBeInTheDocument();
     expect(screen.getByText(/session_search summarize evidence/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /workspace memory/i }));
+    fireEvent.click(screen.getByRole("button", { name: /HCMS Workspace Layer/i }));
     expect(screen.getByText(/store usage/i)).toBeInTheDocument();
     expect(screen.getByText(/80 \/ 700/i)).toBeInTheDocument();
     expect(screen.getByText(/injection budget 350 tokens/i)).toBeInTheDocument();
     expect(screen.getByText(/snapshot payload 88 tokens/i)).toBeInTheDocument();
-    expect(screen.getByText(/conflict queue/i)).toBeInTheDocument();
-    expect(screen.getByText(/staleness queue/i)).toBeInTheDocument();
+    expect(screen.getByText(/HCMS Signals/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Active Forgetting/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: /session memory/i }));
     expect(screen.getByText(/recall inspector/i)).toBeInTheDocument();
-    expect(screen.getByText(/platform controls/i)).toBeInTheDocument();
+    expect(screen.getByText(/hcms recall/i)).toBeInTheDocument();
+    expect(screen.getByText(/northstar rollout context/i)).toBeInTheDocument();
+    expect(screen.getByText(/causal path/i)).toBeInTheDocument();
+    expect(screen.getByText(/user stated northstar is active/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /HCMS Workspace Layer/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^hcms$/i }));
+    expect(screen.getByText(/hcms history/i)).toBeInTheDocument();
+    expect(screen.getByText(/hcms diff/i)).toBeInTheDocument();
+    expect(screen.getByText(/v1 → v2/i)).toBeInTheDocument();
+    expect(screen.getByText(/confidence \+0\.16/i)).toBeInTheDocument();
+    expect(screen.getByText(/evidence \+1 \/ -1/i)).toBeInTheDocument();
+    expect(screen.getByText(/HCMS Control Plane/i)).toBeInTheDocument();
   });
 
   it("runs Session Search from the semantic session memory panel", async () => {
@@ -2675,12 +2799,10 @@ describe("WorkspaceShell", () => {
     expect(screen.getByTestId("thread-card-thread-b")).toHaveClass("bg-[color-mix(in_srgb,var(--ink)_9%,var(--panel)_91%)]");
 
     fireEvent.click(screen.getAllByRole("button", { name: /memory/i })[0]!);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /activate reflect provider/i }));
-    });
-    expect(activateProviderMock).toHaveBeenCalledWith("reflect_provider");
+    expect(screen.getByText(/HCMS Control Plane/i)).toBeInTheDocument();
+    expect(screen.getByText(/HCMS Store Health/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /workspace memory/i }));
+    fireEvent.click(screen.getByRole("button", { name: /HCMS Workspace Layer/i }));
     fireEvent.change(screen.getByPlaceholderText(/entry category/i), {
       target: { value: "preference" },
     });

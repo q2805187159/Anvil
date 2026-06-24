@@ -6,10 +6,11 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from anvil.config import ConfigLayer, ConfigLayerKind
+from anvil.memory import KnowledgeCompiler
 from fake_models import BindableFakeMessagesListChatModel
 
 
-def _memory_platform_layers(base_path):
+def _hcms_layers(base_path):
     return [
         ConfigLayer(
             name="default",
@@ -24,7 +25,7 @@ def _memory_platform_layers(base_path):
                         "model_name": "gpt-5.4",
                     }
                 },
-                "memory_platform": {
+                "hcms": {
                     "enabled": True,
                     "archive": {"sqlite_path": str(base_path / "archive.sqlite3")},
                 },
@@ -83,9 +84,13 @@ def test_memory_tool_writes_user_and_workspace_layers(gateway_app_factory) -> No
         detail = client.get("/threads/thread-memory-tool/detail")
 
     assert user_entries.status_code == 200
-    assert any(item["content"] == "User prefers terse updates." for item in user_entries.json())
+    user_memory = next(item for item in user_entries.json() if "User prefers terse updates." in item["content"])
+    user_validation = KnowledgeCompiler.validate_markdown_schema(user_memory["content"])
+    assert user_validation.valid, user_validation.errors
     assert workspace_entries.status_code == 200
-    assert any(item["content"] == "Northstar is the active codename." for item in workspace_entries.json())
+    workspace_memory = next(item for item in workspace_entries.json() if "Northstar is the active codename." in item["content"])
+    workspace_validation = KnowledgeCompiler.validate_markdown_schema(workspace_memory["content"])
+    assert workspace_validation.valid, workspace_validation.errors
     assert detail.status_code == 200
     ai_tool_message = next(message for message in detail.json()["messages"] if message["role"] == "ai" and message["tool_calls"])
     assert {item["name"] for item in ai_tool_message["tool_calls"]} >= {"memory"}
@@ -93,7 +98,7 @@ def test_memory_tool_writes_user_and_workspace_layers(gateway_app_factory) -> No
 
 def test_memory_tool_observe_profile_and_health_surface_quality_state(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -122,9 +127,8 @@ def test_memory_tool_observe_profile_and_health_surface_quality_state(gateway_ap
                         {
                             "name": "memory",
                             "args": {
-                                "action": "profile",
+                                "action": "list",
                                 "layer": "user",
-                                "profile_class": "style",
                             },
                             "id": "call_profile",
                             "type": "tool_call",
@@ -174,7 +178,7 @@ def test_memory_tool_observe_profile_and_health_surface_quality_state(gateway_ap
 
 def test_memory_tool_runs_recall_benchmark(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -247,7 +251,7 @@ def test_memory_tool_runs_recall_benchmark(gateway_app_factory, contract_tmp_pat
 
 def test_memory_tool_runs_persisted_recall_benchmark_suite(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -321,7 +325,7 @@ def test_memory_tool_runs_persisted_recall_benchmark_suite(gateway_app_factory, 
 
 def test_memory_tool_surfaces_retention_state(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -386,7 +390,7 @@ def test_memory_tool_surfaces_retention_state(gateway_app_factory, contract_tmp_
 
 def test_memory_tool_governs_retention_actions(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -424,7 +428,7 @@ def test_memory_tool_governs_retention_actions(gateway_app_factory, contract_tmp
                         {
                             "name": "memory",
                             "args": {
-                                "action": "review_memory",
+                                "action": "review",
                                 "layer": "workspace",
                                 "old_text": "Northstar stale release note",
                                 "content": "Needs explicit review.",
@@ -460,12 +464,12 @@ def test_memory_tool_governs_retention_actions(gateway_app_factory, contract_tmp
     assert reinforced["action"] == "reinforce"
     assert reinforced["after_retention"]["access_count"] >= reinforced["before_retention"]["access_count"] + 1
     assert reviewed["action"] == "review"
-    assert reviewed["review_item"]["action"] == "review_existing"
+    assert reviewed["quality_issue"]["kind"] == "quality_review"
 
 
 def test_memory_tool_plans_batch_governance(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -512,7 +516,7 @@ def test_memory_tool_plans_batch_governance(gateway_app_factory, contract_tmp_pa
         client.post("/threads", json={"thread_id": "thread-memory-governance-batch"})
         run = client.post(
             "/threads/thread-memory-governance-batch/runs",
-            json={"message": "Store and plan memory governance.", "execution_mode": "full_access"},
+            json={"message": "Store and plan HCMS quality maintenance.", "execution_mode": "full_access"},
         )
         assert run.status_code == 200
         detail = client.get("/threads/thread-memory-governance-batch/detail")
@@ -531,7 +535,7 @@ def test_memory_tool_plans_batch_governance(gateway_app_factory, contract_tmp_pa
 
 def test_memory_tool_runs_maintenance_plan(gateway_app_factory, contract_tmp_path) -> None:
     app = gateway_app_factory(
-        config_layers=_memory_platform_layers(contract_tmp_path),
+        config_layers=_hcms_layers(contract_tmp_path),
         chat_model_override=BindableFakeMessagesListChatModel(
             responses=[
                 AIMessage(
@@ -734,3 +738,187 @@ def test_memory_trace_and_consolidate_tools_surface_recent_memory_activity(gatew
     assert "consolidated" in (consolidate_call["result_text"] or "")
     trace_payload = json.loads(trace_call["result_text"] or "{}")
     assert trace_payload["items"]
+
+
+def test_memory_tool_surfaces_hcms_recall_why_history_and_diff(gateway_app_factory, contract_tmp_path) -> None:
+    app = gateway_app_factory(
+        config_layers=_hcms_layers(contract_tmp_path),
+        chat_model_override=BindableFakeMessagesListChatModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "add",
+                                "layer": "workspace",
+                                "content": "Direct full rollout caused repeated release failures.",
+                                "category": "project_context",
+                                "confidence": 0.92,
+                                "salience": 0.9,
+                            },
+                            "id": "call_hcms_add_cause",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "add",
+                                "layer": "workspace",
+                                "content": "Northstar requires canary verification because direct full rollout caused release failures.",
+                                "category": "project_context",
+                                "confidence": 0.93,
+                                "salience": 0.88,
+                            },
+                            "id": "call_hcms_add",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(content="Stored HCMS memory."),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "replace",
+                                "layer": "workspace",
+                                "old_text": "Northstar requires canary verification because direct full rollout caused release failures.",
+                                "content": "Northstar requires canary verification because direct full rollout caused repeated release failures. Use pytest -q before release.",
+                                "category": "project_context",
+                                "confidence": 0.99,
+                                "evidence_refs": ["pytest:hcms-runtime-diff"],
+                            },
+                            "id": "call_hcms_replace",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(content="Updated HCMS memory."),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "recall",
+                                "layer": "workspace",
+                                "content": "Why does Northstar require canary verification?",
+                                "limit": 5,
+                            },
+                            "id": "call_hcms_recall",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "why",
+                                "layer": "workspace",
+                                "content": "Why does Northstar require canary verification?",
+                                "limit": 3,
+                            },
+                            "id": "call_hcms_why",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "counterfactual",
+                                "layer": "workspace",
+                                "content": "What if direct full rollout had not happened?",
+                                "old_text": "direct full rollout",
+                                "limit": 3,
+                            },
+                            "id": "call_hcms_counterfactual",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "history",
+                                "layer": "workspace",
+                                "entry_id": "mem_c92e7b03e82e",
+                            },
+                            "id": "call_hcms_history",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "memory",
+                            "args": {
+                                "action": "diff",
+                                "layer": "workspace",
+                                "entry_id": "mem_c92e7b03e82e",
+                            },
+                            "id": "call_hcms_diff",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(content="Inspected HCMS recall and history."),
+            ]
+        )
+    )
+
+    with TestClient(app) as client:
+        client.post("/threads", json={"thread_id": "thread-hcms-tools"})
+        first_run = client.post(
+            "/threads/thread-hcms-tools/runs",
+            json={"message": "Store the Northstar canary memory.", "execution_mode": "full_access"},
+        )
+        assert first_run.status_code == 200
+        second_run = client.post(
+            "/threads/thread-hcms-tools/runs",
+            json={"message": "Update the Northstar canary memory.", "execution_mode": "full_access"},
+        )
+        assert second_run.status_code == 200
+        third_run = client.post(
+            "/threads/thread-hcms-tools/runs",
+            json={"message": "Recall why Northstar needs canary verification and show memory history.", "execution_mode": "full_access"},
+        )
+        assert third_run.status_code == 200
+        detail = client.get("/threads/thread-hcms-tools/detail")
+
+    messages = detail.json()["messages"]
+    add_tool_message = next(
+        message
+        for message in messages
+        if message["role"] == "ai"
+        and any(item["tool_call_id"] == "call_hcms_add" for item in message["tool_calls"])
+    )
+    replace_tool_message = next(
+        message
+        for message in messages
+        if message["role"] == "ai"
+        and any(item["tool_call_id"] == "call_hcms_replace" for item in message["tool_calls"])
+    )
+    ai_tool_message = next(
+        message
+        for message in messages
+        if message["role"] == "ai"
+        and any(item["tool_call_id"] == "call_hcms_recall" for item in message["tool_calls"])
+    )
+    add_payload = json.loads(next(item for item in add_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_add")["result_text"] or "{}")
+    replace_payload = json.loads(next(item for item in replace_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_replace")["result_text"] or "{}")
+    recall_payload = json.loads(next(item for item in ai_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_recall")["result_text"] or "{}")
+    why_payload = json.loads(next(item for item in ai_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_why")["result_text"] or "{}")
+    counterfactual_payload = json.loads(next(item for item in ai_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_counterfactual")["result_text"] or "{}")
+    history_payload = json.loads(next(item for item in ai_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_history")["result_text"] or "{}")
+    diff_payload = json.loads(next(item for item in ai_tool_message["tool_calls"] if item["tool_call_id"] == "call_hcms_diff")["result_text"] or "{}")
+
+    assert add_payload["memory_id"]
+    assert replace_payload["memory_id"] == add_payload["memory_id"]
+    assert recall_payload["items"]
+    assert recall_payload["engine_notes"]
+    assert why_payload["paths"]
+    assert counterfactual_payload["removed_memory_id"]
+    assert counterfactual_payload["impacts"]
+    assert counterfactual_payload["engine_notes"] == ["HCMS counterfactual reasoning active"]
+    assert len(history_payload["versions"]) >= 2
+    assert "pytest -q before release" in diff_payload["diff"]
+    assert diff_payload["from_version"] == 1
+    assert diff_payload["to_version"] == 2
+    assert diff_payload["confidence_delta"] == 0.06
+    assert len(diff_payload["evidence_added"]) == 1
+    assert diff_payload["evidence_removed"] == []

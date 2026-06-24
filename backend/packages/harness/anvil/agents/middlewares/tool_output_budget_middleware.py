@@ -18,6 +18,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from anvil.agents.lead_agent.types import LeadAgentContext, LeadAgentState
+from anvil.runtime.state_v2 import EventLog, RuntimeEventBus, ToolResultStore, WorkspaceState, tool_result_record_to_event
 from anvil.runtime.token_budget import TokenBudgetService
 
 
@@ -98,8 +99,70 @@ class ToolOutputBudgetMiddleware(AgentMiddleware[LeadAgentState, LeadAgentContex
                 text_notice += f" Full output stored at {artifact_url}."
             new_content = clipped + text_notice
         if isinstance(response, ToolMessage):
-            return response.model_copy(update={"content": new_content})
+            budgeted_response = response.model_copy(update={"content": new_content})
+            self._record_budgeted_tool_result(
+                request=request,
+                tool_message=budgeted_response,
+                token_budget=token_budget,
+            )
+            return budgeted_response
+        self._record_budgeted_tool_result(
+            request=request,
+            tool_message=ToolMessage(
+                content=new_content,
+                tool_call_id=str(request.tool_call.get("id") or request.tool_call.get("tool_call_id") or ""),
+            ),
+            token_budget=token_budget,
+        )
         return new_content
+
+    def _record_budgeted_tool_result(self, *, request, tool_message: ToolMessage, token_budget: TokenBudgetService) -> None:
+        try:
+            context = request.runtime.context
+            thread_id = str(getattr(context, "thread_id", "") or "thread")
+            tool_result_store = getattr(context, "tool_result_store", None)
+            if tool_result_store is None:
+                tool_result_store = ToolResultStore(thread_id=thread_id)
+                setattr(context, "tool_result_store", tool_result_store)
+            workspace_state = getattr(context, "workspace_state", None)
+            if workspace_state is None:
+                workspace_state = WorkspaceState(
+                    workspace_id=f"workspace:{thread_id}",
+                    thread_id=thread_id,
+                    project_root=getattr(context, "project_root", None),
+                )
+                setattr(context, "workspace_state", workspace_state)
+            turn_id = str(
+                getattr(context, "turn_index", None)
+                or getattr(getattr(request.runtime, "state", None), "turn_index", None)
+                or "turn-unknown"
+            )
+            record = tool_result_store.ingest_tool_message(
+                tool_message,
+                tool_name=str(request.tool_call["name"]),
+                run_id=getattr(context, "run_id", None),
+                turn_id=turn_id,
+                workspace_state=workspace_state,
+                token_budget=token_budget,
+            )
+            event_log = getattr(context, "event_log", None)
+            if event_log is None:
+                event_log = EventLog(thread_id=thread_id)
+                setattr(context, "event_log", event_log)
+            event_bus = getattr(context, "runtime_event_bus", None)
+            if event_bus is None:
+                event_bus = RuntimeEventBus(event_log=event_log)
+                setattr(context, "runtime_event_bus", event_bus)
+            event_bus.publish(
+                tool_result_record_to_event(
+                    record,
+                    thread_id=thread_id,
+                    workspace_refs=[record.workspace_ref],
+                    trace_id=getattr(context, "run_trace_id", None),
+                )
+            )
+        except Exception:
+            return
 
     def _entry_output_budget(self, request) -> int | None:
         bundle = getattr(request.runtime.context, "capability_bundle", None)

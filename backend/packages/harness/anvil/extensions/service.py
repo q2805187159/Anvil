@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,9 +34,6 @@ MAX_PLUGIN_PACKAGE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 _PLUGIN_MANIFEST_PATHS = (
     "anvil.plugin.json",
     "plugin.json",
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
-    ".cursor-plugin/plugin.json",
     "plugin.yaml",
     "plugin.yml",
 )
@@ -270,8 +266,6 @@ class ExtensionsService:
                     "tool_names": [str(item.get("name")) for item in plugin.inline_tools if item.get("name")],
                     "resources": list(plugin.resources),
                     "prompts": list(plugin.prompts),
-                    "memory_providers": [provider.model_dump(mode="json") for provider in plugin.memory_providers],
-                    "memory_provider_count": len(plugin.memory_providers),
                     "catalog_metadata": dict(plugin.catalog_metadata),
                     "discovery_source": "plugin_config",
                 }
@@ -511,21 +505,7 @@ class ExtensionsService:
                 "trust_level": "curated",
             },
         ]
-        if sys.platform == "win32" or Path.home().name not in {"root", "app", "container"}:
-            for registry_id, name, relative_parts in (
-                ("codex-openai-bundled", "Codex bundled plugins", (".codex", "plugins", "cache", "openai-bundled")),
-                ("codex-openai-curated", "Codex curated plugins", (".codex", "plugins", "cache", "openai-curated")),
-                ("codex-primary-runtime", "Codex primary runtime plugins", (".codex", "plugins", "cache", "openai-primary-runtime")),
-                ("claude-official-plugins", "Claude official plugins", (".codex", "plugins", "cache", "claude-plugins-official")),
-            ):
-                candidates.append(
-                    {
-                        "registry_id": registry_id,
-                        "name": name,
-                        "source": str(Path.home().joinpath(*relative_parts)),
-                        "trust_level": "curated",
-                    }
-                )
+
         items: list[dict[str, object]] = []
         for candidate in candidates:
             source_path = Path(str(candidate["source"]))
@@ -769,7 +749,6 @@ class ExtensionsService:
                     "inline_tools": manifest.get("inline_tools") or manifest.get("tools") or [],
                     "resources": manifest.get("resources") or [],
                     "prompts": manifest.get("prompts") or [],
-                    "memory_providers": manifest.get("memory_providers") or manifest.get("memoryProviders") or [],
                     "permissions": dict(manifest.get("catalog_metadata") or {}).get("permissions", []),
                     "catalog_metadata": manifest.get("catalog_metadata") or {},
                 }
@@ -814,12 +793,6 @@ class ExtensionsService:
         )
         resources = self._list_manifest_items(manifest.get("resources") or raw_entry.get("resources"))
         prompts = self._list_manifest_items(manifest.get("prompts") or raw_entry.get("prompts"))
-        memory_provider_items = self._list_manifest_items(
-            manifest.get("memory_providers")
-            or manifest.get("memoryProviders")
-            or raw_entry.get("memory_providers")
-            or raw_entry.get("memoryProviders")
-        )
         skill_roots = self._list_str_items(manifest.get("skill_roots") or raw_entry.get("skill_roots"))
         if local_source is not None and (local_source / "skills").is_dir():
             skill_roots.append(str(local_source / "skills"))
@@ -829,11 +802,6 @@ class ExtensionsService:
             if isinstance(item, dict) and item.get("name") is not None and str(item.get("name")).strip()
         ]
         mcp_servers = self._list_str_items(raw_entry.get("mcp_servers"))
-        memory_providers = [
-            str(item.get("provider_id") or item.get("id") or item.get("name"))
-            for item in memory_provider_items
-            if isinstance(item, dict) and str(item.get("provider_id") or item.get("id") or item.get("name") or "").strip()
-        ]
         for server_id in sorted(bundled_mcp_servers):
             if server_id not in mcp_servers:
                 mcp_servers.append(server_id)
@@ -868,11 +836,9 @@ class ExtensionsService:
             "mcp_server_count": len(mcp_servers),
             "resource_count": len(resources),
             "prompt_count": len(prompts),
-            "memory_provider_count": len(memory_providers),
             "skill_roots": skill_roots,
             "tool_names": tool_names,
             "mcp_servers": mcp_servers,
-            "memory_providers": memory_providers,
             "permissions": self._list_str_items(raw_entry.get("permissions") or catalog_metadata.get("permissions")),
             "catalog_metadata": catalog_metadata,
             "discovery_source": "catalog",
@@ -882,11 +848,6 @@ class ExtensionsService:
         catalog_metadata = dict(plugin.catalog_metadata)
         source = str(catalog_metadata.get("source") or plugin.source_path or plugin_id)
         tool_names = [str(item.get("name")) for item in plugin.inline_tools if item.get("name")]
-        memory_providers = [
-            str(provider.provider_id)
-            for provider in plugin.memory_providers
-            if str(provider.provider_id).strip()
-        ]
         return {
             "plugin_id": plugin_id,
             "name": str(catalog_metadata.get("display_name") or catalog_metadata.get("name") or plugin_id),
@@ -910,11 +871,9 @@ class ExtensionsService:
             "mcp_server_count": 0,
             "resource_count": len(plugin.resources),
             "prompt_count": len(plugin.prompts),
-            "memory_provider_count": len(memory_providers),
             "skill_roots": [str(root) for root in plugin.skill_roots],
             "tool_names": tool_names,
             "mcp_servers": [],
-            "memory_providers": memory_providers,
             "permissions": self._list_str_items(catalog_metadata.get("permissions")),
             "catalog_metadata": catalog_metadata,
             "discovery_source": "plugin_config",
@@ -1105,21 +1064,19 @@ class ExtensionsService:
                     prompts=prompts,
                 )
             )
-        has_memory_providers = bool(getattr(plugin, "memory_providers", ()))
         return ExtensionMaterialization(
             server_id=plugin_id,
             source_kind="plugin",
-            status=ExternalCapabilityStatus.READY if (tools or resources or prompts or has_memory_providers) else ExternalCapabilityStatus.ENABLED,
+            status=ExternalCapabilityStatus.READY if (tools or resources or prompts) else ExternalCapabilityStatus.ENABLED,
             discovery_source="plugin_config",
             tools=tuple(tools),
             resources=resources,
             prompts=prompts,
-            connected=bool(tools or resources or prompts or has_memory_providers),
-            ready=bool(tools or resources or prompts or has_memory_providers),
+            connected=bool(tools or resources or prompts),
+            ready=bool(tools or resources or prompts),
             metadata={
                 "catalog_metadata": dict(plugin.catalog_metadata),
                 "source_path": plugin.source_path,
-                "memory_providers": [provider.model_dump(mode="json") for provider in plugin.memory_providers],
             },
         )
 
@@ -1191,9 +1148,6 @@ class ExtensionsService:
         for name in (
             "anvil.plugin.json",
             "plugin.json",
-            ".codex-plugin/plugin.json",
-            ".claude-plugin/plugin.json",
-            ".cursor-plugin/plugin.json",
         ):
             path = plugin_dir / name
             if path.exists():
@@ -1253,7 +1207,6 @@ class ExtensionsService:
         inline_tools = self._list_manifest_items(manifest.get("inline_tools") or manifest.get("tools"))
         resources = self._list_manifest_items(manifest.get("resources"))
         prompts = self._list_manifest_items(manifest.get("prompts"))
-        memory_providers = self._list_manifest_items(manifest.get("memory_providers") or manifest.get("memoryProviders"))
         catalog_metadata = dict(manifest.get("catalog_metadata") or {})
         catalog_metadata.setdefault("source", source)
         catalog_metadata.setdefault("installed_by", "ops_console")
@@ -1264,7 +1217,6 @@ class ExtensionsService:
             "inline_tools": inline_tools,
             "resources": resources,
             "prompts": prompts,
-            "memory_providers": memory_providers,
             "catalog_metadata": {
                 "plugin_id": plugin_id,
                 **catalog_metadata,

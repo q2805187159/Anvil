@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import HumanMessage
 
 from anvil.agents import ThreadLifecycleStatus, ThreadState
 
@@ -9,7 +10,7 @@ from conftest import build_gateway_config_layers
 
 def test_gateway_self_upgrade_health_exposes_memory_and_skill_backlog(gateway_app_factory, contract_tmp_path) -> None:
     config_layers = build_gateway_config_layers(contract_tmp_path)
-    config_layers[0].data["memory_platform"] = {
+    config_layers[0].data["hcms"] = {
         "enabled": True,
         "archive": {"sqlite_path": str(contract_tmp_path / "archive.sqlite3")},
         "update_queue": {"min_batch_turns": 4, "max_batch_turns": 8},
@@ -18,16 +19,19 @@ def test_gateway_self_upgrade_health_exposes_memory_and_skill_backlog(gateway_ap
     with TestClient(app) as client:
         deps = client.app.state.runtime_deps
         deps.memory_manager.create_entry(
-            "runtime_memory",
+            "hcms_workspace",
             content="Release workflow requires canary verification before deploy.",
             category="project_context",
             confidence=0.40,
             salience=0.20,
         )
-        deps.memory_manager.record_turn(
-            thread_id="thread-low-signal",
-            user_content="ordinary progress update",
-            assistant_content="acknowledged",
+        deps.memory_manager.hcms_service.enqueue_capture(
+            deps.memory_manager.hcms_service.build_capture_envelope(
+                thread_id="thread-low-signal",
+                namespace="global/default",
+                messages=[HumanMessage(content="ordinary progress update")],
+                trace_id="thread-low-signal",
+            )
         )
         deps.skills_service.manage_curator(
             config=deps.effective_config,
@@ -80,7 +84,7 @@ def test_gateway_self_upgrade_health_exposes_memory_and_skill_backlog(gateway_ap
 
 def test_gateway_self_upgrade_health_exposes_trajectory_quality_domain(gateway_app_factory, contract_tmp_path) -> None:
     config_layers = build_gateway_config_layers(contract_tmp_path)
-    config_layers[0].data["memory_platform"] = {"enabled": False}
+    config_layers[0].data["hcms"] = {"enabled": False}
     config_layers[0].data["trajectory_export"] = {
         "enabled": True,
         "export_root": str(contract_tmp_path / "trajectories"),

@@ -1,6 +1,6 @@
 import type { Locale } from "@/src/core/i18n";
 
-export type OpsSurface = "overview" | "models" | "tools" | "skills" | "memory" | "selfUpgrade" | "mcp" | "plugins" | "scheduled";
+export type OpsSurface = "overview" | "basics" | "models" | "tools" | "skills" | "memory" | "selfUpgrade" | "mcp" | "plugins" | "scheduled";
 
 export type OpsUrlState = {
   open: boolean;
@@ -24,6 +24,8 @@ export type OpsCopy = {
     configSnapshot: string;
     noThread: string;
     runtimeDrawerNote: string;
+    basics: string;
+    basicsDescription: string;
     models: string;
     modelsDescription: string;
     tools: string;
@@ -115,6 +117,25 @@ export type OpsCopy = {
       endpoint: string;
       fieldHelp: Record<string, string>;
     };
+  basic: {
+    title: string;
+    description: string;
+    required: string;
+    extension: string;
+    missingRequired: string;
+    gitTokenEnv: string;
+    gitTokenValue: string;
+    gitUserName: string;
+    gitUserEmail: string;
+    gitRemoteUrl: string;
+    save: string;
+    test: string;
+    status: string;
+    configured: string;
+    missing: string;
+    configPath: string;
+    dotenvPath: string;
+  };
   skills: {
     title: string;
     noResults: string;
@@ -197,21 +218,12 @@ export type OpsCopy = {
     recommendations: string;
     providers: string;
     pendingReview: string;
-    profileFacets: string;
-    profileClass: string;
-    profilePolicy: string;
-    profileBudget: string;
-    profileVisible: string;
+    userMemories: string;
     provisional: string;
     candidate: string;
     forgotten: string;
     polluted: string;
-    pin: string;
-    unpin: string;
     forget: string;
-    resetFacet: string;
-    rebuildFacets: string;
-    facetAudit: string;
     confidence: string;
     evidence: string;
     score: string;
@@ -385,7 +397,6 @@ export type OpsCopy = {
     tags: string;
     counts: string;
     mcpServers: string;
-    memoryProviders: string;
     permissions: string;
     catalogMetadata: string;
     skillRoots: string;
@@ -464,6 +475,7 @@ export function opsCopy(locale: Locale): OpsCopy {
       close: "关闭配置中心",
       surfaces: {
         overview: "总览",
+        basics: "基础配置",
         models: "模型配置",
         tools: "工具配置",
         skills: "技能配置",
@@ -481,14 +493,16 @@ export function opsCopy(locale: Locale): OpsCopy {
         configSnapshot: "配置快照",
         noThread: "未选择线程",
         runtimeDrawerNote: "当前线程运行时能力、最近工具和审批状态仍在右侧抽屉查看。",
+        basics: "基础配置",
+        basicsDescription: "配置 HCMS 必需的 Git token，并区分可选扩展项与本地诊断。",
         models: "模型",
         modelsDescription: "配置 provider、默认模型、上下文窗口和推理能力。",
         tools: "工具",
         toolsDescription: "查看和筛选全局工具目录、来源、审批策略和健康信息。",
         skills: "Skills",
         skillsDescription: "总览显示仓库技能，详情页可治理仓库、用户和插件来源。",
-        memory: "记忆",
-        memoryDescription: "查看记忆质量、重复项、冲突、待审队列和 provider 健康。",
+        memory: "HCMS 记忆",
+        memoryDescription: "查看 HCMS 四流召回、因果链、证据、置信度和版本历史。",
         selfUpgrade: "自升级",
         selfUpgradeDescription: "查看 memory、skills 和自动化健康聚合、backlog 和治理建议。",
         mcp: "MCP",
@@ -531,6 +545,25 @@ export function opsCopy(locale: Locale): OpsCopy {
         prompts: "提示模板",
         noResults: "没有匹配的能力。",
         noDetail: "选择左侧能力查看详情。",
+      },
+      basic: {
+        title: "基础配置",
+        description: "管理 HCMS 启动前必须具备的配置，以及不会阻塞启动但可提升诊断和版本记录质量的扩展项。",
+        required: "必须配置",
+        extension: "扩展配置",
+        missingRequired: "缺少必须配置",
+        gitTokenEnv: "Git token 环境变量",
+        gitTokenValue: "Git token",
+        gitUserName: "Git 用户名",
+        gitUserEmail: "Git 邮箱",
+        gitRemoteUrl: "Git 远端 URL",
+        save: "保存基础配置",
+        test: "测试",
+        status: "状态",
+        configured: "已配置",
+        missing: "未配置",
+        configPath: "配置文件",
+        dotenvPath: ".env 文件",
       },
       models: {
         title: "模型配置",
@@ -671,8 +704,8 @@ export function opsCopy(locale: Locale): OpsCopy {
         refresh: "刷新列表",
       },
       memory: {
-        title: "记忆治理",
-        description: "跟踪长期记忆质量、待审候选、冲突、过期内容和 provider 状态。",
+        title: "HCMS 控制台",
+        description: "面向 HCMS 的四流召回、因果链、证据、置信度和版本历史控制台。",
         health: "健康状态",
         qualityScore: "质量分",
         candidateAudit: "候选审计",
@@ -684,21 +717,12 @@ export function opsCopy(locale: Locale): OpsCopy {
         recommendations: "建议",
         providers: "Provider",
         pendingReview: "待审",
-        profileFacets: "画像记忆",
-        profileClass: "画像分类",
-        profilePolicy: "画像策略",
-        profileBudget: "分类预算",
-        profileVisible: "可注入",
+        userMemories: "用户记忆",
         provisional: "暂存",
         candidate: "候选",
         forgotten: "已遗忘",
         polluted: "污染源",
-        pin: "固定",
-        unpin: "取消固定",
         forget: "遗忘",
-        resetFacet: "重置",
-        rebuildFacets: "重建画像",
-        facetAudit: "画像审计",
         confidence: "置信度",
         evidence: "证据",
         score: "分数",
@@ -785,7 +809,7 @@ export function opsCopy(locale: Locale): OpsCopy {
         reject: "拒绝",
         approveAll: "全部批准",
         rejectAll: "全部拒绝",
-        noReviewItems: "当前没有待审记忆。",
+        noReviewItems: "当前没有 HCMS 质量候选。",
         noCandidateAudit: "还没有候选沉淀审计记录。",
         noIssues: "当前没有需要处理的记忆质量问题。",
         noRecommendations: "当前没有额外建议。",
@@ -872,7 +896,6 @@ export function opsCopy(locale: Locale): OpsCopy {
         tags: "标签",
         counts: "能力概览",
         mcpServers: "Bundled MCP",
-        memoryProviders: "Memory Provider",
         permissions: "权限提示",
         catalogMetadata: "目录元数据",
         skillRoots: "技能根目录",
@@ -950,6 +973,7 @@ export function opsCopy(locale: Locale): OpsCopy {
     close: "Close Configuration Center",
     surfaces: {
       overview: "Overview",
+      basics: "Basic Configuration",
       models: "Models",
       tools: "Tools",
       skills: "Skills",
@@ -967,14 +991,16 @@ export function opsCopy(locale: Locale): OpsCopy {
         configSnapshot: "Config snapshot",
         noThread: "No thread selected",
       runtimeDrawerNote: "Current thread runtime tools, approvals, and recent activity remain in the right drawer.",
+      basics: "Basic Configuration",
+      basicsDescription: "Configure the Git token required by HCMS and separate optional diagnostics from required setup.",
       models: "Models",
       modelsDescription: "Configure providers, default models, context windows, and reasoning capabilities.",
       tools: "Tools",
       toolsDescription: "Inspect the global tool catalog, sources, approval policy, and health.",
       skills: "Skills",
       skillsDescription: "Overview counts repo skills; detail pages govern repo, user, and plugin sources.",
-      memory: "Memory",
-      memoryDescription: "Inspect memory quality, duplicates, conflicts, review queue, and provider health.",
+      memory: "HCMS Memory",
+      memoryDescription: "Inspect HCMS recall, causal chains, evidence, confidence, and version history.",
       selfUpgrade: "Self-upgrade",
       selfUpgradeDescription: "Inspect memory, skills, and automation health, backlog, and governance recommendations.",
       mcp: "MCP",
@@ -1017,6 +1043,25 @@ export function opsCopy(locale: Locale): OpsCopy {
       prompts: "Prompts",
       noResults: "No matching capabilities.",
       noDetail: "Select a capability to inspect details.",
+    },
+    basic: {
+      title: "Basic Configuration",
+      description: "Manage configuration required before HCMS starts, plus optional extension settings that improve diagnostics and version metadata.",
+      required: "Required configuration",
+      extension: "Extension configuration",
+      missingRequired: "Missing required configuration",
+      gitTokenEnv: "Git token env",
+      gitTokenValue: "Git token value",
+      gitUserName: "Git user name",
+      gitUserEmail: "Git user email",
+      gitRemoteUrl: "Git remote URL",
+      save: "Save basic configuration",
+      test: "Test",
+      status: "Status",
+      configured: "Configured",
+      missing: "Missing",
+      configPath: "Config file",
+      dotenvPath: ".env file",
     },
     models: {
       title: "Model Configuration",
@@ -1157,8 +1202,8 @@ export function opsCopy(locale: Locale): OpsCopy {
       refresh: "Refresh list",
     },
     memory: {
-      title: "Memory Governance",
-      description: "Track long-term memory quality, review candidates, conflicts, stale entries, and provider health.",
+      title: "HCMS Console",
+      description: "Inspect HCMS four-stream recall, causal chains, evidence, confidence, and version history.",
       health: "Health",
       qualityScore: "Quality score",
       candidateAudit: "Candidate audit",
@@ -1170,21 +1215,12 @@ export function opsCopy(locale: Locale): OpsCopy {
       recommendations: "Recommendations",
       providers: "Providers",
       pendingReview: "Review",
-      profileFacets: "Profile facets",
-      profileClass: "Profile class",
-      profilePolicy: "Profile policy",
-      profileBudget: "Class budget",
-      profileVisible: "Prompt visible",
+      userMemories: "User memories",
       provisional: "Provisional",
       candidate: "Candidate",
       forgotten: "Forgotten",
       polluted: "Polluted source",
-      pin: "Pin",
-      unpin: "Unpin",
       forget: "Forget",
-      resetFacet: "Reset",
-      rebuildFacets: "Rebuild facets",
-      facetAudit: "Facet audit",
       confidence: "Confidence",
       evidence: "Evidence",
       score: "Score",
@@ -1271,7 +1307,7 @@ export function opsCopy(locale: Locale): OpsCopy {
       reject: "Reject",
       approveAll: "Approve all",
       rejectAll: "Reject all",
-      noReviewItems: "No memory review items are pending.",
+      noReviewItems: "No HCMS quality candidates are pending.",
       noCandidateAudit: "No memory candidate audit entries yet.",
       noIssues: "No memory quality issues need attention.",
       noRecommendations: "No additional recommendations.",
@@ -1358,7 +1394,6 @@ export function opsCopy(locale: Locale): OpsCopy {
       tags: "Tags",
       counts: "Capability overview",
       mcpServers: "Bundled MCP",
-      memoryProviders: "Memory providers",
       permissions: "Permission notes",
       catalogMetadata: "Catalog metadata",
       skillRoots: "Skill roots",

@@ -13,6 +13,7 @@ import { Button } from "@/src/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/src/components/ui/dialog";
 
 import { ActionDialog } from "./action-dialog";
+import { BasicConfigPanel } from "./basic-config-panel";
 import { ConfigOverviewPanel } from "./config-overview-panel";
 import { MemoryGovernancePanel } from "./memory-governance-panel";
 import { McpConsolePanel } from "./mcp-console-panel";
@@ -257,6 +258,7 @@ function OpsConsoleContent({
                     onSelectSurface={selectSurface}
                   />
                 ) : null}
+                {detailState.surface === "basics" ? <BasicConfigPanel copy={copy} /> : null}
                 {detailState.surface === "models" ? (
                   <ModelConfigPanel copy={copy} />
                 ) : null}

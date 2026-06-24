@@ -77,6 +77,8 @@ anvil shell
 | `/mcp` | List MCP servers. |
 | `/memory` | Show memory overview. |
 | `/memory-search <query>` | Search archived memory turns. |
+| `/setup` | Show the first-run setup checklist, including required HCMS Git token configuration. |
+| `/setup --git-token-env GITHUB_TOKEN --git-token <token>` | Save required Git base configuration for the active profile without echoing the token. |
 
 The shell is intentionally not a separate runtime. It presents harness-owned
 state through the embedded SDK.

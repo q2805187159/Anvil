@@ -535,7 +535,7 @@ class RunSnapshotProjector:
                 if step_key not in steps_by_key:
                     step_order.append(step_key)
                 previous_payload = steps_by_key.get(step_key, {}).get("payload")
-                if envelope.kind == "step_updated" and previous_payload and not step.get("payload"):
+                if envelope.kind in {"step_started", "step_updated"} and previous_payload and not step.get("payload"):
                     step["payload"] = previous_payload
                 steps_by_key[step_key] = step
                 continue
@@ -558,6 +558,7 @@ class RunSnapshotProjector:
                     }
                 step = dict(steps_by_key[step_key])
                 step["payload"] = f"{step.get('payload') or ''}{payload.get('payload_delta') or ''}"
+                step["status"] = str(step.get("status") or "running")
                 steps_by_key[step_key] = step
                 continue
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 
 FENCED_JSON_RE = re.compile(r"```(?:json|tool|tool_call|function_call)?\s*(?P<body>[\s\S]*?)```", re.IGNORECASE)

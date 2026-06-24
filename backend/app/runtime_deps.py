@@ -14,7 +14,6 @@ from threading import Lock
 from uuid import uuid4
 
 from anvil import (
-    ArchiveSearchResult,
     build_default_config_layers,
     build_env_bootstrap_config_layers_from_env,
     CapabilityAssemblyService,
@@ -22,11 +21,6 @@ from anvil import (
     ConfigResolutionResult,
     ConfigService,
     ExtensionsService,
-    FileMemoryStore,
-    HeuristicMemoryUpdater,
-    MemoryManager,
-    MemoryService,
-    MemoryPlatformConfig,
     PathBridge,
     PathService,
     ProcessService,
@@ -57,7 +51,7 @@ from anvil.agents import make_lead_agent
 from anvil.agents.factory import clone_chat_model_override_for_subagent
 from anvil.agents import ThreadLifecycleStatus, ThreadMetadataView, ThreadState
 from anvil.config import ModelRouteRequest, RequiredModelCapabilities, resolve_model_route
-from anvil.memory import DebouncedMemoryQueue
+from anvil.memory import MemoryManager, MemoryService
 from anvil.processes.backends import create_terminal_backend_adapter
 from anvil.runtime.checkpointers import Checkpointer, CheckpointerBackend
 from anvil.runtime.runs import JsonlRunEventLogStore, RunEventLogStore
@@ -157,10 +151,18 @@ class _SubagentEphemeralStore:
 
 
 class ConfigCoordinator:
-    def __init__(self, *, config_service: ConfigService, config_layers: list[ConfigLayer], auto_reload: bool) -> None:
+    def __init__(
+        self,
+        *,
+        config_service: ConfigService,
+        config_layers: list[ConfigLayer],
+        auto_reload: bool,
+        repo_root: Path | None = None,
+    ) -> None:
         self.config_service = config_service
         self.config_layers = config_layers
         self.auto_reload = auto_reload
+        self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
         self._lock = Lock()
         self._config_path = None
         self._config_mtime = None
@@ -198,7 +200,7 @@ class ConfigCoordinator:
         if (now - self._last_poll_at) < self._poll_interval_seconds:
             return False
         self._last_poll_at = now
-        current_path = resolve_config_path()
+        current_path = resolve_config_path(repo_root=self.repo_root)
         current_mtime = current_path.stat().st_mtime if current_path and current_path.exists() else None
         changed = current_path != self._config_path or current_mtime != self._config_mtime
         self._config_path = current_path
@@ -207,7 +209,7 @@ class ConfigCoordinator:
 
     def _rebuild_layers(self, force: bool = False) -> list[ConfigLayer]:
         if force and self.auto_reload:
-            self.config_layers = build_default_config_layers()
+            self.config_layers = build_default_config_layers(repo_root=self.repo_root)
         return self.config_layers
 
     def _reload_unlocked(self, *, force: bool) -> ConfigResolutionResult:
@@ -487,20 +489,21 @@ def build_runtime_deps_bundle(
     subagent_service: SubagentService | None = None,
     tracing_service: TracingService | None = None,
 ) -> RuntimeDepsBundle:
+    repo_root = Path(__file__).resolve().parents[2]
     auto_reload_config = config_layers is None
-    config_layers = config_layers or build_default_config_layers()
+    config_layers = config_layers or build_default_config_layers(repo_root=repo_root)
     requested_feature_set = feature_set or RuntimeFeatureSet(title=True)
     config_service = ConfigService()
     config_coordinator = ConfigCoordinator(
         config_service=config_service,
         config_layers=config_layers,
         auto_reload=auto_reload_config,
+        repo_root=repo_root,
     )
     config_result = config_coordinator.get_current()
     feature_set = resolve_feature_set(requested_feature_set, config_result.effective_config)
     create_sandbox_provider(config_result.effective_config)
 
-    repo_root = Path(__file__).resolve().parents[2]
     configured_anvil_home = default_anvil_config_dir(repo_root)
     if app_state_root is None:
         if thread_root is not None:
@@ -539,29 +542,13 @@ def build_runtime_deps_bundle(
         store=store,
     )
 
-    memory_store_path = config_result.effective_config.memory.store_path or str(app_state_root / "memories" / "legacy")
-    legacy_memory_runtime_enabled = (
-        config_result.effective_config.memory.enabled
-        and not config_result.effective_config.memory_platform.enabled
-    )
-    memory_service = None
-    if legacy_memory_runtime_enabled:
-        memory_service = MemoryService(
-            store=FileMemoryStore(memory_store_path),
-            queue=DebouncedMemoryQueue(),
-            updater=HeuristicMemoryUpdater(max_facts=config_result.effective_config.memory.max_facts),
-            max_facts=config_result.effective_config.memory.max_facts,
-            injection_token_budget=config_result.effective_config.memory.injection_token_budget,
-        )
-    memory_platform_config = config_result.effective_config.memory_platform
-    if not memory_platform_config.enabled and config_result.effective_config.memory.enabled:
-        memory_platform_config = MemoryPlatformConfig.from_legacy_memory(config_result.effective_config.memory)
+    hcms_config = config_result.effective_config.hcms
     memory_manager = MemoryManager.from_config(
-        config=memory_platform_config,
+        config=hcms_config,
         base_path=app_state_root / "memories",
-        legacy_store_path=memory_store_path if config_result.effective_config.memory.enabled else None,
         effective_config=config_result.effective_config,
     )
+    memory_service = memory_manager.hcms_service if hcms_config.enabled else None
     skills_service = SkillsService()
     extensions_service = ExtensionsService()
     tracing_service = tracing_service or TracingService.from_env_and_config(

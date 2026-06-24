@@ -1,6 +1,5 @@
 from .approval_middleware import ApprovalMiddleware, GuardrailMiddleware
 from .clarification_middleware import ClarificationMiddleware
-from .compaction_middleware import CompactionMiddleware
 from .dangling_tool_call_middleware import DanglingToolCallMiddleware
 from .deferred_tool_filter_middleware import DeferredToolFilterMiddleware
 from .jit_context_middleware import JITContextMiddleware
@@ -11,7 +10,6 @@ from .memory_prefetch_middleware import MemoryPrefetchMiddleware
 from .sandbox_middleware import SandboxMiddleware
 from .sandbox_audit_middleware import SandboxAuditMiddleware
 from .subagent_limit_middleware import SubagentLimitMiddleware
-from .summarization_middleware import SummarizationMiddleware
 from .title_middleware import TitleMiddleware
 from .todo_middleware import TodoMiddleware
 from .thread_data_middleware import ThreadDataMiddleware
@@ -26,7 +24,6 @@ from .view_image_middleware import ViewImageMiddleware
 __all__ = [
     "ApprovalMiddleware",
     "ClarificationMiddleware",
-    "CompactionMiddleware",
     "DanglingToolCallMiddleware",
     "DeferredToolFilterMiddleware",
     "GuardrailMiddleware",
@@ -38,7 +35,6 @@ __all__ = [
     "SandboxMiddleware",
     "SandboxAuditMiddleware",
     "SubagentLimitMiddleware",
-    "SummarizationMiddleware",
     "TitleMiddleware",
     "TodoMiddleware",
     "ThreadDataMiddleware",

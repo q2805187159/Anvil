@@ -6,7 +6,7 @@ The canonical package root is:
 
 - `backend/packages/harness/anvil/`
 
-Planned subareas include:
+Runtime-owned subareas include:
 
 - `agents/`
 - `config/`
@@ -24,14 +24,12 @@ This layer is intentionally adapter-free.
 
 Source of truth:
 
-- `docs/architecture/source-of-truth.md`
-- `docs/architecture/01-repo-blueprint.md`
-- `docs/architecture/02-boundaries-and-dependencies.md`
-- `docs/architecture/03-runtime-state.md`
-- `docs/architecture/04-path-and-isolation.md`
-- `docs/architecture/05-tool-registry-and-capabilities.md`
-- `docs/architecture/06-prompt-architecture.md`
-- `docs/architecture/07-memory-system.md`
-- `docs/architecture/08-mcp-and-extensions.md`
-- `docs/architecture/09-subagents-and-execution-control.md`
-- `docs/architecture/extension-model.md`
+- `README.md`
+- `docs/guides/usage.md`
+- `docs/guides/configuration.md`
+- `docs/guides/hcms-memory-api.md`
+- `docs/guides/extensions-and-capability-surfaces.md`
+- `docs/guides/release-verification.md`
+- `docs/adr/ADR-001-architecture-baseline-and-extension-policy.md`
+- `docs/adr/ADR-003-execution-control-and-capability-truth.md`
+- `docs/memory/hcms-implementation-audit.md`

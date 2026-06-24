@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="Anvil operator workspace" width="100%">
+  <img src="docs/assets/logo.png" alt="Anvil" width="100%">
 </p>
 
 <p align="center">
@@ -7,7 +7,11 @@
   <a href="./README_zh.md">中文</a>
 </p>
 
-# Anvil
+<h1 align="center">Anvil</h1>
+
+<p align="center">
+  <strong>HCMS V2 + Runtime Context V2 for agents that remember, reason, use tools, and evolve under one auditable runtime.</strong>
+</p>
 
 <p align="center">
   <a href="https://github.com/q2805187159/Anvil/actions/workflows/ci.yml"><img src="https://github.com/q2805187159/Anvil/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -17,39 +21,51 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
 </p>
 
-Anvil is a harness-first agent runtime for building reliable operator
-workspaces, agent tools, long-running memory, MCP extensions, isolated
-execution surfaces, and self-improving agent workflows from one source of
-runtime truth.
+Anvil is a harness-first agent runtime for building serious operator systems: long-session memory, budgeted context assembly, typed tools, MCP extensions, skills, isolated execution, structured traces, gateway APIs, a CLI/TUI, and a browser workbench all driven by the same runtime contracts.
 
-It is designed for teams that need more than a chat window: the reusable
-harness, FastAPI gateway, embedded SDK, shell/TUI, Next.js workbench, memory
-platform, tools catalog, approval control plane, and deployment scripts all
-consume the same runtime contracts.
+The new V2 stack turns memory and context from prompt appendices into first-class control-plane data. HCMS V2 captures evidence as Observation -> Claim -> ConsolidatedMemory, while Runtime Context V2 converts memory, files, tools, workspace state, goals, warnings, and capability hints into auditable `ContextBlock` objects that compete for attention budget before every model call.
 
-## Why Anvil
+## Why Star Anvil
 
-Anvil is built like an operating layer for agents, not a thin chat wrapper.
-One runtime owns memory, tools, approvals, process execution, context budgets,
-delegation, and telemetry, then exposes that same truth through HTTP, SDK, CLI,
-TUI, and the browser workbench.
-
-| Advantage | What makes it different |
+| Capability | Why it matters |
 | --- | --- |
-| Harness-owned truth | The real platform lives in `backend/packages/harness/anvil`; the FastAPI gateway, embedded SDK, shell/TUI, and Next.js UI are clients of one contract instead of competing implementations. |
-| Memory that can be governed | Session archive, curated runtime memory, profile facets, recall evidence, review queues, conflict resolution, staleness checks, maintenance jobs, and reflection jobs make memory durable without becoming an unreviewed prompt junk drawer. |
-| Context engineering built in | Prompt snapshots, context ledgers, JIT context loading, semantic code maps, deferred tool schemas, capability search, output budgets, token usage accounting, semantic compression, and compaction diagnostics keep large workspaces usable. |
-| Tool universe with guardrails | Filesystem, terminal/process, web, browser, media, document, Google Workspace, MCP, skills, memory, automation, planning, and delegation surfaces are assembled through typed toolsets with approval and safety metadata. |
-| Real operator workbench | Threads, uploads, artifacts, transcript projection, approvals, memory governance, skill governance, plugin inspection, MCP console, model configuration, and tool catalog panels sit in one dense bilingual workspace. |
-| Parallel and scheduled work | Bounded subagents, batch delegation records, task dependencies, scheduled tasks, execution history, and follow-up queues let Anvil run more like an operator team than a single chat tab. |
-| Multi-environment execution | Local shell, Docker, SSH, Singularity/Apptainer, Modal, Daytona, and Vercel sandbox adapters share process contracts, mount metadata, and capability reporting. |
-| Research and training runway | Scrubbed trajectory export, ShareGPT-style conversion, tool-call parsing, quality reports, memory recall benchmarks, contract generation, smoke tests, and release-readiness gates make the runtime measurable instead of mystical. |
+| HCMS V2 memory engine | Three-state knowledge flow, evidence spans, conflict records, forgetting profiles, procedure patterns, wisdom insights, guarded capture, hybrid recall, maintenance jobs, and memory API surfaces give agents durable memory with provenance instead of loose notes. |
+| Runtime Context V2 | Every model-facing item is shaped as a structured context block with evidence, privacy, injection, conflict, compression, token, and trace metadata. Memory no longer bypasses the prompt budget. |
+| Self-evolution loop | Capability usage, tool results, memory capture, procedure mining, wisdom promotion, evaluation traces, and release gates create a measurable improvement loop for long-running agents. |
+| Operator-grade observability | Context assembly traces, selected memory, selected capability resources, tool result references, conflict warnings, evaluation reports, and smoke evidence are exposed for debugging instead of hidden in logs. |
+| One runtime, many surfaces | FastAPI gateway, embedded SDK, CLI, TUI, Next.js workbench, MCP, tools, skills, and scheduled tasks consume the same harness-owned contracts. |
+| Guarded tool universe | Filesystem, terminal, browser, web, media, document, Google Workspace, memory, planning, delegation, MCP, and plugin tools are registered with typed schemas, visibility budgets, output budgets, approval metadata, and safety policy. |
+| Release-oriented engineering | Contract generation, backend/frontend tests, docs build, Docker mount checks, HCMS benchmark gates, trace replay, release readiness profiles, and cleanup guidance are built into the repo. |
 
-## Screenshots
+## V2 Architecture
 
-| Workspace | Session Details | Ops Console |
-| --- | --- | --- |
-| <img src="docs/assets/screenshots/home.png" alt="Workspace home" width="100%"> | <img src="docs/assets/screenshots/session-details.png" alt="Session details" width="100%"> | <img src="docs/assets/screenshots/configuration-center.png" alt="Ops Console" width="100%"> |
+```mermaid
+flowchart LR
+  User["User / API / TUI / Workbench"] --> Runtime["Runtime Pipeline"]
+  Runtime --> Events["RuntimeEvent Bus"]
+  Events --> Capture["HCMS CaptureEnvelope V2"]
+  Capture --> Memory["Observation -> Claim -> ConsolidatedMemory"]
+  Memory --> Recall["Hybrid Recall + Conflict + Guard"]
+  Runtime --> Capabilities["Skills + Native Tools + MCP + Services"]
+  Runtime --> Workspace["GoalStack + WorkspaceState + Scratchpad"]
+  Recall --> Blocks["ContextBlock Candidates"]
+  Capabilities --> Blocks
+  Workspace --> Blocks
+  Blocks --> Budget["AttentionBudgetController"]
+  Budget --> Assembly["ContextAssembler XML-like Context"]
+  Assembly --> Trace["ContextAssemblyTrace + Evaluation"]
+  Assembly --> LLM["Model Call"]
+  LLM --> Actions["Action Dispatch + Tool Results"]
+  Actions --> Events
+```
+
+## What You Get
+
+- HCMS V2 memory records: `ObservationRecord`, `EvidenceSpan`, `ClaimRecord`, `ConsolidatedMemory`, `ConflictRecord`, `ForgettingProfile`, `ProcedurePattern`, `WisdomInsight`, `MemorySearchResult`, `MemoryInjectionViewV2`, `CaptureEnvelopeV2`, and `MemoryGuardDecision`.
+- Runtime Context V2 flow: intake, intent profiling, query planning, retrieval, attention budgeting, context assembly, model call, action dispatch, observation handling, state update, memory capture, and maintenance scheduling.
+- Capability-aware runtime: native tools, skills, MCP tools, internal services, Top-K exposure, hidden capability summaries, high-risk tool guardrails, tool result references, and workspace-state capture.
+- Gateway and workbench: stable backend routes, frontend API clients, thread detail, Memory Workspace, HCMS console, Skills governance, MCP console, Tools Catalog, Configuration Center, Ops Console, and bilingual UI.
+- Evaluation surfaces: trace replay, release smoke tests, HCMS recall benchmark, fallback checks, latency/token gates, docs build, and deterministic release readiness profiles.
 
 ## Quick Start
 
@@ -66,8 +82,9 @@ cd Anvil
 make config
 ```
 
-Edit `.env` for secrets and `config.yaml` for model routing, then start the
-full stack:
+Edit `.env` for secrets and `config.yaml` for runtime settings. Set `GITHUB_TOKEN` or change `git.token_env`; HCMS version metadata uses Git configuration as part of the base memory setup.
+
+Start the full stack:
 
 ```bash
 make docker-start
@@ -75,9 +92,9 @@ make docker-start
 
 Default endpoints:
 
-- Frontend: `http://127.0.0.1:13200`
-- Backend: `http://127.0.0.1:18000`
-- Health: `http://127.0.0.1:18000/health`
+- Frontend workbench: `http://127.0.0.1:13200`
+- Backend gateway: `http://127.0.0.1:18000`
+- Health check: `http://127.0.0.1:18000/health`
 
 Local development:
 
@@ -93,41 +110,24 @@ In another terminal:
 make frontend
 ```
 
-## Core Capabilities
+## Documentation Map
 
-- Agent run engine with structured streaming, durable thread state, transcript
-  projection, prompt snapshots, and execution modes.
-- Memory platform with session archive, runtime memory, user profile, review
-  queues, recall evidence, freshness scoring, conflict handling, profile facets,
-  memory health checks, retention, reflection, and maintenance jobs.
-- Tools catalog with capability search, schema deferral, output budgeting,
-  artifact spillover, filesystem tools, web/media/document/browser tools, and
-  process sessions.
-- Code intelligence tools for compact project maps, semantic indexes, symbol
-  lookup, reference search, impact analysis, security scans, and docs graphs.
-- Extension layer for MCP servers, local skills, plugin registries, memory
-  providers, model routing, terminal backends, and generated contracts.
-- Operator workbench with threads, uploads, artifacts, approvals, Memory
-  Workspace, Skills governance, MCP console, Tools Catalog, and bilingual UI.
-- CLI and TUI surfaces for setup, one-shot steps, model selection, memory
-  search, terminal sessions, approvals, and structured user interactions.
-- Evaluation surfaces for trajectory export, batch reports, memory recall
-  benchmarks, smoke tests, docs builds, and release-readiness checks.
-
-## Documentation
-
-Start with these guides:
-
-- [Usage Guide](./docs/guides/usage.md)
-- [Deployment Guide](./docs/guides/deployment.md)
-- [TUI Guide](./docs/guides/tui.md)
-- [CLI Reference](./docs/guides/cli.md)
-- [Command Reference](./docs/guides/commands.md)
-- [Configuration Reference](./docs/guides/configuration.md)
-- [Model Provider Configuration](./docs/guides/model-provider-configuration.md)
-- [Extensions and Capability Surfaces](./docs/guides/extensions-and-capability-surfaces.md)
-- [Open Source Release Checklist](./docs/guides/open-source-release.md)
-- [Release Verification](./docs/guides/release-verification.md)
+| Topic | Guide |
+| --- | --- |
+| Installation and deployment | [Deployment Guide](./docs/guides/deployment.md) |
+| Daily operation | [Usage Guide](./docs/guides/usage.md) |
+| Examples | [Examples Guide](./examples/README.md) |
+| Browser workbench and runtime surfaces | [Usage Guide](./docs/guides/usage.md) |
+| CLI | [CLI Reference](./docs/guides/cli.md) |
+| TUI / shell | [TUI Guide](./docs/guides/tui.md) |
+| Slash commands and runtime commands | [Command Reference](./docs/guides/commands.md) |
+| Config fields | [Configuration Reference](./docs/guides/configuration.md) |
+| Model providers | [Model Provider Configuration](./docs/guides/model-provider-configuration.md) |
+| HCMS memory API | [HCMS Memory API](./docs/guides/hcms-memory-api.md) |
+| Extensions, plugins, skills, MCP | [Extensions and Capability Surfaces](./docs/guides/extensions-and-capability-surfaces.md) and [Plugins](./docs/guides/plugins.md) |
+| Docker workspace | [Local Docker Workspace](./docs/guides/local-docker-workspace.md) |
+| Release verification | [Release Verification](./docs/guides/release-verification.md) |
+| Public repository hygiene | [Open Source Release Checklist](./docs/guides/open-source-release.md) |
 
 Build the documentation site:
 
@@ -147,43 +147,46 @@ make typecheck
 make docs
 ```
 
-Release-facing quick gate:
+Release gate:
 
 ```bash
 make release-readiness
 ```
 
-## Project Layout
+For a heavier gate:
+
+```bash
+python scripts/run-release-readiness.py --profile full
+```
+
+## Repository Layout
 
 ```text
 Anvil/
 |-- .github/               # CI, CodeQL, templates, Dependabot, CODEOWNERS
 |-- backend/               # Gateway, embedded SDK, shell, harness package, tests
 |-- docs/                  # Release-facing documentation
-|-- docs/assets/           # README-safe visual assets
+|-- docs/assets/           # Public visual assets
 |-- examples/              # Secret-free examples and plugin fixtures
 |-- frontend/              # Next.js operator workbench
 |-- plugins/               # Reviewed example plugin packages
 |-- scripts/               # Startup, cleanup, contracts, readiness scripts
+|-- skills/                # Bundled starter skills, part of the public release
 |-- docker-compose.yml
 |-- Makefile
 |-- mkdocs.yml
 `-- README_zh.md
 ```
 
-Local runtime state, debug databases, internal planning logs, and unreviewed
-local skill packs are intentionally ignored for public releases.
+Local runtime state, debug databases, screenshots, internal future plans, one-off optimization logs, generated docs output, and user-local Anvil Home content are ignored for public releases. See [Open Source Release Checklist](./docs/guides/open-source-release.md).
 
 ## Security
 
-Anvil can execute tools, read and write files, call MCP servers, process
-uploads, manage memory, spawn processes, and delegate work. Treat it as a
-trusted-environment system unless you add your own authentication and sandbox
-boundary.
+Anvil can execute tools, read and write files, call MCP servers, process uploads, manage memory, spawn processes, and delegate work. Treat it as a trusted-environment system unless you add authentication and sandbox boundaries around your deployment.
 
 Recommended baseline:
 
-- Keep `.env`, `config.yaml`, Anvil Home, runtime state, and generated artifacts out of Git.
+- Keep `.env`, `config.yaml`, Anvil Home, runtime state, debug databases, and generated artifacts out of Git.
 - Keep `guardrails.enabled=true`.
 - Require approval for shell execution, network access, and filesystem writes in shared environments.
 - Review MCP commands and environment variables before enabling them.

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Iterable
 from pydantic import BaseModel, ConfigDict, Field
 
 from anvil.config import ContextFilesConfig
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 if TYPE_CHECKING:
     from anvil.sandbox.path_service import PathService
@@ -134,9 +134,7 @@ class ProjectContextSnapshotCache:
 
 _DEFAULT_CONTEXT_FILES = (
     "AGENTS.md",
-    "CLAUDE.md",
-    "CODEX.md",
-    "GEMINI.md",
+    "PROJECT_RULES.md",
     ".cursorrules",
     ".windsurfrules",
 )

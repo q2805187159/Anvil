@@ -66,6 +66,31 @@ def test_turn_injection_view_exposes_sections_without_parsing_rendered_prompt() 
     assert "turn-local request" in view.render()
 
 
+def test_prompt_injection_memory_context_is_compatibility_field_not_rendered_directly() -> None:
+    snapshot = build_prompt_snapshot(
+        config_fingerprint="cfg-1",
+        capability_bundle=make_bundle(),
+        feature_set=RuntimeFeatureSet(),
+    )
+    view = build_turn_injection_view(
+        request_context="turn-local request",
+        memory_context="<memory_context>\nLEGACY_DIRECT_MEMORY_SENTINEL\n</memory_context>",
+        promoted_capabilities=("grep_files",),
+    )
+
+    section_names = [section.name for section in view.sections()]
+    rendered = view.render()
+    prompt = compose_system_prompt(snapshot, view)
+
+    assert view.memory_context == "<memory_context>\nLEGACY_DIRECT_MEMORY_SENTINEL\n</memory_context>"
+    assert section_names == ["request_context", "promoted_capabilities"]
+    assert "LEGACY_DIRECT_MEMORY_SENTINEL" not in rendered
+    assert "LEGACY_DIRECT_MEMORY_SENTINEL" not in prompt
+    assert "<memory_context>" not in prompt
+    assert "turn-local request" in prompt
+    assert "grep_files" in prompt
+
+
 def test_prompt_snapshot_places_project_context_before_memory_when_present() -> None:
     snapshot = build_prompt_snapshot(
         config_fingerprint="cfg-1",
@@ -267,7 +292,7 @@ def test_prompt_snapshot_includes_operational_rules_for_clarification_and_discov
     assert "do not request all coding-analysis surfaces when one will do" in sections["workflow_rules"]
     assert "prefer patch_file for focused edits" in sections["workflow_rules"]
     assert "toolset_catalog/toolset_view" in sections["workflow_rules"]
-    assert "Do not call legacy external skill-download tools that mention .claude/skills" in sections["workflow_rules"]
+    assert "Do not call legacy external skill-download tools that target third-party skill directories" in sections["workflow_rules"]
     assert "Large external tool catalogs may be task-filtered" in sections["workflow_rules"]
     assert "capability_search" in sections["deferred_capabilities"]
     assert "Do not infer host paths" in sections["path_contract"]

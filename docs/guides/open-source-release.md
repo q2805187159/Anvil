@@ -25,19 +25,43 @@ configured manually in GitHub settings.
 
 ## Cleaned From Public Tracking
 
-These paths are ignored or removed from the public Git index:
+These paths are ignored or removed from the public Git index. Items removed
+from the index may still exist in a maintainer's local checkout, but they are
+not part of the public release surface.
 
-- `.env`, `.env.*`, and `config.yaml`
-- `.anvil/`, `.omx/`, `.agents/`, `.playwright-mcp/`, and other local agent-state directories
-- `_tmp_debug/`, `_tmp-debug/`, `.tmp-debug/`, `.pytest_tmp/`, `pytest_tmp/`
-- SQLite runtime databases and journals under debug folders
-- generated logs such as `*.log`
-- generated docs site output `site/`
-- internal future/planning docs under `docs/future/`
-- one-off completion and optimization logs under `docs/FINAL-TESTING-REPORT.md`,
-  `docs/OPTIMIZATION-SUMMARY.md`, `docs/PROJECT-COMPLETE.md`, and
-  `optimization-log.md`
-- unreviewed local skill packs under `skills/`
+| Surface | Public-release handling |
+| --- | --- |
+| Secrets and machine config | `.env`, `.env.*`, and `config.yaml` are ignored. `.env.example` stays tracked. |
+| Local runtime state | `.anvil/`, `.omx/`, `.agents/`, `.playwright-mcp/`, `.claude/`, `host/`, and `%SystemDrive%/` are ignored. |
+| Local assistant context files | Tool-specific local assistant notes are ignored when present in a workspace. The repository source of truth remains `AGENTS.md` and release docs. |
+| Debug databases | `backend/tmp/` is ignored; tracked probe SQLite files and journals are removed from the public index. |
+| Generated caches | `__pycache__/`, `.pytest_cache/`, `.pytest_tmp/`, `pytest_tmp/`, `pytest-cache-files-*/`, `_tmp_test/`, `_tmp-debug/`, `_tmp_debug/`, `.tmp/`, `.tmp-debug/`, `.tmp-hcms-import/`, and package temp dirs are ignored. |
+| Frontend build output | `node_modules/`, `frontend/node_modules/`, `.next/`, `frontend/.next/`, release/probe `.next` folders, coverage, Playwright output, test results, and TypeScript build info are ignored. |
+| Documentation build output | Generated site output `site/` is ignored. |
+| Internal planning docs | `docs/internal/`, `docs/architecture/`, `docs/future/`, selected implementation todo/audit files, bootstrap prompts, and phased-build notes are ignored. |
+| Debug media and screenshots | `docs/debug-pic/` and `docs/assets/screenshots/` are ignored; README no longer references development screenshots. |
+| One-off reports/logs | `docs/FINAL-TESTING-REPORT.md`, `docs/OPTIMIZATION-SUMMARY.md`, `docs/PROJECT-COMPLETE.md`, `optimization-log.md`, `*.log`, `*.tmp`, and `*.bak` are ignored. |
+| User-local skills | User-local Anvil Home skill packs and external skill caches are ignored. |
+
+The root `skills/` directory is deliberately not filtered. It contains Anvil's
+bundled starter skills and is part of the public release boundary described in
+`AGENTS.md`.
+
+## Uncertain Or Maintainer-Review Items
+
+These are intentionally not auto-deleted and should be reviewed by maintainers
+before the first public release tag:
+
+- `skills/`: protected release content. Review source, license, and safety
+  posture before accepting community changes, but do not ignore the directory.
+- `docs/assets/logo.png`: kept as the public visual asset. Replace it before
+  release if you want a different social preview or trademark posture.
+- Provider names in config and tests: model-provider support may mention real
+  provider families and model names. These are functional configuration
+  examples, not project branding.
+- Legacy migration helpers: memory migration code can retain source-system ids
+  so existing users can import old memory exports. Do not expose those sources
+  as marketing language unless the migration path is still supported.
 
 ## Manual GitHub Settings
 

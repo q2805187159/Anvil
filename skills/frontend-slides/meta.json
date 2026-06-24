@@ -1,0 +1,27 @@
+{
+  "author": "Github",
+  "author_icon": "https://static.marvis.qq.com/wupload/skill-author-icons/1778639349473_GitHub.png",
+  "description": "Create stunning, animation-rich HTML presentations from scratch or by converting PowerPoint files. Use when the user wants to build a presentation, convert a PPT/PPTX to web, or create slides for a talk/pitch. Helps non-designers discover their aesthetic through visual exploration rather than abstract choices.",
+  "detail_describe": "生成基于HTML/CSS/JS的可运行幻灯片\n支持代码块语法高亮与动画过渡\n自动排版内容并适配宽屏展示\n可直接在浏览器预览和分享",
+  "display_description": "用代码生成可在浏览器运行的前端演示幻灯片，支持动画与代码高亮",
+  "display_name": "Frontend Slides",
+  "download_count": 6573,
+  "download_url": "https://down.marvis.qq.com/wupload2/skill-packages/1778578440788_014-frontend-slides.zip",
+  "icon": "https://static.marvis.qq.com/wupload/skill-icons/1778578440094_%E6%8A%80%E8%83%BD%E5%9B%BE%E6%A0%87.png?imageMogr2/thumbnail/224x/format/webp",
+  "id": 201,
+  "is_downloaded": false,
+  "last_modified_time": "2026-05-25 11:49:34",
+  "md5": "365a0f9cde5c9d0affd3da6f2f84f2ab",
+  "name": "frontend-slides",
+  "scope": [
+    "main",
+    "file-agent"
+  ],
+  "type": "办公学习",
+  "use_cases": [
+    "帮我做一份介绍React Hooks的技术分享PPT",
+    "把这份产品路线图[请上传文件]转成可展示的幻灯片",
+    "生成一个带代码演示的「前端最佳实践」培训材料"
+  ],
+  "version": "1.0.2"
+}

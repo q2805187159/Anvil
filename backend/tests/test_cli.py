@@ -47,6 +47,104 @@ def test_anvil_cli_setup_and_config_commands(contract_tmp_path: Path, capsys) ->
     assert "Config ok" in capsys.readouterr().out
 
 
+def test_anvil_cli_setup_configures_required_git_token(contract_tmp_path: Path, capsys) -> None:
+    from app.cli import main
+
+    config_path = contract_tmp_path / "config.yaml"
+
+    main(
+        [
+            "--anvil-home",
+            str(contract_tmp_path / "home"),
+            "--config",
+            str(config_path),
+            "setup",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-5.4",
+            "--api-key",
+            "test-openai-key",
+            "--api-key-env",
+            "OPENAI_API_KEY",
+            "--git-token",
+            "test-git-token",
+            "--git-token-env",
+            "ANVIL_GIT_TOKEN",
+            "--git-user-name",
+            "Anvil Operator",
+            "--git-user-email",
+            "operator@example.test",
+            "--non-interactive",
+        ]
+    )
+
+    assert "Config ready:" in capsys.readouterr().out
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["git"]["enabled"] is True
+    assert payload["git"]["required"] is True
+    assert payload["git"]["provider"] == "github"
+    assert payload["git"]["token_env"] == "ANVIL_GIT_TOKEN"
+    assert payload["git"]["user_name"] == "Anvil Operator"
+    assert payload["git"]["user_email"] == "operator@example.test"
+    assert (config_path.parent / ".env").read_text(encoding="utf-8").splitlines() == [
+        "OPENAI_API_KEY=test-openai-key",
+        "",
+        "ANVIL_GIT_TOKEN=test-git-token",
+    ]
+
+
+def test_anvil_cli_memory_migrate_reads_agentmemory_json_into_hcms_store(contract_tmp_path: Path, capsys) -> None:
+    from app.cli import main
+
+    config_path = contract_tmp_path / "config.yaml"
+    target_dir = contract_tmp_path / "hcms-migration"
+    source_file = contract_tmp_path / "agentmemory.json"
+    config_path.write_text(
+        """
+default_model: openai
+models:
+  openai:
+    name: openai
+    provider: openai
+    provider_kind: openai_compatible
+    model_name: gpt-5.4
+        """.strip(),
+        encoding="utf-8",
+    )
+    source_file.write_text(
+        """
+{"memories":[{"id":"mem_cli_python","content":"CLI migration preserves Python preference.","category":"preference","confidence":0.92,"strength":0.81}]}
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    main(
+        [
+            "--anvil-home",
+            str(contract_tmp_path / "home"),
+            "--config",
+            str(config_path),
+            "memory",
+            "migrate",
+            "--from",
+            "agentmemory",
+            "--source-file",
+            str(source_file),
+            "--target-dir",
+            str(target_dir),
+            "--namespace",
+            "global/default",
+            "--validate",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Migration complete: source=agentmemory seen=1 migrated=1 written=1 errors=0 validation=passed" in output
+    payload = yaml.safe_load((target_dir / "global__default.json").read_text(encoding="utf-8"))
+    assert payload["memories"][0]["memory_id"] == "mem_cli_python"
+
+
 def test_anvil_cli_config_roots_uses_anvil_paths(contract_tmp_path: Path, capsys) -> None:
     from app.cli import main
 
@@ -137,11 +235,11 @@ models:
     provider: openai
     provider_kind: openai_compatible
     model_name: gpt-5.4
-memory_platform:
+hcms:
   enabled: true
   stores:
-    runtime_memory:
-      display_name: Runtime Memory
+    hcms_workspace:
+      display_name: HCMS Workspace Layer
       max_chars: 1200
       injection_chars: 500
 skills_config:

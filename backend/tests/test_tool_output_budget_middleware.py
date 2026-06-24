@@ -229,6 +229,93 @@ def test_tool_output_budget_writes_raw_artifact_for_successful_compacted_command
     assert "tests/test_noise.py::test_40 PASSED" in artifact_files[0].read_text(encoding="utf-8")
 
 
+def test_tool_output_budget_records_budgeted_results_in_runtime_state(contract_tmp_path) -> None:
+    middleware = ToolOutputBudgetMiddleware()
+    raw_noise = "SECRET RAW OUTPUT " * 120
+    output = "\n".join(
+        [
+            "============================= test session starts =============================",
+            "tests/test_alpha.py::test_one PASSED",
+            raw_noise,
+            "1 passed in 0.42s",
+        ]
+    )
+    original = ToolMessage(
+        content=json.dumps(
+            {
+                "status": "completed",
+                "exit_code": 0,
+                "command": "pytest -q",
+                "cwd": "/mnt/user-data/workspace",
+                "output": output,
+            }
+        ),
+        tool_call_id="call-1",
+    )
+    request = _request(contract_tmp_path, output_token_budget=24)
+
+    result = middleware.wrap_tool_call(request, lambda request: original)
+
+    context = request.runtime.context
+    assert isinstance(result, ToolMessage)
+    assert context.tool_result_store.records
+    record = context.tool_result_store.records[-1]
+    assert record.tool_name == "long_tool"
+    assert record.tool_call_id == "call-1"
+    assert record.raw_ref is not None
+    assert record.raw_ref.startswith("artifact://thread-a/outputs/tool-results/")
+    assert record.compacted is True
+    assert "1 passed in 0.42s" in record.summary
+    assert raw_noise not in record.summary
+
+    workspace_item = context.workspace_state.intermediate_results[-1]
+    assert workspace_item.tool_result_id == record.result_id
+    assert workspace_item.raw_ref == record.raw_ref
+    assert "1 passed in 0.42s" in workspace_item.summary
+    assert raw_noise not in workspace_item.summary
+
+    workspace_blocks = context.workspace_state.to_context_blocks()
+    assert workspace_blocks
+    assert record.raw_ref in workspace_blocks[0].content
+    assert raw_noise not in workspace_blocks[0].content
+
+
+def test_tool_output_budget_publishes_tool_result_runtime_event(contract_tmp_path) -> None:
+    middleware = ToolOutputBudgetMiddleware()
+    output = "\n".join(
+        [
+            "============================= test session starts =============================",
+            *[f"tests/test_noise.py::test_{index} PASSED" for index in range(100)],
+            "100 passed in 12.34s",
+        ]
+    )
+    original = ToolMessage(
+        content=json.dumps(
+            {
+                "status": "completed",
+                "exit_code": 0,
+                "command": "pytest -q",
+                "output": output,
+            }
+        ),
+        tool_call_id="call-1",
+    )
+    request = _request(contract_tmp_path, output_token_budget=24)
+
+    middleware.wrap_tool_call(request, lambda request: original)
+
+    context = request.runtime.context
+    assert context.event_log.events
+    event = context.event_log.events[-1]
+    record = context.tool_result_store.records[-1]
+    assert event.sequence == 1
+    assert event.event_type == "tool_result"
+    assert event.tool_result_refs == [record.result_id]
+    assert event.payload_ref == record.raw_ref
+    assert event.workspace_refs == [record.workspace_ref]
+    assert "100 passed in 12.34s" in event.payload_summary
+
+
 def test_tool_output_budget_strips_ansi_and_collapses_progress_noise(contract_tmp_path) -> None:
     middleware = ToolOutputBudgetMiddleware()
     output = "\n".join(

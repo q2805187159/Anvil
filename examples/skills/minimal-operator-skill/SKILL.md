@@ -14,6 +14,6 @@ Summarize the current thread state and list the next operator action in plain la
 
 ## References
 
-- `docs/architecture/05-tool-registry-and-capabilities.md`
-- `docs/architecture/06-prompt-architecture.md`
-- `docs/architecture/extension-model.md`
+- `docs/guides/commands.md`
+- `docs/guides/extensions-and-capability-surfaces.md`
+- `docs/guides/plugins.md`

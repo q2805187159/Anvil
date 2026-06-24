@@ -5,6 +5,7 @@ import {
   BotIcon,
   CalendarClockIcon,
   DatabaseZapIcon,
+  KeyRoundIcon,
   Layers3Icon,
   PlugIcon,
   PuzzleIcon,
@@ -85,6 +86,8 @@ export function ConfigOverviewPanel({
   const health = useGatewayHealth();
   const overview = useConfigOverview();
   const metrics = overview.data;
+  const typedMetrics = metrics as (typeof metrics & { basics?: ConfigOverviewMetricView }) | undefined;
+  const basicMetric = typedMetrics?.basics ?? EMPTY_METRIC;
   const modelMetric = metrics?.models ?? EMPTY_METRIC;
   const toolMetric = metrics?.tools ?? EMPTY_METRIC;
   const skillMetric = metrics?.skills ?? EMPTY_METRIC;
@@ -106,6 +109,15 @@ export function ConfigOverviewPanel({
   const loadingMetric = overview.isLoading ? "..." : "0";
 
   const cards: ConfigCardProps[] = [
+    {
+      title: copy.overview.basics,
+      description: copy.overview.basicsDescription,
+      metric: metrics ? String(basicMetric.issue_count ?? 0) : loadingMetric,
+      meta: copy.basic.missingRequired,
+      openLabel: copy.overview.openSurface,
+      icon: <KeyRoundIcon className="size-4" />,
+      onOpen: () => onSelectSurface("basics"),
+    },
     {
       title: copy.overview.models,
       description: copy.overview.modelsDescription,

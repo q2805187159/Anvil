@@ -23,7 +23,7 @@ from app.contracts import (
     MemoryOnboardingRequest,
     MemoryOnboardingResponse,
     MemoryOverviewView,
-    MemoryProviderView,
+    MemoryEngineView,
     MemoryStoreView,
     PluginView,
     ReflectionJobRunView,
@@ -310,8 +310,8 @@ class EmbeddedClient:
     def list_memory_stores(self) -> list[MemoryStoreView]:
         return services.list_memory_stores(self.deps)
 
-    def list_memory_providers(self) -> list[MemoryProviderView]:
-        return services.list_memory_providers(self.deps)
+    def list_memory_engines(self) -> list[MemoryEngineView]:
+        return services.list_memory_engines(self.deps)
 
     def search_memory_archive(self, query: str, limit: int = 5) -> MemoryArchiveSearchResultView:
         from app.contracts import MemoryArchiveSearchRequest

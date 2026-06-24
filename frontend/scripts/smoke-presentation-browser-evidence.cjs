@@ -5,8 +5,12 @@ const FRONTEND_URL = (process.env.ANVIL_FRONTEND_URL || "http://127.0.0.1:13200"
 const CDP_URL = (process.env.BROWSER_CDP_URL || "").replace(/\/$/, "");
 const OUTPUT_DIR = path.resolve(process.env.ANVIL_SMOKE_OUTPUT_DIR || path.join("..", "_tmp_debug", "frontend-smoke"));
 
+function skipMessage(message) {
+  return `[skipped] presentation-browser-evidence-smoke: ${message}`;
+}
+
 function skip(message) {
-  console.log(`[skipped] presentation-browser-evidence-smoke: ${message}`);
+  console.log(skipMessage(message));
   process.exit(0);
 }
 
@@ -15,11 +19,13 @@ function fail(message) {
   process.exit(1);
 }
 
-if (!CDP_URL) {
-  skip("BROWSER_CDP_URL is not set; start Chrome/Edge with remote debugging to run this smoke.");
-}
+if (require.main === module) {
+  if (!CDP_URL) {
+    skip("BROWSER_CDP_URL is not set; start Chrome/Edge with remote debugging to run this smoke.");
+  }
 
-main().catch((error) => fail(error && error.stack ? error.stack : String(error)));
+  main().catch((error) => fail(error && error.stack ? error.stack : String(error)));
+}
 
 async function main() {
   const targetUrl = `${FRONTEND_URL}/smoke/presentation-browser-evidence`;
@@ -185,3 +191,7 @@ function cdpCall(webSocketDebuggerUrl, method, params) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+module.exports = {
+  skipMessage,
+};

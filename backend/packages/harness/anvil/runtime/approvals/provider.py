@@ -154,6 +154,16 @@ class BuiltinGuardrailProvider:
                     base_level = max(base_level, RiskLevel.HIGH, key=_risk_order)
                 if requested & {"read_file", "list_dir", "extract_document"}:
                     risk_factors.append("delegated_filesystem_access")
+        if effective_category == "skill_curator" or tool_name == "skill_manage":
+            action = str(args.get("action") or "").strip().lower()
+            if action not in _SKILL_CURATOR_READ_ONLY_ACTIONS:
+                base_level = max(base_level, RiskLevel.HIGH, key=_risk_order)
+                risk_factors.append("skill_curator_write")
+                if action:
+                    risk_factors.append(f"skill_curator_action:{action}")
+                file_path = args.get("file_path")
+                if isinstance(file_path, str) and file_path:
+                    target_paths.append(file_path)
         if target_hosts:
             base_level = max(base_level, RiskLevel.MEDIUM, key=_risk_order)
         if any(
@@ -165,7 +175,14 @@ class BuiltinGuardrailProvider:
             base_level = RiskLevel.HIGH
         if "shell_control_operator" in risk_factors and "sensitive_path" in risk_factors:
             base_level = RiskLevel.CRITICAL
-        execution_kind = "execute" if effective_category in {"execution", "process", "shell_execution"} else "write" if "write" in effective_category or effective_category == "filesystem" else "delegate" if effective_category in {"delegation", "subagent"} else "read"
+        if effective_category in {"execution", "process", "shell_execution"}:
+            execution_kind = "execute"
+        elif "skill_curator_write" in risk_factors or "write" in effective_category or effective_category == "filesystem":
+            execution_kind = "write"
+        elif effective_category in {"delegation", "subagent"}:
+            execution_kind = "delegate"
+        else:
+            execution_kind = "read"
         return ActionRiskAssessment(
             tool_name=tool_name,
             risk_level=base_level,
@@ -185,3 +202,11 @@ def _risk_order(level: RiskLevel) -> int:
         RiskLevel.CRITICAL: 4,
     }
     return ordering[level]
+
+
+_SKILL_CURATOR_READ_ONLY_ACTIONS = {
+    "report",
+    "quality_plan",
+    "merge_plan",
+    "procedures",
+}

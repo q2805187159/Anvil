@@ -63,6 +63,8 @@ def test_run_backend_tests_windows_shim_uses_stable_repo_local_tmp(monkeypatch) 
         assert str(module.BACKEND_TEST_TMP / module.BACKEND_TEST_SHIM_NAME) in env["PYTHONPATH"]
         assert command[:3] == [sys.executable, "-m", "pytest"]
         assert command[3:5] == ["-p", "no:cacheprovider"]
+        assert command[5:] == ["tests/test_tool_registry.py", "-q"]
+        assert "test_gateway_tools_and_plugins" not in " ".join(command)
         return 0
 
     monkeypatch.setattr(module.os, "name", "nt")
@@ -73,6 +75,74 @@ def test_run_backend_tests_windows_shim_uses_stable_repo_local_tmp(monkeypatch) 
 
     assert module.main(["tests/test_tool_registry.py", "-q"]) == 0
     assert module.BACKEND_TEST_SHIM == module.BACKEND_TEST_TMP / "pytest-shim"
+
+
+def test_run_backend_tests_windows_shim_preserves_explicit_k_expression(monkeypatch) -> None:
+    script_path = REPO_ROOT / "scripts" / "run-backend-tests.py"
+    spec = importlib.util.spec_from_file_location("run_backend_tests", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def fake_call(command, *, cwd, env):
+        assert cwd == module.BACKEND_ROOT
+        assert command[:3] == [sys.executable, "-m", "pytest"]
+        assert command[3:5] == ["-p", "no:cacheprovider"]
+        assert command[5:] == ["tests/test_gateway_tools_and_plugins.py", "-k", "skill_manage", "-q"]
+        return 0
+
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.delenv(module.BACKEND_TEST_TMP_ENV, raising=False)
+    monkeypatch.setattr(module.tempfile, "mkdtemp", lambda **_: pytest.fail("Windows shim must not use random mkdtemp"))
+    monkeypatch.setattr(module, "_assert_test_tmp_usable", lambda root: None)
+    monkeypatch.setattr(module.subprocess, "call", fake_call)
+
+    assert module.main(["tests/test_gateway_tools_and_plugins.py", "-k", "skill_manage", "-q"]) == 0
+
+
+def test_run_backend_tests_selects_stable_backend_shard(monkeypatch) -> None:
+    script_path = REPO_ROOT / "scripts" / "run-backend-tests.py"
+    spec = importlib.util.spec_from_file_location("run_backend_tests", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    test_files = [
+        module.BACKEND_ROOT / "tests" / "test_c.py",
+        module.BACKEND_ROOT / "tests" / "test_a.py",
+        module.BACKEND_ROOT / "tests" / "test_b.py",
+        module.BACKEND_ROOT / "tests" / "test_d.py",
+    ]
+
+    def fake_call(command, *, cwd, env):
+        assert cwd == module.BACKEND_ROOT
+        assert "--backend-shard-index" not in command
+        assert "--backend-shard-count" not in command
+        assert command[:3] == [sys.executable, "-m", "pytest"]
+        assert command[3:5] == ["-p", "no:cacheprovider"]
+        assert "tests/test_b.py" in command
+        assert "tests/test_d.py" in command
+        assert "tests/test_a.py" not in command
+        assert "tests/test_c.py" not in command
+        assert "-q" in command
+        return 0
+
+    monkeypatch.setattr(module, "_select_backend_test_tmp", lambda: module.BACKEND_TEST_TMP)
+    monkeypatch.setattr(module, "_discover_backend_test_files", lambda: test_files)
+    monkeypatch.setattr(module.subprocess, "call", fake_call)
+
+    assert module.main(["--backend-shard-index", "2", "--backend-shard-count", "2", "-q"]) == 0
+
+
+def test_run_backend_tests_rejects_invalid_shard_arguments(monkeypatch) -> None:
+    script_path = REPO_ROOT / "scripts" / "run-backend-tests.py"
+    spec = importlib.util.spec_from_file_location("run_backend_tests", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(module.subprocess, "call", lambda *_args, **_kwargs: pytest.fail("invalid shard must not run pytest"))
+
+    assert module.main(["--backend-shard-index", "3", "--backend-shard-count", "2", "-q"]) == 2
 
 
 def test_run_backend_tests_falls_back_when_repo_tmp_rejects_sqlite(monkeypatch, contract_tmp_path) -> None:

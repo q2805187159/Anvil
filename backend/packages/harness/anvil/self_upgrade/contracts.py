@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from anvil.memory_platform.contracts import utc_now
+from anvil.memory import utc_now
 
 SelfUpgradeHealthStatus = Literal["healthy", "watch", "needs_attention", "disabled", "unavailable"]
 SelfUpgradeBacklogSeverity = Literal["info", "watch", "warning", "critical"]

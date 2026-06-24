@@ -19,8 +19,8 @@ def test_embedded_client_matches_gateway_contracts(gateway_app_factory, contract
         CapabilityResourceView,
         ExtensionStatusView,
         MessageView,
+        MemoryEngineView,
         MemoryOverviewView,
-        MemoryProviderView,
         MemoryStoreView,
         EvaluationBatchReportView,
         EvaluationReportRequestView,
@@ -180,8 +180,8 @@ def test_embedded_client_matches_gateway_contracts(gateway_app_factory, contract
         stores = client.list_memory_stores()
         assert stores and isinstance(stores[0], MemoryStoreView)
 
-        providers = client.list_memory_providers()
-        assert providers and isinstance(providers[0], MemoryProviderView)
+        engines = client.list_memory_engines()
+        assert engines and isinstance(engines[0], MemoryEngineView)
 
         jobs = client.list_reflection_jobs()
         assert jobs and isinstance(jobs[0], ReflectionJobView)

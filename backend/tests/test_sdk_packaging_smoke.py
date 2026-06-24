@@ -13,6 +13,10 @@ def test_sdk_imports_from_installed_artifact(contract_tmp_path: Path) -> None:
     package_root = copy_backend_source_for_packaging(backend_root, contract_tmp_path)
     target = contract_tmp_path / "pkg"
     env = packaging_env(contract_tmp_path)
+    source_paths = {
+        str(backend_root.resolve()),
+        str((backend_root / "packages" / "harness").resolve()),
+    }
 
     install = subprocess.run(
         [
@@ -42,8 +46,10 @@ def test_sdk_imports_from_installed_artifact(contract_tmp_path: Path) -> None:
             sys.executable,
             "-c",
             (
-                "import sys; "
-                f"sys.path = [{str(target)!r}] + [p for p in sys.path if p and 'Anvil\\\\backend' not in p]; "
+                "import sys; from pathlib import Path; "
+                f"_sources = {source_paths!r}; "
+                f"sys.path = [{str(target)!r}] + "
+                "[p for p in sys.path if p and str(Path(p).resolve()) not in _sources]; "
                 "from app.sdk import EmbeddedClient; "
                 "print(EmbeddedClient.__name__)"
             ),

@@ -20,6 +20,7 @@ from .operator_factory import CORE_EXEMPT_TOOL_NAMES, OperatorToolFactory
 from .registry import ToolRegistry
 
 MENTION_PATTERN = re.compile(r"[@$]([A-Za-z0-9._-]+)")
+DEFAULT_SKILL_RETRIEVAL_TOP_K = 4
 
 
 @dataclass
@@ -95,6 +96,8 @@ class CapabilityAssemblyService:
         run_id: str | None = None,
         live_extensions: bool = True,
         resolved_route: ResolvedModelRoute | None = None,
+        salience_route=None,
+        use_request_context_for_skill_retrieval: bool = True,
     ) -> CapabilityAssemblyResult:
         timer = _AssemblyTimer()
         promotion_state = set(promoted_capabilities)
@@ -173,6 +176,33 @@ class CapabilityAssemblyService:
             )
         timer.mark("mention_resolution")
 
+        skill_retrieval_query = _skill_retrieval_query_from_salience(
+            request_context=request_context if use_request_context_for_skill_retrieval else None,
+            salience_route=salience_route,
+        )
+        skill_retrieval_plan = (
+            self.skills_service.retrieve(
+                config=config_result.effective_config,
+                fingerprint=config_result.fingerprint,
+                query=skill_retrieval_query,
+                top_k=DEFAULT_SKILL_RETRIEVAL_TOP_K,
+                discovery_result=skills_result,
+                salience_boost_terms=_skill_retrieval_salience_boost_terms(salience_route),
+                prefetch_terms=_skill_retrieval_prefetch_terms(salience_route),
+            )
+            if skills_result is not None
+            else None
+        )
+        if skills_result is not None:
+            selected_skill_ids = (
+                mention_resolution.mentioned_skill_ids
+                if mention_resolution.mentioned_skill_ids
+                else skill_retrieval_plan.selected_skill_ids if skill_retrieval_plan is not None else ()
+            )
+        else:
+            selected_skill_ids = ()
+        timer.mark("skill_retrieval")
+
         delegated_parent_visible_tool_names = parent_visible_tool_names
         preliminary_bundle = self.rebuild_bundle(
             registry=registry,
@@ -181,7 +211,7 @@ class CapabilityAssemblyService:
             promoted_capabilities=tuple(sorted(promotion_state)),
             parent_visible_tool_names=parent_visible_tool_names,
             skills_result=skills_result,
-            enabled_skill_ids=skills_result.enabled_ids if skills_result is not None else (),
+            enabled_skill_ids=selected_skill_ids,
             effective_mcp_servers=extensions_result.effective_mcp_servers if extensions_result is not None else (),
             effective_extension_sources=tuple(materialization.server_id for materialization in extensions_result.materializations) if extensions_result is not None else (),
             effective_plugin_ids=extensions_result.effective_plugin_ids if extensions_result is not None else (),
@@ -232,7 +262,7 @@ class CapabilityAssemblyService:
             promoted_capabilities=tuple(sorted(promotion_state)),
             parent_visible_tool_names=parent_visible_tool_names,
             skills_result=skills_result,
-            enabled_skill_ids=skills_result.enabled_ids if skills_result is not None else (),
+            enabled_skill_ids=selected_skill_ids,
             effective_mcp_servers=extensions_result.effective_mcp_servers if extensions_result is not None else (),
             effective_extension_sources=tuple(materialization.server_id for materialization in extensions_result.materializations) if extensions_result is not None else (),
             effective_plugin_ids=extensions_result.effective_plugin_ids if extensions_result is not None else (),
@@ -241,18 +271,14 @@ class CapabilityAssemblyService:
 
         prompt_safe_summaries = list(bundle.prompt_safe_summaries)
         if skills_result is not None:
-            visible_skill_ids = (
-                mention_resolution.mentioned_skill_ids
-                if mention_resolution.mentioned_skill_ids
-                else skills_result.enabled_ids
-            )
+            visible_skill_ids = selected_skill_ids
+            visible_skill_summaries = [
+                f"${summary.skill_id}: {summary.summary}"
+                for summary in skills_result.enabled_summaries
+                if summary.skill_id in visible_skill_ids
+            ]
+            prompt_safe_summaries.extend(visible_skill_summaries)
             if mention_resolution.mentioned_skill_ids:
-                visible_skill_summaries = [
-                    f"${summary.skill_id}: {summary.summary}"
-                    for summary in skills_result.enabled_summaries
-                    if summary.skill_id in mention_resolution.mentioned_skill_ids
-                ]
-                prompt_safe_summaries.extend(visible_skill_summaries)
                 prompt_safe_summaries.extend(
                     self.skills_service.mentioned_skill_content_summaries(
                         config=config_result.effective_config,
@@ -277,7 +303,13 @@ class CapabilityAssemblyService:
                 "enabled_skill_ids": tuple(visible_skill_ids) if skills_result is not None else (),
                 "mentioned_skill_ids": mention_resolution.mentioned_skill_ids,
                 "prompt_safe_summaries": tuple(prompt_safe_summaries),
-                "capability_context": bundle.capability_context.model_copy(update={"active_promotions": tuple(sorted(promotion_state))}) if bundle.capability_context is not None else None,
+                "capability_context": bundle.capability_context.model_copy(
+                    update={
+                        "active_promotions": tuple(sorted(promotion_state)),
+                        "enabled_skill_ids": tuple(visible_skill_ids) if skills_result is not None else (),
+                        "prompt_safe_summaries": tuple(prompt_safe_summaries),
+                    }
+                ) if bundle.capability_context is not None else None,
                 "assembly_diagnostics": bundle.assembly_diagnostics.model_copy(
                     update={
                         "assembly_stage_durations_ms": stage_durations,
@@ -327,6 +359,82 @@ class CapabilityAssemblyService:
                             skills_discovery_diagnostics.slowest_stage_duration_ms
                             if skills_discovery_diagnostics is not None
                             else None
+                        ),
+                        "skill_retrieval_query": (
+                            skill_retrieval_plan.query
+                            if skill_retrieval_plan is not None
+                            else ""
+                        ),
+                        "skill_retrieval_top_k": (
+                            skill_retrieval_plan.top_k
+                            if skill_retrieval_plan is not None
+                            else 0
+                        ),
+                        "skill_retrieval_selected_ids": (
+                            tuple(visible_skill_ids)
+                            if skills_result is not None
+                            else ()
+                        ),
+                        "skill_retrieval_tiers_used": (
+                            skill_retrieval_plan.tiers_used
+                            if skill_retrieval_plan is not None
+                            else ()
+                        ),
+                        "skill_retrieval_candidate_count": (
+                            int(skill_retrieval_plan.diagnostics.get("candidate_count") or 0)
+                            if skill_retrieval_plan is not None
+                            else 0
+                        ),
+                        "skill_retrieval_loaded_full_content": (
+                            bool(skill_retrieval_plan.diagnostics.get("loaded_full_skill_content"))
+                            if skill_retrieval_plan is not None
+                            else None
+                        ),
+                        "skill_retrieval_embedding_mode": (
+                            str(skill_retrieval_plan.diagnostics.get("embedding_mode"))
+                            if skill_retrieval_plan is not None
+                            and skill_retrieval_plan.diagnostics.get("embedding_mode") is not None
+                            else None
+                        ),
+                        "skill_retrieval_expanded_query_terms": (
+                            tuple(
+                                str(term)
+                                for term in skill_retrieval_plan.diagnostics.get("expanded_query_terms", ())
+                            )
+                            if skill_retrieval_plan is not None
+                            else ()
+                        ),
+                        "skill_retrieval_prefetch_ids": (
+                            tuple(
+                                str(skill_id)
+                                for skill_id in skill_retrieval_plan.diagnostics.get("prefetch_skill_ids", ())
+                            )
+                            if skill_retrieval_plan is not None
+                            else ()
+                        ),
+                        "skill_retrieval_l4_rerank_triggered": (
+                            bool(skill_retrieval_plan.diagnostics.get("l4_rerank_triggered"))
+                            if skill_retrieval_plan is not None
+                            else False
+                        ),
+                        "skill_retrieval_l5_hyde_triggered": (
+                            bool(skill_retrieval_plan.diagnostics.get("l5_hyde_triggered"))
+                            if skill_retrieval_plan is not None
+                            else False
+                        ),
+                        "skill_retrieval_l6_prefetch_triggered": (
+                            bool(skill_retrieval_plan.diagnostics.get("l6_prefetch_triggered"))
+                            if skill_retrieval_plan is not None
+                            else False
+                        ),
+                        "skill_retrieval_salience_route_id": (
+                            str(getattr(salience_route, "route_id", "") or "") or None
+                        ),
+                        "skill_retrieval_goal_stack_ref": (
+                            str(getattr(salience_route, "goal_stack_ref", "") or "") or None
+                        ),
+                        "skill_retrieval_active_goal_id": (
+                            str(getattr(salience_route, "active_goal_id", "") or "") or None
                         ),
                     }
                 ),
@@ -417,6 +525,47 @@ class CapabilityAssemblyService:
             promoted_tool_names=promoted_tool_names,
             mentioned_skill_ids=mentioned_skill_ids,
         )
+
+
+def _skill_retrieval_query_from_salience(*, request_context: str | None, salience_route) -> str | None:
+    request_text = str(request_context or "").strip()
+    route_query = str(getattr(salience_route, "memory_query", "") or "").strip()
+    if request_text and route_query:
+        return f"{request_text}\n{route_query}"
+    return route_query or request_text or None
+
+
+def _skill_retrieval_salience_boost_terms(salience_route) -> dict[str, float] | None:
+    if salience_route is None:
+        return None
+    boost_terms = getattr(salience_route, "boost_terms", None)
+    if not isinstance(boost_terms, dict):
+        return None
+    normalized: dict[str, float] = {}
+    for term, weight in boost_terms.items():
+        text = str(term or "").strip()
+        if not text:
+            continue
+        try:
+            numeric = float(weight)
+        except (TypeError, ValueError):
+            continue
+        if numeric <= 0:
+            continue
+        normalized[text] = max(normalized.get(text, 0.0), numeric)
+    return normalized or None
+
+
+def _skill_retrieval_prefetch_terms(salience_route) -> tuple[str, ...]:
+    if salience_route is None:
+        return ()
+    terms: list[str] = []
+    for attribute in ("next_action_terms", "blocker_terms"):
+        for term in getattr(salience_route, attribute, ()) or ():
+            text = str(term or "").strip()
+            if text and text not in terms:
+                terms.append(text)
+    return tuple(terms[:16])
 
 
 def _slowest_stage(stage_durations: dict[str, int]) -> tuple[str | None, int | None]:

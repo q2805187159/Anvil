@@ -1,0 +1,26 @@
+{
+  "author": "Claude",
+  "author_icon": "https://static.pc.yyb.qq.com/wupload2skill-author-icons/1774636487474_Claude.png",
+  "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.",
+  "detail_describe": "根据主题创建设计哲学和美学方向\n将哲学表达为原创海报或封面设计\n输出PNG/PDF格式的视觉稿成品",
+  "display_description": "帮你做更有设计感的海报和视觉稿",
+  "display_name": "canvas design",
+  "download_count": 20989,
+  "download_url": "https://static.pc.yyb.qq.com/wupload2skill-packages/1774636482242_canvas-design.zip",
+  "icon": "https://static.marvis.qq.com/wupload/FFiWj7yp.webp",
+  "id": 47,
+  "is_downloaded": false,
+  "last_modified_time": "2026-05-25 11:53:52",
+  "md5": "72ae5defe90a90e4d6eff4e33df178de",
+  "name": "canvas-design",
+  "scope": [
+    "main"
+  ],
+  "type": "办公学习",
+  "use_cases": [
+    "帮我设计一张爵士音乐节海报，音乐节名字叫“秋夜叙事”，时间是今年10月的一个周末。",
+    "帮我做一个独立书店的品牌视觉概念板，书店叫“二楼的猫”，位于老居民区。风格要温暖、安静、有一点点旧。",
+    "我需要一张抽象艺术海报，主题是“记忆的褶皱”。限制色彩：仅限灰白、深蓝和一点砖红。全程不要出现真实人物的照片，只使用几何图形、纹理和极少的文字作为视觉元素。"
+  ],
+  "version": "1.0.7"
+}

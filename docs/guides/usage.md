@@ -21,6 +21,7 @@ Common routes:
 
 - `/` opens the operator workspace.
 - `/threads/<threadId>` opens a specific thread.
+- `?ops=1&surface=basics` opens Basic Configuration for required Git setup.
 - `?ops=1&surface=tools` opens the Tools surface.
 - `?ops=1&surface=skills` opens Skills governance.
 - `?ops=1&surface=mcp` opens the MCP console.
@@ -75,11 +76,13 @@ with EmbeddedClient() as client:
 
 ## Memory Workflow
 
-Anvil separates memory into three surfaces:
+Anvil uses HCMS as the memory control plane:
 
-- session archive: searchable transcript and summary history
-- user profile: durable user preferences and corrections
-- runtime memory: project, workflow, environment, and workspace facts
+- observation capture and adaptive debounce queue for new evidence
+- workspace and user layers for structured Memory records
+- hybrid recall across BM25, vector, graph, and temporal-causal streams
+- version history, confidence, evidence, and causal explanation surfaces
+- required Git token configuration for HCMS Git-like version metadata
 
 Useful commands:
 
@@ -89,13 +92,26 @@ anvil memory stores
 anvil memory search "deployment config"
 ```
 
-The frontend Memory Workspace exposes the same underlying stores and review
-queues.
+The frontend Memory Workspace exposes the same underlying HCMS stores,
+quality signals, lifecycle controls, version history, evidence, and causal
+surfaces.
+
+The HCMS Console includes a Memory Atlas for operator inspection. It clusters
+visible memories by category, renders a relation-weighted graph, exposes
+category and lifecycle distribution filters, and adds an evidence spectrum plus
+an entity lens for cross-memory browsing. The selected memory side panel keeps
+version history, diff, evidence, confidence, salience, and relation
+neighborhood visible without leaving the Atlas. The frontend only visualizes
+gateway data; HCMS ranking, lifecycle policy, and relation truth stay in the
+harness and gateway contracts.
+
+For gateway route shapes and runtime tool surfaces, see
+[HCMS Memory API](./hcms-memory-api.md).
 
 ## Skills and Extensions
 
-Public releases do not bundle unreviewed local skill packs in `skills/`.
-Install local or shared skills into Anvil Home instead:
+The repository bundles starter skills in the root `skills/` directory. Install
+user-local or shared team skills into Anvil Home instead:
 
 ```text
 ~/.anvil/skills

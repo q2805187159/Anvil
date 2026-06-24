@@ -255,6 +255,21 @@ export type CapabilityAssemblyDiagnosticsView = {
   skills_discovery_stage_durations_ms: Record<string, number>;
   slowest_skills_discovery_stage?: string | null;
   slowest_skills_discovery_stage_duration_ms?: number | null;
+  skill_retrieval_query?: string;
+  skill_retrieval_top_k?: number;
+  skill_retrieval_selected_ids: string[];
+  skill_retrieval_tiers_used: string[];
+  skill_retrieval_candidate_count?: number;
+  skill_retrieval_loaded_full_content?: boolean | null;
+  skill_retrieval_embedding_mode?: string | null;
+  skill_retrieval_expanded_query_terms: string[];
+  skill_retrieval_prefetch_ids: string[];
+  skill_retrieval_l4_rerank_triggered?: boolean;
+  skill_retrieval_l5_hyde_triggered?: boolean;
+  skill_retrieval_l6_prefetch_triggered?: boolean;
+  skill_retrieval_salience_route_id?: string | null;
+  skill_retrieval_goal_stack_ref?: string | null;
+  skill_retrieval_active_goal_id?: string | null;
   visible_by_source_kind: Record<string, number>;
   deferred_by_source_kind: Record<string, number>;
   visible_by_group: Record<string, number>;
@@ -264,13 +279,21 @@ export type CapabilityAssemblyDiagnosticsView = {
 export type MemoryInjectionDiagnosticsView = {
   source?: string;
   status?: string;
+  injection_mode?: string;
+  requested_injection_mode?: string | null;
+  legacy_prompt_append_migrated?: boolean;
+  legacy_prompt_append_suppressed?: boolean;
   snapshot_id?: string | null;
   query_tokens?: number;
-  curated_match_count?: number;
+  memory_match_count?: number;
   archive_hit_count?: number;
   evidence_count?: number;
-  provider_note_count?: number;
-  summary_present?: boolean;
+  engine_note_count?: number;
+  context_v2_block_count?: number;
+  context_v2_candidate_block_count?: number;
+  context_v2_selected_memory_count?: number;
+  context_v2_memory_block_ids: string[];
+  hcms_v2_memory_block_ids: string[];
   rendered_tokens_before_truncation?: number;
   rendered_tokens?: number;
   token_budget?: number | null;
@@ -278,6 +301,28 @@ export type MemoryInjectionDiagnosticsView = {
   error_type?: string | null;
   store_counts: Record<string, number>;
   source_kind_counts: Record<string, number>;
+};
+
+export type RuntimeContextV2DiagnosticsView = {
+  actual_prompt_mode?: string | null;
+  trace_id?: string | null;
+  prompt_hash?: string | null;
+  actual_system_prompt_hash?: string | null;
+  selected_capabilities: string[];
+  selected_tools: string[];
+  selected_skills: string[];
+  selected_mcp_tools: string[];
+  selected_memory: string[];
+  selected_tool_result_refs: string[];
+  selected_conflict_warnings: string[];
+  block_counts: Record<string, number>;
+  dropped_block_count?: number;
+  compressed_block_count?: number;
+  deferred_block_count?: number;
+  runtime_event_counts: Record<string, number>;
+  replay_phase_coverage: Record<string, boolean>;
+  trace_replay_ready?: boolean | null;
+  conflict_warning_count?: number;
 };
 
 export type RuntimePhaseTimingMarkView = {
@@ -357,6 +402,7 @@ export type ThreadStateView = {
   context_cache_diagnostics?: ContextCacheDiagnosticsView | null;
   capability_assembly_diagnostics?: CapabilityAssemblyDiagnosticsView | null;
   memory_injection_diagnostics?: MemoryInjectionDiagnosticsView | null;
+  runtime_context_v2_diagnostics?: RuntimeContextV2DiagnosticsView | null;
   compaction_diagnostics?: CompactionDiagnosticsView | null;
   runtime_phase_timings?: RuntimePhaseTimingsView | null;
   last_message_interrupted?: boolean;
@@ -896,6 +942,7 @@ export type EvaluationReportRuntimeSectionView = {
   runtime_phase_diagnostics: Record<string, unknown>;
   runtime_assembly_snapshot: Record<string, unknown>;
   runtime_assembly_diff: Record<string, unknown>;
+  context_v2_evaluation: Record<string, unknown>;
   context_window_usage: Record<string, unknown>;
   token_usage: Record<string, unknown>;
   model_fallback_history: Record<string, unknown>[];
@@ -1345,6 +1392,7 @@ export type ConfigOverviewMetricView = {
 export type ConfigOverviewView = {
   status?: string;
   config_fingerprint: string;
+  basics?: ConfigOverviewMetricView;
   models?: ConfigOverviewMetricView;
   tools?: ConfigOverviewMetricView;
   skills?: ConfigOverviewMetricView;
@@ -1352,6 +1400,61 @@ export type ConfigOverviewView = {
   mcp?: ConfigOverviewMetricView;
   plugins?: ConfigOverviewMetricView;
   scheduled?: ConfigOverviewMetricView;
+};
+
+export type BasicConfigItemView = {
+  item_id: string;
+  label: string;
+  description?: string;
+  category: "required" | "extension";
+  required?: boolean;
+  configured?: boolean;
+  testable?: boolean;
+  token_env?: string | null;
+  value?: string | null;
+  secret?: boolean;
+  status?: string;
+  message?: string | null;
+};
+
+export type BasicConfigOverviewView = {
+  config_path: string;
+  dotenv_path: string;
+  config_fingerprint: string;
+  required_count?: number;
+  configured_required_count?: number;
+  missing_required_count?: number;
+  required_items: BasicConfigItemView[];
+  extension_items: BasicConfigItemView[];
+};
+
+export type BasicConfigUpdateRequest = {
+  git_token_env?: string | null;
+  git_token?: string | null;
+  git_provider?: string | null;
+  git_user_name?: string | null;
+  git_user_email?: string | null;
+  git_remote_url?: string | null;
+};
+
+export type BasicConfigUpdateView = {
+  config_path: string;
+  dotenv_path?: string | null;
+  config_fingerprint: string;
+  basics: BasicConfigOverviewView;
+};
+
+export type BasicConfigTestRequest = {
+  item_id: string;
+};
+
+export type BasicConfigTestView = {
+  item_id: string;
+  ok: boolean;
+  status: string;
+  message: string;
+  checked_at: string;
+  config_fingerprint: string;
 };
 
 export type SkillValidationIssueView = {
@@ -1601,11 +1704,12 @@ export type MemoryEntryUpdateRequest = {
   priority?: number | null;
   confidence?: number | null;
   salience?: number | null;
+  evidence_refs?: string[];
   status?: string | null;
 };
 
-export type MemoryProviderView = {
-  provider_id: string;
+export type MemoryEngineView = {
+  engine_id: string;
   display_name: string;
   kind?: string;
   origin?: string;
@@ -1626,8 +1730,8 @@ export type MemoryProviderView = {
   last_sync_at?: string | null;
 };
 
-export type MemoryProviderTestResponse = {
-  provider_id: string;
+export type MemoryEngineTestResponse = {
+  engine_id: string;
   ok: boolean;
   health?: string;
   diagnostics: string[];
@@ -1657,7 +1761,7 @@ export type MemoryArchiveSearchHitView = {
 export type MemoryArchiveSearchResultView = {
   query: string;
   hits: MemoryArchiveSearchHitView[];
-  provider_notes: string[];
+  engine_notes: string[];
 };
 
 export type PromptSnapshotMetadataView = {
@@ -1723,14 +1827,14 @@ export type SessionSearchResultView = {
   thread_id?: string | null;
   scope: SessionSearchScope;
   groups: SessionSearchThreadGroupView[];
-  provider_notes: string[];
+  engine_notes: string[];
   current_thread_snapshot?: PromptSnapshotMetadataView | null;
 };
 
 export type MemoryOverviewView = {
-  active_provider_id?: string | null;
+  active_engine_id?: string | null;
   runtime_mode?: string;
-  legacy_capture_enabled?: boolean;
+  capture_status?: string;
   migration_status: Record<string, unknown>;
   store_count: number;
   archive_turn_count: number;
@@ -1751,13 +1855,183 @@ export type MemoryTraceView = {
   query?: string | null;
   trace_kind: string;
   target_id?: string | null;
-  provider_notes: string[];
+  engine_notes: string[];
   evidence: RecallEvidenceView[];
   created_at: string;
 };
 
 export type MemoryTraceResponse = {
   items: MemoryTraceView[];
+};
+
+export type HCMSQueryRequest = {
+  query: string;
+  limit?: number;
+};
+
+export type HCMSMetricsView = {
+  llm_calls_avoided?: number;
+  deterministic_updates?: number;
+  recall_count?: number;
+  last_latency_ms?: number;
+  recall_hit_rate?: number;
+};
+
+export type HCMSEvidenceView = {
+  evidence_id: string;
+  type: string;
+  content: string;
+  weight?: number;
+  timestamp: string;
+  source_id: string;
+  metadata: Record<string, unknown>;
+};
+
+export type HCMSMemoryView = {
+  memory_id: string;
+  version?: number;
+  parent_id?: string | null;
+  content: string;
+  summary?: string;
+  category: string;
+  confidence?: number;
+  salience?: number;
+  state?: string;
+  source_thread_id?: string | null;
+  source_type?: string;
+  tags: string[];
+  entities: string[];
+  concepts: string[];
+  evidence: HCMSEvidenceView[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  accessed_at: string;
+};
+
+export type HCMSMemoryResponse = {
+  memory: HCMSMemoryView;
+  engine_notes: string[];
+};
+
+export type HCMSMemoryListResponse = {
+  items: HCMSMemoryView[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  query?: string | null;
+  state?: string;
+  category?: string | null;
+  layer_id?: string;
+  engine_notes: string[];
+};
+
+export type HCMSMemoryDeleteResponse = {
+  memory_id: string;
+  status?: string;
+  deleted?: boolean;
+  engine_notes: string[];
+};
+
+export type HCMSRelationView = {
+  relation_id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation_type: string;
+  weight?: number;
+  confidence?: number;
+  bidirectional?: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  source_memory?: HCMSMemoryView | null;
+  target_memory?: HCMSMemoryView | null;
+};
+
+export type HCMSMemoryRelationsResponse = {
+  memory_id: string;
+  relations: HCMSRelationView[];
+  engine_notes: string[];
+};
+
+export type HCMSRecallItemView = {
+  memory_id: string;
+  score?: number;
+  raw_scores: Record<string, number>;
+  ranks: Record<string, number>;
+  explanation?: string;
+  memory?: HCMSMemoryView | null;
+};
+
+export type HCMSRecallResponse = {
+  query: string;
+  items: HCMSRecallItemView[];
+  metrics?: HCMSMetricsView;
+  engine_notes: string[];
+};
+
+export type HCMSCausalNodeView = {
+  memory_id: string;
+  event_type?: string;
+  timestamp: string;
+  confidence?: number;
+};
+
+export type HCMSCausalEdgeView = {
+  edge_id: string;
+  source_event: string;
+  target_event: string;
+  causal_type: string;
+  strength?: number;
+  evidence: string[];
+  timestamp: string;
+  metadata: Record<string, unknown>;
+};
+
+export type HCMSWhyPathView = {
+  nodes: HCMSCausalNodeView[];
+  edges: HCMSCausalEdgeView[];
+  total_strength?: number;
+  confidence?: number;
+  explanation_kind?: string;
+  degradation_reason?: string | null;
+  evidence_summary: string[];
+};
+
+export type HCMSWhyResponse = {
+  query: string;
+  paths: HCMSWhyPathView[];
+  engine_notes: string[];
+};
+
+export type HCMSMemoryVersionView = {
+  version_id: string;
+  memory_id: string;
+  version: number;
+  parent_id?: string | null;
+  content: string;
+  summary?: string;
+  diff?: string;
+  reason?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type HCMSMemoryHistoryResponse = {
+  memory_id: string;
+  versions: HCMSMemoryVersionView[];
+  engine_notes: string[];
+};
+
+export type HCMSMemoryDiffResponse = {
+  memory_id: string;
+  from_version?: number | null;
+  to_version?: number | null;
+  diff?: string;
+  confidence_delta?: number;
+  evidence_added: string[];
+  evidence_removed: string[];
+  engine_notes: string[];
 };
 
 export type MemoryRecallBenchmarkCaseView = {
@@ -1947,38 +2221,16 @@ export type MemoryHealthResponse = {
   status?: string;
   quality_score?: number;
   archive_turn_count?: number;
-  pending_review_count?: number;
+  observation_queue_count?: number;
   conflict_count?: number;
   stale_count?: number;
-  provider_count?: number;
-  provider_health: Record<string, string>;
+  engine_count?: number;
+  engine_health: Record<string, string>;
   stores: MemoryStoreHealthView[];
   issues: MemoryQualityIssueView[];
   recommendations: string[];
+  diagnostics: string[];
   generated_at: string;
-};
-
-export type MemoryReviewItemView = {
-  review_id: string;
-  layer_id: string;
-  store_id: string;
-  action: string;
-  content: string;
-  category: string;
-  priority: number;
-  confidence: number;
-  salience: number;
-  evidence_refs: string[];
-  supersedes: string[];
-  conflicts_with: string[];
-  rationale?: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type MemoryReviewResponse = {
-  items: MemoryReviewItemView[];
 };
 
 export type MemoryGovernanceActionRequest = {
@@ -1995,7 +2247,7 @@ export type MemoryGovernanceActionResponse = {
   status?: string;
   message?: string;
   entry?: MemoryEntryView | null;
-  review_item?: MemoryReviewItemView | null;
+  quality_issue?: MemoryQualityIssueView | null;
   before_retention?: MemoryRetentionEntryView | null;
   after_retention?: MemoryRetentionEntryView | null;
 };
@@ -2034,92 +2286,6 @@ export type MemoryGovernanceBatchResponse = {
   items: MemoryGovernancePlanItemView[];
   results: MemoryGovernanceActionResponse[];
   errors: string[];
-};
-
-export type ProfileFacetView = {
-  facet_id: string;
-  source_memory_id: string;
-  entry_id: string;
-  store_id?: string;
-  class_id: string;
-  key: string;
-  value: string;
-  source_category: string;
-  evidence_refs: string[];
-  confidence?: number;
-  salience?: number;
-  priority?: number;
-  stability_score?: number;
-  state: string;
-  user_state: string;
-  prompt_visible?: boolean;
-  source_polluted?: boolean;
-  pollution_reasons: string[];
-  reason?: string;
-  last_seen_at?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type ProfileFacetPolicyView = {
-  active_threshold?: number;
-  provisional_threshold?: number;
-  candidate_threshold?: number;
-  require_review_classes: string[];
-  class_budgets: Record<string, number>;
-  default_class_budget?: number;
-  max_facets?: number;
-  pollution_requires_review?: boolean;
-};
-
-export type ProfileFacetAuditEntryView = {
-  audit_id: string;
-  action: string;
-  facet_id: string;
-  source_memory_id?: string | null;
-  before_state?: string | null;
-  after_state?: string | null;
-  before_user_state?: string | null;
-  after_user_state?: string | null;
-  reason?: string | null;
-  source?: string;
-  created_at: string;
-};
-
-export type ProfileFacetListResponse = {
-  policy?: ProfileFacetPolicyView;
-  items: ProfileFacetView[];
-};
-
-export type ProfileFacetGovernanceRequest = {
-  action: string;
-  reason?: string | null;
-  source?: string;
-};
-
-export type ProfileFacetGovernanceResponse = {
-  action: string;
-  facet: ProfileFacetView;
-  status?: string;
-  message?: string;
-  audit_entry?: ProfileFacetAuditEntryView | null;
-};
-
-export type ProfileFacetRebuildRequest = {
-  source?: string;
-};
-
-export type ProfileFacetRebuildResponse = {
-  status?: string;
-  source?: string;
-  facet_count?: number;
-  updated_count?: number;
-  facets: ProfileFacetView[];
-  audit_entry?: ProfileFacetAuditEntryView | null;
-};
-
-export type ProfileFacetAuditResponse = {
-  items: ProfileFacetAuditEntryView[];
 };
 
 export type MemoryMaintenanceRequest = {
@@ -2215,7 +2381,7 @@ export type MemoryOnboardingResponse = {
   layer_id?: string;
   category?: string;
   files: MemoryOnboardingFileView[];
-  review_ids: string[];
+  quality_issue_ids: string[];
   written_memory_ids: string[];
   stable_snapshot_refresh_recommended?: boolean;
   created_at: string;
@@ -2294,56 +2460,41 @@ export type SelfUpgradeHealthResponse = {
 
 export type MemoryFlushResponse = {
   thread_id?: string | null;
-  candidates_seen?: number;
+  observations_processed?: number;
   entries_written?: number;
-  review_items_created?: number;
+  quality_issues_created?: number;
   entries_skipped?: number;
   facts_removed?: number;
   errors: string[];
   written_memory_ids: string[];
-  review_ids: string[];
+  quality_issue_ids: string[];
   candidate_audit: MemoryCandidateAuditEntryView[];
 };
 
-export type MemoryReviewDecisionRequest = {
-  reason?: string | null;
-};
-
-export type MemoryReviewBatchRequest = {
-  approve?: string[];
-  reject?: string[];
-};
-
-export type MemoryReviewBatchResponse = {
-  approved: string[];
-  rejected: string[];
-  errors: string[];
-};
-
 export type MemoryAdminExportView = {
-  stores: Record<string, unknown>;
-  review_queue: Record<string, unknown>[];
-  providers: Record<string, unknown>[];
+  hcms: Record<string, unknown>;
+  quality_issues: Record<string, unknown>[];
   archive_turn_count?: number;
 };
 
 export type MemoryAdminImportRequest = {
-  stores?: Record<string, unknown>;
-  review_queue?: Record<string, unknown>[];
+  hcms?: Record<string, unknown>;
+  quality_issues?: Record<string, unknown>[];
 };
 
 export type MemoryAdminImportResponse = {
-  entries_imported?: number;
-  review_items_created?: number;
+  memories_imported?: number;
+  quality_issues_imported?: number;
+  status?: string;
 };
 
 export type MemoryAdminAuditView = {
   snapshot: Record<string, unknown>;
-  pending_review_count?: number;
+  observation_queue_count?: number;
   conflict_count?: number;
   staleness_count?: number;
   health: Record<string, unknown>;
-  providers: Record<string, unknown>[];
+  engines: Record<string, unknown>[];
   candidate_audit: MemoryCandidateAuditEntryView[];
   pollution_markers: MemoryPollutionMarkerView[];
   recall_benchmark_suites: MemoryRecallBenchmarkSuiteView[];
@@ -2354,8 +2505,8 @@ export type MemoryConflictResolveRequest = {
   action?: string;
 };
 
-export type MemoryProviderAdminResponse = {
-  items: MemoryProviderView[];
+export type MemoryEngineAdminResponse = {
+  items: MemoryEngineView[];
 };
 
 export type ReflectionJobAdminResponse = {
@@ -2946,8 +3097,6 @@ export type PluginView = {
   tool_names: string[];
   resources: CapabilityResourceView[];
   prompts: CapabilityPromptView[];
-  memory_providers: Record<string, unknown>[];
-  memory_provider_count?: number;
   catalog_metadata: Record<string, unknown>;
   discovery_source?: string;
 };
@@ -2975,11 +3124,9 @@ export type PluginCatalogEntryView = {
   mcp_server_count?: number;
   resource_count?: number;
   prompt_count?: number;
-  memory_provider_count?: number;
   skill_roots: string[];
   tool_names: string[];
   mcp_servers: string[];
-  memory_providers: string[];
   permissions: string[];
   catalog_metadata: Record<string, unknown>;
   discovery_source?: string;

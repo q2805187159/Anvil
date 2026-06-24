@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from anvil.config import ModelConfig, ProviderKind
 from anvil.config.env_refs import env_ref_name, is_env_ref
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 from .provider_adapters import anthropic_compatible_overrides
 

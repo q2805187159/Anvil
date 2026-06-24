@@ -46,8 +46,8 @@ def test_gateway_exposes_semantic_memory_layers_and_session_search(gateway_app_f
             "/memory/session-search",
             json={"query": "Northstar", "thread_id": "thread-a", "limit": 5},
         )
-        legacy_user_entries = client.get("/memory/stores/user_profile/entries")
-        legacy_workspace_entries = client.get("/memory/stores/runtime_memory/entries")
+        user_entries = client.get("/memory/stores/hcms_user/entries")
+        workspace_entries = client.get("/memory/stores/hcms_workspace/entries")
 
     assert created_user.status_code == 200
     assert created_workspace.status_code == 200
@@ -61,7 +61,11 @@ def test_gateway_exposes_semantic_memory_layers_and_session_search(gateway_app_f
     assert session_search.status_code == 200
     assert session_search.json()["scope"] == "exclude_current"
     assert [item["thread_id"] for item in session_search.json()["groups"]] == ["thread-b"]
-    assert legacy_user_entries.status_code == 200
-    assert any(item["content"] == "User prefers terse updates." for item in legacy_user_entries.json())
-    assert legacy_workspace_entries.status_code == 200
-    assert any(item["content"] == "Northstar is the workspace codename." for item in legacy_workspace_entries.json())
+    assert user_entries.status_code == 200
+    user_manual_entry = next(item for item in user_entries.json() if item["entry_id"] == created_user.json()["entry_id"])
+    assert user_manual_entry["content"] == "User prefers terse updates."
+    assert "hcms_schema: compiled_memory.v1" not in user_manual_entry["content"]
+    assert workspace_entries.status_code == 200
+    workspace_manual_entry = next(item for item in workspace_entries.json() if item["entry_id"] == created_workspace.json()["entry_id"])
+    assert workspace_manual_entry["content"] == "Northstar is the workspace codename."
+    assert "hcms_schema: compiled_memory.v1" not in workspace_manual_entry["content"]

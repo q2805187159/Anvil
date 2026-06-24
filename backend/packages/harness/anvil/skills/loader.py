@@ -818,11 +818,11 @@ def _normalize_readiness(
 def _metadata_skill_hints(value: object) -> tuple[list[str], list[str]]:
     if not isinstance(value, dict):
         return [], []
-    hermes = value.get("hermes")
-    if not isinstance(hermes, dict):
+    routing = value.get("anvil") or value.get("routing")
+    if not isinstance(routing, dict):
         return [], []
-    tags = _plain_string_items(hermes.get("tags"))
-    related = _plain_string_items(hermes.get("related_skills"))
+    tags = _plain_string_items(routing.get("tags"))
+    related = _plain_string_items(routing.get("related_skills"))
     return tags, related
 
 

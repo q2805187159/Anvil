@@ -36,7 +36,8 @@ _KNOWN_EFFECTIVE_KEYS = {
     "subsystem_models",
     "extensions",
     "memory",
-    "memory_platform",
+    "hcms",
+    "git",
     "skills_config",
     "subagents",
     "guardrails",
@@ -146,6 +147,22 @@ class ConfigService:
         )
 
     def _normalize_legacy_effective_config(self, payload: dict[str, Any]) -> None:
+        legacy_memory = payload.pop("memory", None)
+        if isinstance(legacy_memory, dict):
+            hcms = payload.setdefault("hcms", {})
+            if isinstance(hcms, dict):
+                if "enabled" in legacy_memory and "enabled" not in hcms:
+                    hcms["enabled"] = legacy_memory["enabled"]
+                recall = hcms.setdefault("recall", {})
+                if isinstance(recall, dict):
+                    if "max_facts" in legacy_memory and "max_candidates" not in recall:
+                        recall["max_candidates"] = legacy_memory["max_facts"]
+                    if "injection_token_budget" in legacy_memory and "turn_recall_token_budget" not in recall:
+                        recall["turn_recall_token_budget"] = legacy_memory["injection_token_budget"]
+                transcript = hcms.setdefault("transcript", {})
+                if isinstance(transcript, dict) and "transcript_context_tokens" in legacy_memory:
+                    transcript.setdefault("transcript_context_tokens", legacy_memory["transcript_context_tokens"])
+        payload.pop("memory_platform", None)
         scheduled_tasks = payload.get("scheduled_tasks")
         if isinstance(scheduled_tasks, dict):
             scheduled_tasks.pop("generation_strategy", None)
@@ -413,15 +430,15 @@ def apply_internal_task_model_payload(payload: dict[str, Any], provider_name: st
     if isinstance(title, dict):
         title["model_name"] = provider_name
 
-    memory_platform = payload.setdefault("memory_platform", {})
-    if isinstance(memory_platform, dict):
-        session_search = memory_platform.setdefault("session_search", {})
+    hcms = payload.setdefault("hcms", {})
+    if isinstance(hcms, dict):
+        session_search = hcms.setdefault("session_search", {})
         if isinstance(session_search, dict):
             session_search["model_name"] = provider_name
-        recall = memory_platform.setdefault("recall", {})
+        recall = hcms.setdefault("recall", {})
         if isinstance(recall, dict):
             recall["rerank_model_name"] = provider_name
-        updater = memory_platform.setdefault("updater", {})
+        updater = hcms.setdefault("updater", {})
         if isinstance(updater, dict):
             updater["model_name"] = provider_name
 
@@ -489,8 +506,8 @@ def _legacy_internal_task_model_names(effective_config: EffectiveConfig) -> tupl
     return (
         effective_config.summarization.model_name,
         effective_config.title.model_name,
-        effective_config.memory_platform.session_search.model_name,
-        effective_config.memory_platform.recall.rerank_model_name,
-        effective_config.memory_platform.updater.model_name,
+        effective_config.hcms.session_search.model_name,
+        effective_config.hcms.recall.rerank_model_name,
+        effective_config.hcms.updater.model_name,
         effective_config.scheduled_tasks.default_model,
     )

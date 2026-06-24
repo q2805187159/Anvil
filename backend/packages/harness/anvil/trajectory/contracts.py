@@ -251,6 +251,7 @@ class EvaluationReportRuntimeSection(BaseModel):
     runtime_phase_diagnostics: dict[str, Any] = Field(default_factory=dict)
     runtime_assembly_snapshot: dict[str, Any] = Field(default_factory=dict)
     runtime_assembly_diff: dict[str, Any] = Field(default_factory=dict)
+    context_v2_evaluation: dict[str, Any] = Field(default_factory=dict)
     context_window_usage: dict[str, Any] = Field(default_factory=dict)
     token_usage: dict[str, Any] = Field(default_factory=dict)
     model_fallback_history: list[dict[str, Any]] = Field(default_factory=list)

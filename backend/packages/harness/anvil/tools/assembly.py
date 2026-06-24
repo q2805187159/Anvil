@@ -15,7 +15,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from anvil.config import CodeSemanticsConfig, DocumentsConfig, UploadsConfig
 from anvil.documents import export_document as export_document_file
 from anvil.documents import extract_document as extract_document_file
-from anvil.memory_platform.tools import build_memory_platform_tools
+from anvil.memory.tools import build_memory_tools
 from anvil.processes.service import DEFAULT_PROCESS_WAIT_TIMEOUT_SECONDS, MAX_PROCESS_WAIT_TIMEOUT_SECONDS
 from anvil.scheduled_tasks import ScheduledTaskCreateRequest, ScheduledTaskUpdateRequest
 from anvil.runtime.tool_registry.contracts import (
@@ -568,7 +568,7 @@ def assemble_runtime_tools(
 
     @tool(
         description=(
-            "Claude/Codex-style Glob wrapper for fast file path discovery. "
+            "Agent-runtime Glob wrapper for fast file path discovery. "
             "Find files by glob/name pattern under /mnt/user-data/workspace, /mnt/user-data/uploads, /mnt/user-data/outputs, "
             "or configured bridge virtual roots. This is a thin alias over search_files(target='files') and returns virtual paths only."
         )
@@ -594,7 +594,7 @@ def assemble_runtime_tools(
 
     @tool(
         description=(
-            "Claude/Codex-style Grep wrapper for bounded text search. "
+            "Agent-runtime Grep wrapper for bounded text search. "
             "Search file contents with regex or literal matching under governed virtual roots. "
             "Use file_glob to narrow candidate files and read_file for the returned line windows. "
             "This is a thin alias over search_files(target='content') and never shells out."
@@ -1311,7 +1311,7 @@ def assemble_runtime_tools(
             return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
         return json.dumps({"success": False, "error": f"unsupported action: {action}"})
 
-    memory_tools = build_memory_platform_tools(memory_manager=memory_manager, thread_id=thread_id)
+    memory_tools = build_memory_tools(memory_manager=memory_manager, thread_id=thread_id)
 
     tool_metadata = {
         "read_file": {

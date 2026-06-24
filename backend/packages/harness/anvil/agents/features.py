@@ -49,7 +49,6 @@ class RuntimeFeatureSet(BaseModel):
     memory_prefetch: bool | Any = False
     memory_capture: bool | Any = False
     jit_context: bool | Any = False
-    compaction: bool | Any = False
     title: bool | Any = False
     token_usage: bool | Any = False
     summarization: bool | Any = False
@@ -96,12 +95,8 @@ def resolve_feature_set(
     )
     _apply_config_enablement(feature_set, "title", config.title.enabled)
     _apply_config_enablement(feature_set, "token_usage", config.token_usage.enabled)
-    _apply_config_enablement(feature_set, "summarization", config.summarization.enabled)
+    feature_set.summarization = False
     _apply_config_enablement(feature_set, "jit_context", config.jit_context.enabled)
-    # Conversation context compaction has one production truth surface:
-    # SummarizationMiddleware. The older priority CompactionMiddleware mutates
-    # message lists without durable summary/level telemetry, so keep it as an
-    # explicit feature_set override only.
     _apply_config_enablement(
         feature_set,
         "view_image",
@@ -110,18 +105,17 @@ def resolve_feature_set(
     _apply_config_enablement(
         feature_set,
         "memory",
-        config.memory.enabled or config.memory_platform.enabled,
+        config.hcms.enabled,
     )
     _apply_config_enablement(
         feature_set,
         "memory_prefetch",
-        (config.memory.enabled and config.memory.prefetch_once_per_turn)
-        or config.memory_platform.enabled,
+        config.hcms.enabled,
     )
     _apply_config_enablement(
         feature_set,
         "memory_capture",
-        config.memory.enabled and not config.memory_platform.enabled,
+        config.hcms.enabled,
     )
     _apply_config_enablement(feature_set, "skills", config.skills_config.enabled)
     _apply_config_enablement(feature_set, "capability_mentions", config.skills_config.enabled)

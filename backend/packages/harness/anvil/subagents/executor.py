@@ -141,6 +141,12 @@ class SubagentExecutor:
     def default_timeout_at(self, timeout_seconds: int) -> datetime:
         return utc_now() + timedelta(seconds=timeout_seconds)
 
+    def close(self, *, wait: bool = True, cancel_futures: bool = True) -> None:
+        try:
+            self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
+        except TypeError:  # pragma: no cover - compatibility for older Python runtimes
+            self._pool.shutdown(wait=wait)
+
     def _publish_event(
         self,
         task: SubagentTaskRecord,

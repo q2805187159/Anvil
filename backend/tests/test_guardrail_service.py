@@ -8,6 +8,7 @@ from anvil.runtime.approvals import (
     ExecutionFailureClassification,
     NetworkApprovalDecision,
     NetworkApprovalService,
+    RiskLevel,
 )
 
 
@@ -544,6 +545,77 @@ def test_guardrail_service_does_not_hard_block_remote_command_substitution_read_
         )
 
         assert decision.decision is ApprovalDecision.SKIP
+
+
+def test_guardrail_service_requires_approval_for_mutating_skill_curator_actions() -> None:
+    service = ApprovalService()
+    mutating_actions = (
+        "curate",
+        "maintenance",
+        "create",
+        "update",
+        "patch",
+        "write_file",
+        "remove_file",
+        "archive",
+        "restore",
+        "backup",
+        "rollback",
+        "review_apply",
+        "merge_apply",
+        "feedback",
+        "learn_procedure",
+        "promote_procedure",
+        "reject_procedure",
+        "restore_procedure",
+        "pin",
+        "unpin",
+    )
+
+    for action in mutating_actions:
+        decision = service.evaluate_tool_call(
+            tool_name="skill_manage",
+            args={"action": action, "file_path": "support/notes.md"},
+            capability_group="skill_governance",
+            risk_category="skill_curator",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            tool_call_id=f"{action}-call",
+            execution_mode="full_access",
+            approval_profile=None,
+            approval_context=None,
+        )
+
+        assert decision.decision is ApprovalDecision.NEEDS_USER_APPROVAL
+        assert decision.assessment.risk_level is RiskLevel.HIGH
+        assert decision.assessment.execution_mode == "write"
+        assert "skill_curator_write" in decision.assessment.risk_factors
+        assert f"skill_curator_action:{action}" in decision.assessment.risk_factors
+        assert decision.approval_request is not None
+        assert "skill_curator_write" in decision.approval_request.requested_permissions
+
+
+def test_guardrail_service_allows_read_only_skill_curator_actions_without_approval() -> None:
+    service = ApprovalService()
+
+    for action in ("report", "quality_plan", "merge_plan", "procedures"):
+        decision = service.evaluate_tool_call(
+            tool_name="skill_manage",
+            args={"action": action},
+            capability_group="skill_governance",
+            risk_category="skill_curator",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            tool_call_id=f"{action}-call",
+            execution_mode="full_access",
+            approval_profile=None,
+            approval_context=None,
+        )
+
+        assert decision.decision is ApprovalDecision.SKIP
+        assert decision.assessment.risk_level is RiskLevel.LOW
+        assert decision.assessment.execution_mode == "read"
+        assert "skill_curator_write" not in decision.assessment.risk_factors
         assert decision.assessment is not None
         assert "remote_script_to_shell" not in decision.assessment.risk_factors
 

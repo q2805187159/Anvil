@@ -49,18 +49,19 @@ import type {
   ContextCacheDiagnosticsView,
   ContextWindowUsageView,
   ExecutionMode,
+  EvaluationThreadReportView,
   MessageWindowView,
-  MemoryConflictView,
   MemoryEntryView,
+  MemoryHealthResponse,
   MemoryInjectionDiagnosticsView,
   MemoryLayerId,
-  MemoryReviewItemView,
   MemoryStalenessEntryView,
   MessageView,
   ProcessLogView,
   ProcessSessionView,
   PromptSectionTokenLedgerView,
   PromptCacheDiagnosticsView,
+  RuntimeContextV2DiagnosticsView,
   RuntimePhaseTimingsView,
   RuntimeOperatorStatusView,
   TerminalBackendCapabilitiesView,
@@ -85,20 +86,19 @@ import { resolveGatewayUrl } from "@/src/core/api/client";
 import { useExtensions } from "@/src/core/extensions/hooks";
 import { useI18n, type Locale } from "@/src/core/i18n";
 import {
-  useActivateMemoryProvider,
-  useBatchMemoryReview,
   useCreateMemoryLayerEntry,
   useDeleteMemoryLayerEntry,
-  useApproveMemoryReview,
   useExportMemoryAdmin,
   useFlushMemory,
   useImportMemoryAdmin,
+  useHCMSMemoryDiff,
+  useHCMSMemoryHistory,
+  useHCMSRecall,
+  useHCMSWhy,
   useMemoryAdminAudit,
-  useMemoryConflicts,
+  useMemoryHealth,
   useMemoryLayers,
   useMemoryOverview,
-  useMemoryProviders,
-  useMemoryReview,
   useMemoryStaleness,
   useMemoryTrace,
   useMemoryLayerEntries,
@@ -106,13 +106,9 @@ import {
   useReflectionJobs,
   useRemoveReflectionJob,
   useResumeReflectionJob,
-  useRejectMemoryReview,
-  useReloadMemoryProviders,
-  useResolveMemoryConflict,
   useRunReflectionJob,
   useSessionMemory,
   useSessionSearch,
-  useTestMemoryProvider,
   useUpdateMemoryLayerEntry,
 } from "@/src/core/memory/hooks";
 import { useModels } from "@/src/core/models/hooks";
@@ -120,7 +116,7 @@ import { usePlugins } from "@/src/core/plugins/hooks";
 import { useSkills } from "@/src/core/skills/hooks";
 import { useGatewayHealth } from "@/src/core/system/hooks";
 import { useMessageReducer, type StepTranscriptMessage } from "@/src/core/threads/message-reducer";
-import { THREAD_DETAIL_MESSAGE_WINDOW_PAGE_SIZE, useCancelSubagentTask, useCancelThreadApproval, useCloseProcessStdin, useCreateThread, useDeleteThread, useDeleteThreadFollowup, useEnqueueThreadFollowup, useInterruptProcessSession, useKillProcessSession, usePopNextThreadFollowup, useProcessCapabilities, useProcessLog, useResizeProcessSession, useThreadDetail, useThreadMessageWindowLoader, useThreadRunStream, useThreadSettings, useThreads, useThreadState, useUpdateThreadFollowup, useUpdateThreadSettings, useWaitProcessSession, useWaitSubagentTask, useWriteProcessStdin } from "@/src/core/threads/hooks";
+import { THREAD_DETAIL_MESSAGE_WINDOW_PAGE_SIZE, useCancelSubagentTask, useCancelThreadApproval, useCloseProcessStdin, useCreateThread, useDeleteThread, useDeleteThreadFollowup, useEnqueueThreadFollowup, useInterruptProcessSession, useKillProcessSession, usePopNextThreadFollowup, useProcessCapabilities, useProcessLog, useResizeProcessSession, useThreadDetail, useThreadEvaluationReport, useThreadMessageWindowLoader, useThreadRunStream, useThreadSettings, useThreads, useThreadState, useUpdateThreadFollowup, useUpdateThreadSettings, useWaitProcessSession, useWaitSubagentTask, useWriteProcessStdin } from "@/src/core/threads/hooks";
 import { formatThreadActivityAge, sortThreadsByRecency, threadActivityAt } from "@/src/core/threads/recency";
 import { useUploadFiles, useUploads } from "@/src/core/uploads/hooks";
 import { cn } from "@/src/lib/utils";
@@ -383,6 +379,11 @@ type CapabilityAssemblyDiagnosticsSummary = {
   slowestSkillsDiscoveryStage: string | null;
   slowestSkillsDiscoveryStageDurationMs: number | null;
   topSkillsDiscoveryStages: Array<{ name: string; count: number }>;
+  skillRetrievalExpandedQueryTerms: string[];
+  skillRetrievalPrefetchIds: string[];
+  skillRetrievalL4RerankTriggered: boolean;
+  skillRetrievalL5HydeTriggered: boolean;
+  skillRetrievalL6PrefetchTriggered: boolean;
   topVisibleSources: Array<{ name: string; count: number }>;
   topDeferredSources: Array<{ name: string; count: number }>;
   topVisibleGroups: Array<{ name: string; count: number }>;
@@ -413,10 +414,10 @@ type MemoryInjectionDiagnosticsSummary = {
   status: string | null;
   snapshotId: string | null;
   queryTokens: number | null;
-  curatedMatchCount: number | null;
+  memoryMatchCount: number | null;
   archiveHitCount: number | null;
   evidenceCount: number | null;
-  providerNoteCount: number | null;
+  engineNoteCount: number | null;
   renderedTokensBeforeTruncation: number | null;
   renderedTokens: number | null;
   tokenBudget: number | null;
@@ -489,7 +490,7 @@ type ContextUsageSummary = {
   modelLabel: string;
   providerLabel: string | null;
   breakdownRows: ContextBreakdownItem[];
-  claudeRows: ContextBreakdownItem[];
+  agentRows: ContextBreakdownItem[];
   hasBreakdown: boolean;
   hasProviderUsage: boolean;
   hasLastUsage: boolean;
@@ -655,7 +656,7 @@ function workspaceCopy(locale: Locale) {
         sessionMemory: "会话记忆",
         userMemory: "用户记忆",
         workspaceMemory: "全局工作记忆",
-        platformControls: "平台控制",
+        platformControls: "HCMS 控制面",
         searchPriorSessions: "搜索历史会话",
         sessionSearch: "会话搜索",
         sessionRecall: "会话召回",
@@ -665,15 +666,10 @@ function workspaceCopy(locale: Locale) {
         recallInspector: "召回检查器",
         recallEvidence: "召回证据",
         matchedTurns: "匹配轮次",
-        conflictQueue: "冲突队列",
-        stalenessQueue: "过期队列",
-        noConflicts: "没有待处理冲突。",
-        noStaleness: "没有过期记忆。",
-        activeProvider: "当前提供方",
-        stores: "存储区",
+        activeProvider: "HCMS 引擎",
+        stores: "记忆层",
         archiveTurns: "归档轮次",
         active: "已启用",
-        activateProvider: (label: string) => `启用 ${label}`,
         entries: "条目",
         edit: "编辑",
         delete: "删除",
@@ -909,7 +905,7 @@ function workspaceCopy(locale: Locale) {
       sessionMemory: "Session Memory",
       userMemory: "User Memory",
       workspaceMemory: "Workspace Memory",
-      platformControls: "Platform Controls",
+      platformControls: "HCMS Control Plane",
       searchPriorSessions: "Search prior sessions",
       sessionSearch: "Session Search",
       sessionRecall: "Session Recall",
@@ -919,15 +915,10 @@ function workspaceCopy(locale: Locale) {
       recallInspector: "Recall Inspector",
       recallEvidence: "Recall Evidence",
       matchedTurns: "Matched Turns",
-      conflictQueue: "Conflict Queue",
-      stalenessQueue: "Staleness Queue",
-      noConflicts: "No pending conflicts.",
-      noStaleness: "No stale memories.",
-      activeProvider: "Active provider",
-      stores: "Stores",
+      activeProvider: "HCMS engine",
+      stores: "Memory layers",
       archiveTurns: "Archive turns",
       active: "Active",
-      activateProvider: (label: string) => `Activate ${label}`,
       entries: "Entries",
       edit: "Edit",
       delete: "Delete",
@@ -1039,6 +1030,7 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const settingsDrawerActive = drawerDataVisible && drawerSection === "settings";
   const processesDrawerActive = drawerDataVisible && drawerSection === "processes";
   const uploadsDrawerActive = drawerDataVisible && drawerSection === "files";
+  const runtimeReportActive = drawerDataVisible && drawerSection === "recent_tools";
 
   const threads = useThreads();
   const createThread = useCreateThread();
@@ -1049,24 +1041,15 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const health = useGatewayHealth();
   const memoryLayers = useMemoryLayers({ enabled: memoryDrawerActive });
   const memoryOverview = useMemoryOverview({ enabled: memoryDrawerActive });
-  const memoryProviders = useMemoryProviders({ enabled: memoryDrawerActive });
-  const memoryConflicts = useMemoryConflicts({ enabled: memoryDrawerActive });
+  const memoryHealth = useMemoryHealth({ enabled: memoryDrawerActive });
   const memoryStaleness = useMemoryStaleness({ enabled: memoryDrawerActive });
-  const memoryReview = useMemoryReview({ enabled: memoryDrawerActive });
   const memoryAudit = useMemoryAdminAudit({ enabled: memoryDrawerActive });
   const flushMemory = useFlushMemory();
-  const approveMemoryReview = useApproveMemoryReview();
-  const rejectMemoryReview = useRejectMemoryReview();
-  const batchMemoryReview = useBatchMemoryReview();
-  const resolveMemoryConflict = useResolveMemoryConflict();
   const reflectionJobs = useReflectionJobs({ enabled: memoryDrawerActive });
   const runReflectionJob = useRunReflectionJob();
   const pauseReflectionJob = usePauseReflectionJob();
   const resumeReflectionJob = useResumeReflectionJob();
   const removeReflectionJob = useRemoveReflectionJob();
-  const activateProvider = useActivateMemoryProvider();
-  const reloadMemoryProviders = useReloadMemoryProviders();
-  const testMemoryProvider = useTestMemoryProvider();
   const exportMemoryAdmin = useExportMemoryAdmin();
   const importMemoryAdmin = useImportMemoryAdmin();
 
@@ -1075,6 +1058,8 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const [loadedMessageWindowsByThread, setLoadedMessageWindowsByThread] = useState<Record<string, ThreadMessageWindowCache>>({});
   const sessionMemory = useSessionMemory(activeThreadId, { enabled: memoryDrawerActive });
   const memoryTrace = useMemoryTrace(activeThreadId);
+  const hcmsRecall = useHCMSRecall();
+  const hcmsWhy = useHCMSWhy();
   const needsFullThreadState = shouldRequestFullThreadState(drawerDataVisible, drawerSection);
   const detail = useThreadDetail(activeThreadId, {
     messageLimit: THREAD_DETAIL_WINDOW_LIMIT,
@@ -1086,6 +1071,7 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   });
   const threadSettings = useThreadSettings(activeThreadId, { enabled: settingsDrawerActive });
   const runStream = useThreadRunStream(activeThreadId);
+  const runtimeEvaluationReport = useThreadEvaluationReport(activeThreadId, { enabled: runtimeReportActive });
   const uploads = useUploads(activeThreadId, { enabled: uploadsDrawerActive });
   const uploadFiles = useUploadFiles(activeThreadId);
   const enqueueFollowup = useEnqueueThreadFollowup(activeThreadId);
@@ -1132,6 +1118,8 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const [entryCategory, setEntryCategory] = useState("note");
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [hcmsQuery, setHcmsQuery] = useState("");
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("medium");
   const [selectedPlanMode, setSelectedPlanMode] = useState(false);
@@ -1156,6 +1144,8 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const queuedAttachments = composerDraft.queuedAttachments;
   const autoDispatchingFollowupRef = useRef<string | null>(null);
   const [hiddenQueuedFollowupIds, setHiddenQueuedFollowupIds] = useState<string[]>([]);
+  const hcmsHistory = useHCMSMemoryHistory(selectedMemoryId, { enabled: memoryDrawerActive });
+  const hcmsDiff = useHCMSMemoryDiff(selectedMemoryId, { enabled: memoryDrawerActive });
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -1283,6 +1273,7 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
   const contextCacheDiagnostics = threadState?.context_cache_diagnostics ?? null;
   const capabilityAssemblyDiagnostics = threadState?.capability_assembly_diagnostics ?? null;
   const memoryInjectionDiagnostics = threadState?.memory_injection_diagnostics ?? null;
+  const runtimeContextV2Diagnostics = threadState?.runtime_context_v2_diagnostics ?? null;
   const compactionDiagnostics = threadState?.compaction_diagnostics ?? null;
   const availableModels = useMemo(() => models.data ?? [], [models.data]);
   const visibleSelectedModelName = selectPreferredModelName(selectedModelName, availableModels);
@@ -1521,6 +1512,20 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
     () => (memoryLayerId === "session" ? [] : layerEntries.data ?? []),
     [layerEntries.data, memoryLayerId],
   );
+
+  useEffect(() => {
+    if (memoryLayerId === "session") {
+      setSelectedMemoryId(null);
+      return;
+    }
+    const nextId = semanticMemoryEntries[0]?.memory_id ?? semanticMemoryEntries[0]?.entry_id ?? null;
+    setSelectedMemoryId((current) => {
+      if (current && semanticMemoryEntries.some((entry) => (entry.memory_id ?? entry.entry_id) === current)) {
+        return current;
+      }
+      return nextId;
+    });
+  }, [memoryLayerId, semanticMemoryEntries]);
 
   const activeModelName = threadState?.active_model ?? visibleSelectedModelName;
   const queuedFollowupSignature = useMemo(
@@ -2311,28 +2316,6 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
     await flushMemory.mutateAsync({ threadId: activeThreadId });
   }
 
-  async function handleApproveMemoryReview(reviewId: string) {
-    await approveMemoryReview.mutateAsync(reviewId);
-  }
-
-  async function handleRejectMemoryReview(reviewId: string) {
-    await rejectMemoryReview.mutateAsync(reviewId);
-  }
-
-  async function handleBatchMemoryReview(action: "approve" | "reject", reviewIds: string[]) {
-    const cleanIds = reviewIds.filter(Boolean);
-    if (!cleanIds.length) {
-      return;
-    }
-    await batchMemoryReview.mutateAsync(
-      action === "approve" ? { approve: cleanIds, reject: [] } : { approve: [], reject: cleanIds },
-    );
-  }
-
-  async function handleResolveMemoryConflict(conflictId: string, action: string) {
-    await resolveMemoryConflict.mutateAsync({ conflictId, action });
-  }
-
   const threadRail = (
     <ThreadRail
       collapsed={leftCollapsed}
@@ -2506,6 +2489,10 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               threadSettings={settingsState}
               timelineItems={timelineItems}
               recentTools={recentTools}
+              runtimeContextV2Diagnostics={runtimeContextV2Diagnostics}
+              runtimeEvaluationReport={runtimeEvaluationReport.data ?? null}
+              runtimeEvaluationReportLoading={runtimeEvaluationReport.isFetching}
+              runtimeEvaluationReportError={runtimeEvaluationReport.error}
               uploads={uploads.data?.files ?? []}
               activeThread={activeThread}
               models={availableModels}
@@ -2522,20 +2509,17 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               sessionMemory={sessionMemory.data ?? null}
               memoryOverview={memoryOverview.data}
               memoryAudit={memoryAudit.data ?? null}
+              memoryHealth={memoryHealth.data ?? null}
               memoryEntries={semanticMemoryEntries}
-              memoryProviders={memoryProviders.data ?? []}
-              memoryConflicts={memoryConflicts.data ?? []}
               memoryStaleness={memoryStaleness.data ?? []}
-              memoryReviewItems={memoryReview.data ?? []}
               memoryTraceItems={memoryTrace.data?.items ?? []}
-              onActivateProvider={(providerId) => activateProvider.mutateAsync(providerId)}
+              hcmsRecallResult={hcmsRecall.data}
+              hcmsWhyResult={hcmsWhy.data}
+              selectedMemoryId={selectedMemoryId}
+              hcmsHistory={hcmsHistory.data ?? null}
+              hcmsDiff={hcmsDiff.data ?? null}
+              onSelectMemoryId={setSelectedMemoryId}
               onFlushMemory={handleFlushMemory}
-              onApproveMemoryReview={handleApproveMemoryReview}
-              onRejectMemoryReview={handleRejectMemoryReview}
-              onBatchMemoryReview={handleBatchMemoryReview}
-              onResolveMemoryConflict={handleResolveMemoryConflict}
-              onReloadProviders={() => reloadMemoryProviders.mutateAsync()}
-              onTestProvider={(providerId) => testMemoryProvider.mutateAsync(providerId)}
               onExportMemory={() => exportMemoryAdmin.mutateAsync()}
               onImportMemory={(payload) => importMemoryAdmin.mutateAsync(payload)}
               entryDraft={entryDraft}
@@ -2553,6 +2537,10 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               sessionSearchQuery={sessionSearchQuery}
               onSessionSearchQueryChange={setSessionSearchQuery}
               onSessionSearch={() => sessionSearch.mutateAsync({ query: sessionSearchQuery, threadId: activeThreadId, limit: 6 })}
+              hcmsQuery={hcmsQuery}
+              onHcmsQueryChange={setHcmsQuery}
+              onHcmsRecall={() => hcmsRecall.mutateAsync({ query: hcmsQuery || sessionSearchQuery, limit: 6 })}
+              onHcmsWhy={() => hcmsWhy.mutateAsync({ query: hcmsQuery || sessionSearchQuery, limit: 3 })}
               sessionSearchResult={sessionSearch.data ?? null}
               reflectionJobs={reflectionJobs.data ?? []}
               onRunReflection={(jobId) => runReflectionJob.mutateAsync(jobId)}
@@ -2638,6 +2626,10 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               threadSettings={settingsState}
               timelineItems={timelineItems}
               recentTools={recentTools}
+              runtimeContextV2Diagnostics={runtimeContextV2Diagnostics}
+              runtimeEvaluationReport={runtimeEvaluationReport.data ?? null}
+              runtimeEvaluationReportLoading={runtimeEvaluationReport.isFetching}
+              runtimeEvaluationReportError={runtimeEvaluationReport.error}
               uploads={uploads.data?.files ?? []}
               activeThread={activeThread}
               models={availableModels}
@@ -2654,20 +2646,17 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               sessionMemory={sessionMemory.data ?? null}
               memoryOverview={memoryOverview.data}
               memoryAudit={memoryAudit.data ?? null}
+              memoryHealth={memoryHealth.data ?? null}
               memoryEntries={semanticMemoryEntries}
-              memoryProviders={memoryProviders.data ?? []}
-              memoryConflicts={memoryConflicts.data ?? []}
               memoryStaleness={memoryStaleness.data ?? []}
-              memoryReviewItems={memoryReview.data ?? []}
               memoryTraceItems={memoryTrace.data?.items ?? []}
-              onActivateProvider={(providerId) => activateProvider.mutateAsync(providerId)}
+              hcmsRecallResult={hcmsRecall.data}
+              hcmsWhyResult={hcmsWhy.data}
+              selectedMemoryId={selectedMemoryId}
+              hcmsHistory={hcmsHistory.data ?? null}
+              hcmsDiff={hcmsDiff.data ?? null}
+              onSelectMemoryId={setSelectedMemoryId}
               onFlushMemory={handleFlushMemory}
-              onApproveMemoryReview={handleApproveMemoryReview}
-              onRejectMemoryReview={handleRejectMemoryReview}
-              onBatchMemoryReview={handleBatchMemoryReview}
-              onResolveMemoryConflict={handleResolveMemoryConflict}
-              onReloadProviders={() => reloadMemoryProviders.mutateAsync()}
-              onTestProvider={(providerId) => testMemoryProvider.mutateAsync(providerId)}
               onExportMemory={() => exportMemoryAdmin.mutateAsync()}
               onImportMemory={(payload) => importMemoryAdmin.mutateAsync(payload)}
               entryDraft={entryDraft}
@@ -2685,6 +2674,10 @@ export function WorkspaceShell({ initialThreadId = null }: WorkspaceShellProps) 
               sessionSearchQuery={sessionSearchQuery}
               onSessionSearchQueryChange={setSessionSearchQuery}
               onSessionSearch={() => sessionSearch.mutateAsync({ query: sessionSearchQuery, threadId: activeThreadId, limit: 6 })}
+              hcmsQuery={hcmsQuery}
+              onHcmsQueryChange={setHcmsQuery}
+              onHcmsRecall={() => hcmsRecall.mutateAsync({ query: hcmsQuery || sessionSearchQuery, limit: 6 })}
+              onHcmsWhy={() => hcmsWhy.mutateAsync({ query: hcmsQuery || sessionSearchQuery, limit: 3 })}
               sessionSearchResult={sessionSearch.data ?? null}
               reflectionJobs={reflectionJobs.data ?? []}
               onRunReflection={(jobId) => runReflectionJob.mutateAsync(jobId)}
@@ -3639,10 +3632,10 @@ export function ContextWindowUsagePanel({
           memoryRendered: "注入 Token",
           memoryBudget: "注入预算",
           memoryQuery: "查询 Token",
-          memoryCurated: "精选",
+          memoryMatches: "命中记忆",
           memoryArchive: "归档",
           memoryEvidence: "证据",
-          memoryProviderNotes: "Provider notes",
+          memoryEngineNotes: "Engine notes",
           memoryTruncated: "已截断",
           memorySnapshot: "Snapshot",
           memoryError: "错误",
@@ -3667,6 +3660,8 @@ export function ContextWindowUsagePanel({
           skillsDiscoveryPackages: "安装包",
           skillsDiscoveryStages: "Skills 阶段",
           slowestSkillsDiscoveryStage: "最慢 Skills",
+          skillRetrievalTiers: "Skills 检索层",
+          skillRetrievalPrefetch: "预取 Skills",
           visibleSources: "可见来源",
           deferredSources: "延迟来源",
           visibleGroups: "可见分组",
@@ -3755,10 +3750,10 @@ export function ContextWindowUsagePanel({
           memoryRendered: "Rendered tokens",
           memoryBudget: "Budget",
           memoryQuery: "Query tokens",
-          memoryCurated: "Curated",
+          memoryMatches: "Memory matches",
           memoryArchive: "Archive",
           memoryEvidence: "Evidence",
-          memoryProviderNotes: "Provider notes",
+          memoryEngineNotes: "Engine notes",
           memoryTruncated: "Truncated",
           memorySnapshot: "Snapshot",
           memoryError: "Error",
@@ -3783,6 +3778,8 @@ export function ContextWindowUsagePanel({
           skillsDiscoveryPackages: "Packages",
           skillsDiscoveryStages: "Skills stages",
           slowestSkillsDiscoveryStage: "Slowest skills",
+          skillRetrievalTiers: "Skill retrieval",
+          skillRetrievalPrefetch: "Prefetch skills",
           visibleSources: "Visible sources",
           deferredSources: "Deferred sources",
           visibleGroups: "Visible groups",
@@ -3823,7 +3820,7 @@ export function ContextWindowUsagePanel({
   const progressStyle = {
     width: `${Math.round(summary.pressureRatio * 100)}%`,
   };
-  const rows = summary.claudeRows.length > 0 ? summary.claudeRows : summary.breakdownRows;
+  const rows = summary.agentRows.length > 0 ? summary.agentRows : summary.breakdownRows;
   const cardClass =
     variant === "popover"
       ? "rounded-[0.8rem] border border-[var(--line)] bg-[var(--panel)] p-3 shadow-none"
@@ -4338,10 +4335,10 @@ function MemoryInjectionDiagnosticsPanel({
     memoryRendered: string;
     memoryBudget: string;
     memoryQuery: string;
-    memoryCurated: string;
+    memoryMatches: string;
     memoryArchive: string;
     memoryEvidence: string;
-    memoryProviderNotes: string;
+    memoryEngineNotes: string;
     memoryTruncated: string;
     memorySnapshot: string;
     memoryError: string;
@@ -4349,7 +4346,7 @@ function MemoryInjectionDiagnosticsPanel({
   };
 }) {
   const recallLabel = [
-    `${labels.memoryCurated} ${formatTokenCount(summary.curatedMatchCount, labels.pending)}`,
+    `${labels.memoryMatches} ${formatTokenCount(summary.memoryMatchCount, labels.pending)}`,
     `${labels.memoryArchive} ${formatTokenCount(summary.archiveHitCount, labels.pending)}`,
     `${labels.memoryEvidence} ${formatTokenCount(summary.evidenceCount, labels.pending)}`,
   ].join(" · ");
@@ -4378,10 +4375,10 @@ function MemoryInjectionDiagnosticsPanel({
         <MetricSmall label={labels.memoryRendered} value={renderedLabel} tone={summary.truncated ? "neutral" : "success"} />
         <MetricSmall label={labels.memoryQuery} value={formatTokenCount(summary.queryTokens, labels.pending)} />
         <MetricSmall label={labels.memoryBudget} value={formatTokenCount(summary.tokenBudget, labels.pending)} />
-        <MetricSmall label={labels.memoryCurated} value={formatTokenCount(summary.curatedMatchCount, labels.pending)} tone="primary" />
+        <MetricSmall label={labels.memoryMatches} value={formatTokenCount(summary.memoryMatchCount, labels.pending)} tone="primary" />
         <MetricSmall label={labels.memoryArchive} value={formatTokenCount(summary.archiveHitCount, labels.pending)} />
         <MetricSmall label={labels.memoryEvidence} value={formatTokenCount(summary.evidenceCount, labels.pending)} />
-        <MetricSmall label={labels.memoryProviderNotes} value={formatTokenCount(summary.providerNoteCount, labels.pending)} />
+        <MetricSmall label={labels.memoryEngineNotes} value={formatTokenCount(summary.engineNoteCount, labels.pending)} />
       </div>
       <div className="mt-2 grid gap-1 font-[var(--mono-font)] text-[11px] text-[var(--ink)]">
         <div>{labels.memoryRecall}: {recallLabel}</div>
@@ -4473,6 +4470,8 @@ function CapabilityAssemblyDiagnosticsPanel({
     skillsDiscoveryPackages: string;
     skillsDiscoveryStages: string;
     slowestSkillsDiscoveryStage: string;
+    skillRetrievalTiers: string;
+    skillRetrievalPrefetch: string;
     visibleSources: string;
     deferredSources: string;
     visibleGroups: string;
@@ -4502,6 +4501,15 @@ function CapabilityAssemblyDiagnosticsPanel({
       : summary.skillsDiscoveryCacheHit
         ? "hit"
         : "miss";
+  const skillRetrievalTierLabel = [
+    summary.skillRetrievalL4RerankTriggered ? "L4" : null,
+    summary.skillRetrievalL5HydeTriggered ? "L5" : null,
+    summary.skillRetrievalL6PrefetchTriggered ? "L6" : null,
+  ].filter((item): item is string => Boolean(item)).join(" / ") || labels.pending;
+  const skillRetrievalPrefetchLabel =
+    summary.skillRetrievalPrefetchIds.length > 0
+      ? summary.skillRetrievalPrefetchIds.slice(0, 3).join(", ")
+      : labels.pending;
 
   return (
     <div className="rounded-[0.7rem] border border-[var(--line)] bg-[var(--panel-muted)] p-2 text-xs text-[var(--muted)]">
@@ -4530,6 +4538,8 @@ function CapabilityAssemblyDiagnosticsPanel({
         <MetricSmall label={labels.skillsDiscoveryEnabled} value={formatTokenCount(summary.skillsDiscoveryEnabledCount, labels.pending)} />
         <MetricSmall label={labels.skillsDiscoveryPackages} value={formatTokenCount(summary.skillsDiscoveryPackageCount, labels.pending)} />
         <MetricSmall label={labels.slowestSkillsDiscoveryStage} value={formatAssemblyStageValue(summary.slowestSkillsDiscoveryStage, summary.slowestSkillsDiscoveryStageDurationMs, labels.pending)} />
+        <MetricSmall label={labels.skillRetrievalTiers} value={skillRetrievalTierLabel} tone={summary.skillRetrievalL4RerankTriggered || summary.skillRetrievalL5HydeTriggered ? "primary" : "neutral"} />
+        <MetricSmall label={labels.skillRetrievalPrefetch} value={skillRetrievalPrefetchLabel} tone={summary.skillRetrievalL6PrefetchTriggered ? "success" : "neutral"} />
       </div>
       <div className="mt-2 grid gap-1 font-[var(--mono-font)] text-[11px] text-[var(--ink)]">
         {summary.topAssemblyStages.length > 0 ? <div>{formatCapabilityCountLine(labels.assemblyStages, summary.topAssemblyStages)}</div> : null}
@@ -4541,6 +4551,396 @@ function CapabilityAssemblyDiagnosticsPanel({
       </div>
     </div>
   );
+}
+
+type RuntimeContextV2ObservabilitySummary = {
+  traceId: string | null;
+  promptHash: string | null;
+  actualSystemPromptHash: string | null;
+  selectedCapabilities: string[];
+  selectedTools: string[];
+  selectedSkills: string[];
+  selectedMcpTools: string[];
+  selectedMemory: string[];
+  selectedToolResultRefs: string[];
+  runtimeEventCounts: Array<{ name: string; value: string }>;
+  replayPhaseCoverage: Array<{ name: string; value: string }>;
+  blockCounts: Array<{ name: string; value: string }>;
+  traceReplayReady: boolean | null;
+  conflictWarningCount: number | null;
+  conflictWarnings: string[];
+  hasData: boolean;
+};
+
+export function buildRuntimeContextV2ObservabilitySummary(
+  report: EvaluationThreadReportView | null | undefined,
+  diagnostics?: RuntimeContextV2DiagnosticsView | null,
+): RuntimeContextV2ObservabilitySummary {
+  const evaluation = report?.runtime?.context_v2_evaluation ?? null;
+  const snapshot = report?.runtime?.runtime_assembly_snapshot ?? null;
+  const diagnosticRecord = runtimeRecordFromUnknown(diagnostics);
+  const contextV2 = runtimeRecordFromUnknown(runtimeReadKey(snapshot, "context_v2"));
+  const trace = runtimeRecordFromUnknown(runtimeReadKey(contextV2, "trace"));
+  const runtimeState = runtimeRecordFromUnknown(runtimeReadKey(contextV2, "runtime_state"));
+  const reviewInbox = runtimeRecordFromUnknown(runtimeReadKey(runtimeState, "review_inbox"));
+  const observability = runtimeRecordFromUnknown(runtimeReadKey(evaluation, "runtime_observability"));
+  const evaluationRun = runtimeRecordFromUnknown(runtimeReadKey(evaluation, "evaluation_run"));
+  const traceReplayReady =
+    runtimeBooleanFromUnknown(runtimeReadKey(diagnosticRecord, "trace_replay_ready")) ??
+    runtimeBooleanFromUnknown(runtimeReadKey(evaluationRun, "trace_replay_ready"));
+
+  const selectedCapabilities = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_capabilities"),
+    runtimeReadKey(evaluation, "selected_capabilities"),
+    runtimeReadKey(observability, "selected_capabilities"),
+    runtimeReadKey(trace, "selected_capabilities"),
+  );
+  const selectedTools = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_tools"),
+    runtimeReadKey(evaluation, "selected_tools"),
+    runtimeReadKey(observability, "selected_tools"),
+    runtimeReadKey(trace, "selected_tools"),
+  );
+  const selectedSkills = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_skills"),
+    runtimeReadKey(evaluation, "selected_skills"),
+    runtimeReadKey(observability, "selected_skills"),
+    runtimeReadKey(trace, "selected_skills"),
+  );
+  const selectedMcpTools = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_mcp_tools"),
+    runtimeReadKey(evaluation, "selected_mcp_tools"),
+    runtimeReadKey(observability, "selected_mcp_tools"),
+    runtimeReadKey(trace, "selected_mcp_tools"),
+  );
+  const selectedMemory = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_memory"),
+    runtimeReadKey(evaluation, "selected_memory"),
+    runtimeReadKey(observability, "selected_memory"),
+    runtimeReadKey(trace, "selected_memory"),
+  );
+  const selectedToolResultRefs = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_tool_result_refs"),
+    runtimeReadKey(evaluation, "selected_tool_result_refs"),
+    runtimeReadKey(observability, "selected_tool_result_refs"),
+    runtimeReadKey(trace, "selected_tool_result_refs"),
+  );
+  const conflictWarnings = runtimeMergeStrings(
+    runtimeReadKey(diagnosticRecord, "selected_conflict_warnings"),
+    runtimeReadKey(evaluation, "selected_conflict_warnings"),
+    runtimeReadKey(observability, "selected_conflict_warnings"),
+    runtimeReadKey(reviewInbox, "warning_block_ids"),
+    runtimeReadKey(reviewInbox, "items"),
+  );
+  const conflictWarningCount =
+    normalizeInteger(runtimeReadKey(diagnosticRecord, "conflict_warning_count")) ??
+    normalizeInteger(runtimeReadKey(reviewInbox, "warning_block_count")) ??
+    normalizeInteger(runtimeReadKey(reviewInbox, "item_count")) ??
+    (conflictWarnings.length > 0 ? conflictWarnings.length : null);
+  const runtimeEventCounts = runtimeNormalizeValueEntries(
+    runtimeReadKey(diagnosticRecord, "runtime_event_counts") ?? runtimeReadKey(evaluationRun, "runtime_event_counts"),
+  );
+  const replayPhaseCoverage = runtimeNormalizeValueEntries(
+    runtimeReadKey(diagnosticRecord, "replay_phase_coverage") ?? runtimeReadKey(evaluationRun, "replay_phase_coverage"),
+  );
+  const blockCounts = runtimeNormalizeValueEntries(
+    runtimeReadKey(diagnosticRecord, "block_counts") ??
+      runtimeReadKey(observability, "block_counts") ??
+      runtimeReadKey(trace, "block_counts"),
+  );
+  const traceId = runtimeFirstString(
+    runtimeReadKey(diagnosticRecord, "trace_id"),
+    runtimeReadKey(evaluation, "trace_id"),
+    runtimeReadKey(observability, "trace_id"),
+    runtimeReadKey(trace, "trace_id"),
+    runtimeReadKey(contextV2, "trace_id"),
+  );
+  const promptHash = runtimeFirstString(
+    runtimeReadKey(diagnosticRecord, "prompt_hash"),
+    runtimeReadKey(evaluation, "prompt_hash"),
+    runtimeReadKey(observability, "prompt_hash"),
+    runtimeReadKey(trace, "prompt_hash"),
+    runtimeReadKey(contextV2, "prompt_hash"),
+  );
+  const actualSystemPromptHash = runtimeFirstString(
+    runtimeReadKey(diagnosticRecord, "actual_system_prompt_hash"),
+    runtimeReadKey(evaluation, "actual_system_prompt_hash"),
+    runtimeReadKey(observability, "actual_system_prompt_hash"),
+    runtimeReadKey(contextV2, "actual_system_prompt_hash"),
+  );
+  const hasData = Boolean(
+    traceId ||
+      promptHash ||
+      actualSystemPromptHash ||
+      selectedCapabilities.length ||
+      selectedTools.length ||
+      selectedSkills.length ||
+      selectedMcpTools.length ||
+      selectedMemory.length ||
+      selectedToolResultRefs.length ||
+      runtimeEventCounts.length ||
+      replayPhaseCoverage.length ||
+      blockCounts.length ||
+      traceReplayReady !== null ||
+      conflictWarningCount,
+  );
+
+  return {
+    traceId,
+    promptHash,
+    actualSystemPromptHash,
+    selectedCapabilities,
+    selectedTools,
+    selectedSkills,
+    selectedMcpTools,
+    selectedMemory,
+    selectedToolResultRefs,
+    runtimeEventCounts,
+    replayPhaseCoverage,
+    blockCounts,
+    traceReplayReady,
+    conflictWarningCount,
+    conflictWarnings,
+    hasData,
+  };
+}
+
+export function RuntimeContextV2ObservabilityPanel({
+  report,
+  diagnostics = null,
+  isLoading = false,
+  error = null,
+  locale = "en-US",
+}: {
+  report: EvaluationThreadReportView | null | undefined;
+  diagnostics?: RuntimeContextV2DiagnosticsView | null;
+  isLoading?: boolean;
+  error?: unknown;
+  locale?: Locale;
+}) {
+  const copy = runtimeContextV2ObservabilityCopy(locale);
+  const summary = useMemo(() => buildRuntimeContextV2ObservabilitySummary(report, diagnostics), [diagnostics, report]);
+  const capabilityCount =
+    summary.selectedCapabilities.length +
+    summary.selectedTools.length +
+    summary.selectedSkills.length +
+    summary.selectedMcpTools.length;
+  const replayLabel =
+    summary.traceReplayReady === null
+      ? copy.pending
+      : summary.traceReplayReady
+        ? copy.ready
+        : copy.notReady;
+
+  return (
+    <SectionCard title={copy.title}>
+      {isLoading ? <EmptyPanelText text={copy.loading} /> : null}
+      {!isLoading && error ? (
+        <div className="rounded-[0.7rem] border border-[var(--warning)] bg-[var(--panel-muted)] p-2 text-xs text-[var(--warning)]">
+          {copy.unavailable}
+        </div>
+      ) : null}
+      {!isLoading && !error && !summary.hasData ? <EmptyPanelText text={copy.empty} /> : null}
+      {!isLoading && !error && summary.hasData ? (
+        <div data-testid="runtime-context-v2-observability" className="space-y-2">
+          <div className="grid grid-cols-2 gap-1.5">
+            <MetricSmall label={copy.traceId} value={summary.traceId ?? copy.pending} tone={summary.traceId ? "primary" : "neutral"} />
+            <MetricSmall label={copy.traceReplayReady} value={replayLabel} tone={summary.traceReplayReady ? "success" : "neutral"} />
+            <MetricSmall label={copy.selectedMemory} value={formatTokenCount(summary.selectedMemory.length, copy.pending)} tone="primary" />
+            <MetricSmall label={copy.selectedCapabilities} value={formatTokenCount(capabilityCount, copy.pending)} />
+            <MetricSmall label={copy.toolResultRefs} value={formatTokenCount(summary.selectedToolResultRefs.length, copy.pending)} tone={summary.selectedToolResultRefs.length ? "success" : "neutral"} />
+            <MetricSmall label={copy.conflictWarnings} value={formatTokenCount(summary.conflictWarningCount, copy.pending)} tone={summary.conflictWarningCount ? "warning" : "success"} />
+            <MetricSmall label={copy.promptHash} value={summary.promptHash ?? copy.pending} />
+            <MetricSmall label={copy.actualPromptHash} value={summary.actualSystemPromptHash ?? copy.pending} />
+          </div>
+          <RuntimeContextV2RefList label={copy.selectedTools} items={summary.selectedTools} />
+          <RuntimeContextV2RefList label={copy.selectedSkills} items={summary.selectedSkills} />
+          <RuntimeContextV2RefList label={copy.selectedMcpTools} items={summary.selectedMcpTools} />
+          <RuntimeContextV2RefList label={copy.selectedMemory} items={summary.selectedMemory} />
+          <RuntimeContextV2RefList label={copy.toolResultRefs} items={summary.selectedToolResultRefs} />
+          <RuntimeContextV2ValueList label={copy.runtimeEvents} items={summary.runtimeEventCounts} />
+          <RuntimeContextV2ValueList label={copy.replayPhaseCoverage} items={summary.replayPhaseCoverage} />
+          <RuntimeContextV2ValueList label={copy.blockCounts} items={summary.blockCounts} />
+          {summary.conflictWarningCount ? (
+            <div className="rounded-[0.7rem] border border-[var(--warning)] bg-[var(--panel-muted)] p-2 text-xs text-[var(--warning)]">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <ShieldAlertIcon className="size-3.5" />
+                <span>{copy.conflictWarnings}</span>
+              </div>
+              {summary.conflictWarnings.length > 0 ? (
+                <div className="mt-1 grid gap-1 font-[var(--mono-font)] text-[11px]">
+                  {summary.conflictWarnings.slice(0, 4).map((item) => (
+                    <HoverRevealText key={item} value={item} className="text-[var(--warning)]" />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
+function RuntimeContextV2RefList({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <div className="rounded-[0.7rem] border border-[var(--line)] bg-[var(--panel-muted)] p-2 text-xs">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{label}</div>
+      <div className="grid gap-1 font-[var(--mono-font)] text-[11px] text-[var(--ink)]">
+        {items.slice(0, 6).map((item) => (
+          <HoverRevealText key={item} value={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeContextV2ValueList({ label, items }: { label: string; items: Array<{ name: string; value: string }> }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <div className="grid gap-1 rounded-[0.7rem] border border-[var(--line)] bg-[var(--panel-muted)] p-2 text-xs">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{label}</div>
+      {items.slice(0, 6).map((item) => (
+        <div key={`${item.name}:${item.value}`} className="flex min-w-0 items-center justify-between gap-2 font-[var(--mono-font)] text-[11px]">
+          <HoverRevealText value={item.name} className="text-[var(--muted)]" />
+          <HoverRevealText value={item.value} className="text-right text-[var(--ink)]" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function runtimeContextV2ObservabilityCopy(locale: Locale) {
+  if (locale === "zh-CN") {
+    return {
+      title: "Runtime Context V2",
+      loading: "正在加载 Runtime Context V2 证据...",
+      unavailable: "Runtime Context V2 评估报告暂不可用。",
+      empty: "暂无 Runtime Context V2 评估证据。",
+      pending: "n/a",
+      ready: "ready",
+      notReady: "not ready",
+      traceId: "Trace",
+      traceReplayReady: "Trace replay ready",
+      selectedMemory: "Selected memory",
+      selectedCapabilities: "Selected capabilities",
+      selectedTools: "Selected tools",
+      selectedSkills: "Selected skills",
+      selectedMcpTools: "Selected MCP tools",
+      toolResultRefs: "Tool result refs",
+      conflictWarnings: "Conflict warnings",
+      promptHash: "Prompt hash",
+      actualPromptHash: "Actual prompt hash",
+      runtimeEvents: "Runtime events",
+      replayPhaseCoverage: "Replay phase coverage",
+      blockCounts: "Context blocks",
+    };
+  }
+  return {
+    title: "Runtime Context V2",
+    loading: "Loading Runtime Context V2 evidence...",
+    unavailable: "Runtime Context V2 evaluation report is unavailable.",
+    empty: "No Runtime Context V2 evaluation evidence yet.",
+    pending: "n/a",
+    ready: "ready",
+    notReady: "not ready",
+    traceId: "Trace",
+    traceReplayReady: "Trace replay ready",
+    selectedMemory: "Selected memory",
+    selectedCapabilities: "Selected capabilities",
+    selectedTools: "Selected tools",
+    selectedSkills: "Selected skills",
+    selectedMcpTools: "Selected MCP tools",
+    toolResultRefs: "Tool result refs",
+    conflictWarnings: "Conflict warnings",
+    promptHash: "Prompt hash",
+    actualPromptHash: "Actual prompt hash",
+    runtimeEvents: "Runtime events",
+    replayPhaseCoverage: "Replay phase coverage",
+    blockCounts: "Context blocks",
+  };
+}
+
+function runtimeReadKey(source: Record<string, unknown> | null | undefined, key: string): unknown {
+  return source?.[key];
+}
+
+function runtimeRecordFromUnknown(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function runtimeBooleanFromUnknown(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function runtimeFirstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function runtimeMergeStrings(...values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    for (const item of runtimeNormalizeStringArray(value)) {
+      if (!seen.has(item)) {
+        seen.add(item);
+        result.push(item);
+      }
+    }
+  }
+  return result;
+}
+
+function runtimeNormalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item.trim();
+      }
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        return runtimeFirstString(record.block_id, record.memory_id, record.ref, record.id, record.code, record.title, record.kind);
+      }
+      return null;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function runtimeNormalizeValueEntries(value: unknown): Array<{ name: string; value: string }> {
+  const record = runtimeRecordFromUnknown(value);
+  if (!record) {
+    return [];
+  }
+  return Object.entries(record)
+    .map(([name, rawValue]) => ({ name, value: runtimeValueLabel(rawValue) }))
+    .filter((entry) => entry.value.length > 0)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function runtimeValueLabel(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return "";
 }
 
 function buildPromptSectionTokenLedgerSummary(
@@ -4614,6 +5014,11 @@ function buildCapabilityAssemblyDiagnosticsSummary(diagnostics: CapabilityAssemb
   const topSkillsDiscoveryStages = normalizeCapabilityCountEntries(diagnostics?.skills_discovery_stage_durations_ms)
     .filter((entry) => entry.name !== "total")
     .slice(0, 4);
+  const skillRetrievalExpandedQueryTerms = normalizeStringArray(diagnostics?.skill_retrieval_expanded_query_terms).slice(0, 6);
+  const skillRetrievalPrefetchIds = normalizeStringArray(diagnostics?.skill_retrieval_prefetch_ids).slice(0, 6);
+  const skillRetrievalL4RerankTriggered = Boolean(diagnostics?.skill_retrieval_l4_rerank_triggered);
+  const skillRetrievalL5HydeTriggered = Boolean(diagnostics?.skill_retrieval_l5_hyde_triggered);
+  const skillRetrievalL6PrefetchTriggered = Boolean(diagnostics?.skill_retrieval_l6_prefetch_triggered);
   const topVisibleSources = normalizeCapabilityCountEntries(diagnostics?.visible_by_source_kind);
   const topDeferredSources = normalizeCapabilityCountEntries(diagnostics?.deferred_by_source_kind);
   const topVisibleGroups = normalizeCapabilityCountEntries(diagnostics?.visible_by_group);
@@ -4642,6 +5047,11 @@ function buildCapabilityAssemblyDiagnosticsSummary(diagnostics: CapabilityAssemb
     slowestSkillsDiscoveryStage,
     slowestSkillsDiscoveryStageDurationMs,
     topSkillsDiscoveryStages,
+    skillRetrievalExpandedQueryTerms,
+    skillRetrievalPrefetchIds,
+    skillRetrievalL4RerankTriggered,
+    skillRetrievalL5HydeTriggered,
+    skillRetrievalL6PrefetchTriggered,
     topVisibleSources,
     topDeferredSources,
     topVisibleGroups,
@@ -4670,6 +5080,11 @@ function buildCapabilityAssemblyDiagnosticsSummary(diagnostics: CapabilityAssemb
       slowestSkillsDiscoveryStage !== null ||
       slowestSkillsDiscoveryStageDurationMs !== null ||
       topSkillsDiscoveryStages.length > 0 ||
+      skillRetrievalExpandedQueryTerms.length > 0 ||
+      skillRetrievalPrefetchIds.length > 0 ||
+      skillRetrievalL4RerankTriggered ||
+      skillRetrievalL5HydeTriggered ||
+      skillRetrievalL6PrefetchTriggered ||
       topVisibleSources.length > 0 ||
       topDeferredSources.length > 0 ||
       topVisibleGroups.length > 0 ||
@@ -4734,10 +5149,10 @@ function buildMemoryInjectionDiagnosticsSummary(
   const status = normalizeString(diagnostics?.status);
   const snapshotId = normalizeString(diagnostics?.snapshot_id);
   const queryTokens = normalizeInteger(diagnostics?.query_tokens);
-  const curatedMatchCount = normalizeInteger(diagnostics?.curated_match_count);
+  const memoryMatchCount = normalizeInteger(diagnostics?.memory_match_count);
   const archiveHitCount = normalizeInteger(diagnostics?.archive_hit_count);
   const evidenceCount = normalizeInteger(diagnostics?.evidence_count);
-  const providerNoteCount = normalizeInteger(diagnostics?.provider_note_count);
+  const engineNoteCount = normalizeInteger(diagnostics?.engine_note_count);
   const renderedTokensBeforeTruncation = normalizeInteger(diagnostics?.rendered_tokens_before_truncation);
   const renderedTokens = normalizeInteger(diagnostics?.rendered_tokens);
   const tokenBudget = normalizeInteger(diagnostics?.token_budget);
@@ -4750,10 +5165,10 @@ function buildMemoryInjectionDiagnosticsSummary(
     status,
     snapshotId,
     queryTokens,
-    curatedMatchCount,
+    memoryMatchCount,
     archiveHitCount,
     evidenceCount,
-    providerNoteCount,
+    engineNoteCount,
     renderedTokensBeforeTruncation,
     renderedTokens,
     tokenBudget,
@@ -4766,10 +5181,10 @@ function buildMemoryInjectionDiagnosticsSummary(
       status !== null ||
       snapshotId !== null ||
       queryTokens !== null ||
-      curatedMatchCount !== null ||
+      memoryMatchCount !== null ||
       archiveHitCount !== null ||
       evidenceCount !== null ||
-      providerNoteCount !== null ||
+      engineNoteCount !== null ||
       renderedTokensBeforeTruncation !== null ||
       renderedTokens !== null ||
       tokenBudget !== null ||
@@ -4832,6 +5247,15 @@ function normalizeCapabilityCountEntries(source: Record<string, number> | null |
 
 function normalizeString(value: string | null | undefined): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeStringArray(value: string[] | readonly string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item): item is string => Boolean(item));
 }
 
 function formatCapabilityCountLine(label: string, entries: Array<{ name: string; count: number }>): string | null {
@@ -4907,7 +5331,7 @@ function buildContextUsageSummary(
   const isCompacted = usage.compact_status === "compacted" || Boolean(usage.summarization_triggered);
   const isApproaching = !isCompacted && (usage.compact_status === "over_threshold" || (compactPressureRatio ?? pressureRatio) >= 0.85);
   const breakdownRows = contextBreakdownItems(usage, locale);
-  const claudeRows = claudeContextRows(usage, locale);
+  const agentRows = agentContextRows(usage, locale);
   const hasBreakdown = breakdownRows.some((item) => item.tokens !== null);
   const costLabel = formatCost(
     normalizeNumber(usage.estimated_cost_usd),
@@ -4986,7 +5410,7 @@ function buildContextUsageSummary(
     modelLabel: usage.concrete_model ?? usage.model ?? activeModelName ?? "n/a",
     providerLabel: usage.provider ?? null,
     breakdownRows,
-    claudeRows,
+    agentRows,
     hasBreakdown,
     hasProviderUsage,
     hasLastUsage,
@@ -5079,6 +5503,7 @@ function contextCategoryLabel(category: string | null | undefined, locale: Local
         upload_context: "上传上下文",
         approval_context: "审批上下文",
         plan_context: "计划上下文",
+        context_v2_memory: "Context V2 记忆",
         memory_context: "动态记忆",
         conversation_summary: "会话摘要",
         todo_state: "Todo 状态",
@@ -5099,6 +5524,7 @@ function contextCategoryLabel(category: string | null | undefined, locale: Local
         upload_context: "Upload Context",
         approval_context: "Approval Context",
         plan_context: "Plan Context",
+        context_v2_memory: "Context V2 Memory",
         memory_context: "Dynamic Memory",
         conversation_summary: "Conversation Summary",
         todo_state: "Todo State",
@@ -5115,6 +5541,7 @@ function contextCategoryColor(category: string): string {
     tool_schemas: "#8fb7ef",
     skills: "#9f8cf2",
     memory: "#55b585",
+    context_v2_memory: "#3b8f78",
     memory_context: "#4ba978",
     conversation_summary: "#72a980",
     project_context: "#c08a3e",
@@ -5208,7 +5635,7 @@ function contextBreakdownItems(usage: ContextWindowUsageDisplay | null | undefin
   ];
 }
 
-function claudeContextRows(usage: ContextWindowUsageDisplay | null | undefined, locale: Locale): ContextBreakdownItem[] {
+function agentContextRows(usage: ContextWindowUsageDisplay | null | undefined, locale: Locale): ContextBreakdownItem[] {
   if (!usage) {
     return [];
   }
@@ -5242,6 +5669,7 @@ function claudeContextRows(usage: ContextWindowUsageDisplay | null | undefined, 
     read("upload_context", null),
     read("approval_context", null),
     read("plan_context", null),
+    read("context_v2_memory", null),
     read("memory_context", null),
     read("conversation_summary", null),
     read("todo_state", null),
@@ -5259,6 +5687,7 @@ function claudeContextRows(usage: ContextWindowUsageDisplay | null | undefined, 
     read("upload_context", null),
     read("approval_context", null),
     read("plan_context", null),
+    read("context_v2_memory", null),
     read("memory_context", null),
     read("conversation_summary", null),
     read("todo_state", null),
@@ -5893,6 +6322,23 @@ function formatPercent(value: number): string {
     return "<1%";
   }
   return `${Math.round(ratio * 100)}%`;
+}
+
+function formatScoreValue(value: unknown, digits = 2): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "n/a";
+  }
+  return numeric.toFixed(digits);
+}
+
+function formatSignedDelta(value: unknown, digits = 2): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "+0.00";
+  }
+  const sign = numeric >= 0 ? "+" : "";
+  return `${sign}${numeric.toFixed(digits)}`;
 }
 
 function formatTokenCount(value: number | null | undefined, emptyLabel = "n/a"): string {
@@ -6609,6 +7055,10 @@ function RightDrawer({
   threadSettings,
   timelineItems,
   recentTools,
+  runtimeContextV2Diagnostics,
+  runtimeEvaluationReport,
+  runtimeEvaluationReportLoading,
+  runtimeEvaluationReportError,
   uploads,
   activeThread,
   models,
@@ -6625,20 +7075,17 @@ function RightDrawer({
   sessionMemory,
   memoryOverview,
   memoryAudit,
+  memoryHealth,
   memoryEntries,
-  memoryProviders,
-  memoryConflicts,
   memoryStaleness,
-  memoryReviewItems,
   memoryTraceItems,
-  onActivateProvider,
+  hcmsRecallResult,
+  hcmsWhyResult,
+  selectedMemoryId,
+  hcmsHistory,
+  hcmsDiff,
+  onSelectMemoryId,
   onFlushMemory,
-  onApproveMemoryReview,
-  onRejectMemoryReview,
-  onBatchMemoryReview,
-  onResolveMemoryConflict,
-  onReloadProviders,
-  onTestProvider,
   onExportMemory,
   onImportMemory,
   entryDraft,
@@ -6652,6 +7099,10 @@ function RightDrawer({
   sessionSearchQuery,
   onSessionSearchQueryChange,
   onSessionSearch,
+  hcmsQuery,
+  onHcmsQueryChange,
+  onHcmsRecall,
+  onHcmsWhy,
   sessionSearchResult,
   reflectionJobs,
   onRunReflection,
@@ -6717,6 +7168,10 @@ function RightDrawer({
   threadSettings: any;
   timelineItems: RuntimeTimelineItem[];
   recentTools: ToolActivityView[];
+  runtimeContextV2Diagnostics: RuntimeContextV2DiagnosticsView | null;
+  runtimeEvaluationReport: EvaluationThreadReportView | null;
+  runtimeEvaluationReportLoading?: boolean;
+  runtimeEvaluationReportError?: unknown;
   uploads: UploadItemView[];
   activeThread: ThreadView | null;
   models: Array<Record<string, unknown>>;
@@ -6733,20 +7188,17 @@ function RightDrawer({
   sessionMemory: SessionMemoryView | null;
   memoryOverview: any;
   memoryAudit: any;
+  memoryHealth: MemoryHealthResponse | null;
   memoryEntries: MemoryEntryView[];
-  memoryProviders: any[];
-  memoryConflicts: MemoryConflictView[];
   memoryStaleness: MemoryStalenessEntryView[];
-  memoryReviewItems: MemoryReviewItemView[];
   memoryTraceItems: any[];
-  onActivateProvider(providerId: string): Promise<unknown>;
+  hcmsRecallResult: any;
+  hcmsWhyResult: any;
+  selectedMemoryId: string | null;
+  hcmsHistory: any;
+  hcmsDiff: any;
+  onSelectMemoryId(memoryId: string): void;
   onFlushMemory(): Promise<void>;
-  onApproveMemoryReview(reviewId: string): Promise<void>;
-  onRejectMemoryReview(reviewId: string): Promise<void>;
-  onBatchMemoryReview(action: "approve" | "reject", reviewIds: string[]): Promise<void>;
-  onResolveMemoryConflict(conflictId: string, action: string): Promise<void>;
-  onReloadProviders(): Promise<unknown>;
-  onTestProvider(providerId: string): Promise<unknown>;
   onExportMemory(): Promise<unknown>;
   onImportMemory(payload: Record<string, unknown>): Promise<unknown>;
   entryDraft: string;
@@ -6760,6 +7212,10 @@ function RightDrawer({
   sessionSearchQuery: string;
   onSessionSearchQueryChange(value: string): void;
   onSessionSearch(): Promise<unknown>;
+  hcmsQuery: string;
+  onHcmsQueryChange(value: string): void;
+  onHcmsRecall(): Promise<unknown>;
+  onHcmsWhy(): Promise<unknown>;
   sessionSearchResult: SessionSearchResultView | null;
   reflectionJobs: any[];
   onRunReflection(jobId: string): Promise<unknown>;
@@ -6811,7 +7267,6 @@ function RightDrawer({
   const [memoryImportDraft, setMemoryImportDraft] = useState("");
   const [memoryImportError, setMemoryImportError] = useState<string | null>(null);
   const [memoryExportPreview, setMemoryExportPreview] = useState<Record<string, unknown> | null>(null);
-  const [providerTestResult, setProviderTestResult] = useState<Record<string, unknown> | null>(null);
   const runtimeOperatorStatus = threadState?.runtime_operator_status ?? null;
   const subagentTaskSignature = useMemo(
     () =>
@@ -6889,6 +7344,13 @@ function RightDrawer({
 
         {section === "recent_tools" ? (
           <div className="space-y-2">
+            <RuntimeContextV2ObservabilityPanel
+              report={runtimeEvaluationReport}
+              diagnostics={runtimeContextV2Diagnostics}
+              isLoading={Boolean(runtimeEvaluationReportLoading)}
+              error={runtimeEvaluationReportError}
+              locale={locale}
+            />
             {recentTools.length === 0 ? <EmptyPanelText text={ui.drawer.noRecentTools} /> : null}
             {recentTools.map((tool) => (
               <ToolBlock key={`${tool.tool_call_id ?? tool.name}-${tool.started_at ?? ""}`} tool={tool} />
@@ -7110,11 +7572,11 @@ function RightDrawer({
             <SectionCard title={ui.drawer.memoryWorkspace}>
               {memoryOverview ? (
                 <div className="mb-3 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                  <Badge tone={memoryOverview.runtime_mode === "memory_platform" ? "success" : "warning"}>
-                    {String(memoryOverview.runtime_mode ?? "memory_platform")}
+                  <Badge tone={memoryOverview.runtime_mode === "hcms" ? "success" : "warning"}>
+                    {String(memoryOverview.runtime_mode ?? "hcms")}
                   </Badge>
-                  <Badge tone={memoryOverview.legacy_capture_enabled ? "warning" : "neutral"}>
-                    {locale === "zh-CN" ? "Legacy capture" : "Legacy capture"} {memoryOverview.legacy_capture_enabled ? "on" : "off"}
+                  <Badge tone={memoryOverview.capture_status === "native" ? "success" : "warning"}>
+                    {locale === "zh-CN" ? "HCMS capture" : "HCMS capture"} {String(memoryOverview.capture_status ?? "native")}
                   </Badge>
                 </div>
               ) : null}
@@ -7262,16 +7724,64 @@ function RightDrawer({
                       ) : null}
                     </div>
                   ))}
-                  {(sessionSearchResult?.provider_notes ?? []).length ? (
+                  {(sessionSearchResult?.engine_notes ?? []).length ? (
                     <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm text-[var(--muted)]">
                       <div className="font-medium text-[var(--ink)]">{ui.drawer.recallEngineNotes}</div>
-                      {(sessionSearchResult?.provider_notes ?? []).map((note, index) => (
+                      {(sessionSearchResult?.engine_notes ?? []).map((note, index) => (
                         <div key={`${note}-${index}`} className="mt-2">
                           {note}
                         </div>
                       ))}
                     </div>
                   ) : null}
+                </SectionCard>
+
+                <SectionCard title="HCMS Recall">
+                  <Input
+                    placeholder={locale === "zh-CN" ? "搜索超融合记忆" : "Search HCMS memory"}
+                    value={hcmsQuery}
+                    onChange={(event) => onHcmsQueryChange(event.target.value)}
+                  />
+                  <div className="mt-3 flex gap-2">
+                    <Button variant="secondary" onClick={() => void onHcmsRecall()}>
+                      <SearchIcon className="size-4" />
+                      Recall
+                    </Button>
+                    <Button variant="secondary" onClick={() => void onHcmsWhy()}>
+                      <BrainCircuitIcon className="size-4" />
+                      Why
+                    </Button>
+                  </div>
+                  {(hcmsRecallResult?.items ?? []).map((item: any) => (
+                    <div key={item.memory_id} className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-[var(--ink)]">{item.memory?.summary ?? item.memory?.content ?? item.memory_id}</div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
+                            {item.memory?.category ?? "memory"} · score {Number(item.score ?? 0).toFixed(3)} · confidence {Number(item.memory?.confidence ?? 0).toFixed(2)}
+                          </div>
+                        </div>
+                        <Badge tone="neutral">v{item.memory?.version ?? 1}</Badge>
+                      </div>
+                      {item.explanation ? <div className="mt-2 text-sm text-[var(--muted)]">{item.explanation}</div> : null}
+                      {(item.memory?.evidence ?? []).slice(0, 2).map((evidence: any) => (
+                        <div key={evidence.evidence_id} className="mt-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 text-sm text-[var(--muted)]">
+                          <div className="font-medium text-[var(--ink)]">{evidence.type}</div>
+                          <div className="mt-1">{evidence.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {(hcmsWhyResult?.paths ?? []).map((path: any, index: number) => (
+                    <div key={`why-${index}`} className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                      <div className="text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
+                        causal path · strength {Number(path.total_strength ?? 0).toFixed(2)} · confidence {Number(path.confidence ?? 0).toFixed(2)}
+                      </div>
+                      <div className="mt-2 text-sm text-[var(--ink)]">
+                        {(path.nodes ?? []).map((node: any) => node.memory_id).join(" -> ")}
+                      </div>
+                    </div>
+                  ))}
                 </SectionCard>
 
                 <SectionCard title={ui.drawer.recallInspector}>
@@ -7334,6 +7844,9 @@ function RightDrawer({
                         <Button size="sm" variant="secondary" onClick={() => onEditEntry(entry)}>
                           {ui.drawer.edit}
                         </Button>
+                        <Button size="sm" variant="secondary" onClick={() => onSelectMemoryId(entry.memory_id ?? entry.entry_id)}>
+                          HCMS
+                        </Button>
                         <Button size="sm" variant="danger" onClick={() => void onDeleteEntry(entry.entry_id)}>
                           {ui.drawer.delete}
                         </Button>
@@ -7341,21 +7854,49 @@ function RightDrawer({
                     </div>
                   ))}
                 </div>
+                {selectedMemoryId ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                      <div className="text-xs uppercase tracking-[0.06em] text-[var(--muted)]">HCMS History</div>
+                      {(hcmsHistory?.versions ?? []).map((version: any) => (
+                        <div key={version.version_id} className="mt-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
+                          <div className="text-sm font-medium text-[var(--ink)]">v{version.version} · {version.reason || "update"}</div>
+                          <div className="mt-1 text-sm text-[var(--muted)]">{version.summary || version.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                      <div className="text-xs uppercase tracking-[0.06em] text-[var(--muted)]">HCMS Diff</div>
+                      {hcmsDiff ? (
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                          <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1">
+                            {hcmsDiff.from_version != null && hcmsDiff.to_version != null ? `v${hcmsDiff.from_version} → v${hcmsDiff.to_version}` : "version pending"}
+                          </span>
+                          <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1">
+                            confidence {formatSignedDelta(hcmsDiff.confidence_delta ?? 0)}
+                          </span>
+                          <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1">
+                            evidence +{hcmsDiff.evidence_added?.length ?? 0} / -{hcmsDiff.evidence_removed?.length ?? 0}
+                          </span>
+                        </div>
+                      ) : null}
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
+                        {hcmsDiff?.diff || (locale === "zh-CN" ? "暂无差异。" : "No diff available.")}
+                      </pre>
+                    </div>
+                  </div>
+                ) : null}
               </SectionCard>
             )}
 
             <SectionCard title={ui.drawer.platformControls}>
-              <InfoRow label={ui.drawer.activeProvider} value={memoryOverview?.active_provider_id ?? ui.drawer.none} />
+              <InfoRow label={ui.drawer.activeProvider} value={memoryOverview?.active_engine_id ?? ui.drawer.none} />
               <InfoRow label={ui.drawer.stores} value={String(memoryOverview?.store_count ?? 0)} />
               <InfoRow label={ui.drawer.archiveTurns} value={String(memoryOverview?.archive_turn_count ?? 0)} />
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
                 <Button variant="secondary" onClick={() => void onFlushMemory()}>
                   <BrainCircuitIcon className="size-4" />
                   {locale === "zh-CN" ? "沉淀记忆" : "Flush memory"}
-                </Button>
-                <Button variant="secondary" onClick={() => void onReloadProviders()}>
-                  <WrenchIcon className="size-4" />
-                  {locale === "zh-CN" ? "重载 Provider" : "Reload providers"}
                 </Button>
                 <Button
                   variant="secondary"
@@ -7408,84 +7949,91 @@ function RightDrawer({
                   </pre>
                 </div>
               ) : null}
+              <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "HCMS 健康" : "HCMS Health"}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      {locale === "zh-CN" ? "基于置信度、证据、保留分和关系质量。" : "Confidence, evidence, retention, and relation quality."}
+                    </div>
+                  </div>
+                  <Badge tone={memoryHealth?.status === "ok" ? "success" : memoryHealth?.status === "warning" ? "warning" : "neutral"}>
+                    {memoryHealth?.status ?? "unknown"}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <MetricSmall label={locale === "zh-CN" ? "质量" : "Quality"} value={formatScoreValue(memoryHealth?.quality_score)} tone="primary" />
+                  <MetricSmall label={locale === "zh-CN" ? "低置信" : "Low confidence"} value={String(memoryHealth?.issues?.filter((issue) => issue.kind === "low_confidence").length ?? 0)} tone="warning" />
+                  <MetricSmall label={locale === "zh-CN" ? "缺证据" : "Missing evidence"} value={String(memoryHealth?.issues?.filter((issue) => issue.kind === "missing_evidence").length ?? 0)} tone="warning" />
+                  <MetricSmall label={locale === "zh-CN" ? "关系冲突" : "Relation issues"} value={String(memoryHealth?.conflict_count ?? memoryAudit?.conflict_count ?? 0)} />
+                  <MetricSmall label={locale === "zh-CN" ? "遗忘候选" : "Decay candidates"} value={String(memoryHealth?.stale_count ?? memoryAudit?.staleness_count ?? 0)} />
+                  <MetricSmall label={locale === "zh-CN" ? "生成时间" : "Generated"} value={memoryHealth?.generated_at ?? ui.drawer.none} />
+                </div>
+                {(memoryHealth?.recommendations ?? []).length ? (
+                  <div className="mt-3 space-y-2">
+                    {(memoryHealth?.recommendations ?? []).slice(0, 4).map((recommendation, index) => (
+                      <div key={`memory-health-rec-${index}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
+                        {recommendation}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
+                <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "HCMS 层健康" : "HCMS Store Health"}</div>
+                {(memoryHealth?.stores ?? []).length === 0 ? (
+                  <div className="mt-2 text-sm text-[var(--muted)]">{locale === "zh-CN" ? "尚未加载 HCMS 层健康。" : "No HCMS store health loaded."}</div>
+                ) : null}
+                {(memoryHealth?.stores ?? []).map((store) => (
+                  <div key={store.store_id} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="break-words font-medium text-[var(--ink)]">{store.store_id}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
+                          {store.layer_id ?? "layer"} · {store.status ?? "unknown"}
+                        </div>
+                      </div>
+                      <Badge tone={store.status === "ok" ? "success" : store.status === "warning" ? "warning" : "neutral"}>
+                        {formatScoreValue(store.quality_score)}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <MetricSmall label={locale === "zh-CN" ? "活动" : "Active"} value={String(store.active_count ?? 0)} tone="success" />
+                      <MetricSmall label={locale === "zh-CN" ? "证据缺口" : "Evidence gaps"} value={String(store.missing_evidence_count ?? 0)} tone="warning" />
+                      <MetricSmall label={locale === "zh-CN" ? "保留均值" : "Retention avg"} value={formatScoreValue(store.retention_average)} />
+                    </div>
+                    {(store.issues ?? []).length ? (
+                      <div className="mt-3 space-y-2">
+                        {(store.issues ?? []).slice(0, 3).map((issue, index) => (
+                          <div key={`${store.store_id}-issue-${index}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel-muted)] px-3 py-2 text-xs text-[var(--muted)]">
+                            <span className="font-medium text-[var(--ink)]">{issue.kind}</span>
+                            {" · "}
+                            {issue.message}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
               {memoryAudit ? (
                 <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                  <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "审计快照" : "Audit Snapshot"}</div>
+                  <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "HCMS 信号" : "HCMS Signals"}</div>
                   <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                    <MetricSmall label={locale === "zh-CN" ? "待审" : "Review"} value={String(memoryAudit.pending_review_count ?? 0)} />
-                    <MetricSmall label={locale === "zh-CN" ? "冲突" : "Conflicts"} value={String(memoryAudit.conflict_count ?? 0)} />
-                    <MetricSmall label={locale === "zh-CN" ? "过期" : "Stale"} value={String(memoryAudit.staleness_count ?? 0)} />
+                    <MetricSmall label={locale === "zh-CN" ? "观察队列" : "Observation queue"} value={String(memoryAudit.observation_queue_count ?? 0)} />
+                    <MetricSmall label={locale === "zh-CN" ? "关系冲突" : "Relation conflicts"} value={String(memoryAudit.conflict_count ?? 0)} />
+                    <MetricSmall label={locale === "zh-CN" ? "遗忘候选" : "Decay candidates"} value={String(memoryAudit.staleness_count ?? 0)} />
                   </div>
-                  {(memoryAudit.providers ?? []).length ? (
+                  {Object.keys(memoryHealth?.engine_health ?? {}).length ? (
                     <div className="mt-3 text-xs text-[var(--muted)]">
-                      {(memoryAudit.providers ?? []).map((provider: any) => `${provider.provider_id}:${provider.health ?? "unknown"}`).join(" · ")}
+                      {Object.entries(memoryHealth?.engine_health ?? {}).map(([engineId, status]) => `${engineId}:${status}`).join(" · ")}
                     </div>
                   ) : null}
                 </div>
               ) : null}
               <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "待审记忆" : "Review Queue"}</div>
-                {memoryReviewItems.length === 0 ? <div className="mt-2 text-sm text-[var(--muted)]">{locale === "zh-CN" ? "没有待审候选。" : "No pending candidates."}</div> : null}
-                {memoryReviewItems.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button size="sm" variant="primary" onClick={() => void onBatchMemoryReview("approve", memoryReviewItems.map((item) => item.review_id))}>
-                      {locale === "zh-CN" ? "批量批准" : "Approve all"}
-                    </Button>
-                    <Button size="sm" variant="secondary" onClick={() => void onBatchMemoryReview("reject", memoryReviewItems.map((item) => item.review_id))}>
-                      {locale === "zh-CN" ? "批量拒绝" : "Reject all"}
-                    </Button>
-                  </div>
-                ) : null}
-                {memoryReviewItems.map((item) => (
-                  <div key={item.review_id} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="text-sm font-medium text-[var(--ink)]">{item.category}</div>
-                      <Badge tone="warning">{item.layer_id}</Badge>
-                    </div>
-                    <div className="mt-2 text-sm text-[var(--muted)]">{item.content}</div>
-                    <div className="mt-2 text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
-                      confidence {Number(item.confidence ?? 0).toFixed(2)} · salience {Number(item.salience ?? 0).toFixed(2)}
-                    </div>
-                    {item.rationale ? <div className="mt-2 text-xs text-[var(--muted)]">{item.rationale}</div> : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="primary" onClick={() => void onApproveMemoryReview(item.review_id)}>
-                        {locale === "zh-CN" ? "批准" : "Approve"}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => void onRejectMemoryReview(item.review_id)}>
-                        {locale === "zh-CN" ? "拒绝" : "Reject"}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                <div className="font-medium text-[var(--ink)]">{ui.drawer.conflictQueue}</div>
-                {memoryConflicts.length === 0 ? <div className="mt-2 text-sm text-[var(--muted)]">{ui.drawer.noConflicts}</div> : null}
-                {memoryConflicts.map((conflict) => (
-                  <div key={conflict.conflict_id} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
-                    <div className="text-sm font-medium text-[var(--ink)]">{conflict.reason}</div>
-                    <div className="mt-1 text-xs text-[var(--muted)]">
-                      {conflict.memory_id} {"<->"} {conflict.conflicting_memory_id}
-                    </div>
-                    {conflict.memory_content ? <div className="mt-2 text-sm text-[var(--ink)]">{conflict.memory_content}</div> : null}
-                    {conflict.conflicting_content ? <div className="mt-2 text-sm text-[var(--muted)]">{conflict.conflicting_content}</div> : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => void onResolveMemoryConflict(conflict.conflict_id, "keep_both")}>
-                        {locale === "zh-CN" ? "都保留" : "Keep both"}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => void onResolveMemoryConflict(conflict.conflict_id, "keep_memory")}>
-                        {locale === "zh-CN" ? "保留左侧" : "Keep left"}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => void onResolveMemoryConflict(conflict.conflict_id, "keep_conflicting")}>
-                        {locale === "zh-CN" ? "保留右侧" : "Keep right"}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                <div className="font-medium text-[var(--ink)]">{ui.drawer.stalenessQueue}</div>
-                {memoryStaleness.length === 0 ? <div className="mt-2 text-sm text-[var(--muted)]">{ui.drawer.noStaleness}</div> : null}
+                <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "主动遗忘" : "Active Forgetting"}</div>
+                {memoryStaleness.length === 0 ? <div className="mt-2 text-sm text-[var(--muted)]">{locale === "zh-CN" ? "没有遗忘候选。" : "No decay candidates."}</div> : null}
                 {memoryStaleness.map((item) => (
                   <div key={`${item.memory_id}-${item.layer_id}`} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3">
                     <div className="text-sm font-medium text-[var(--ink)]">{item.memory_id}</div>
@@ -7498,71 +8046,6 @@ function RightDrawer({
                     </div>
                   </div>
                 ))}
-              </div>
-              <div className="mt-4 space-y-3">
-                {memoryProviders.map((provider) => (
-                  <div key={provider.provider_id} className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="break-words font-medium text-[var(--ink)]">{provider.display_name}</div>
-                        <div className="mt-1 break-words text-xs uppercase tracking-[0.06em] text-[var(--muted)]">
-                          {provider.family} · {provider.kind ?? "local_curated"} · {provider.origin ?? "builtin"}
-                        </div>
-                      </div>
-                      <Badge tone={provider.health === "ok" ? "success" : provider.health === "error" ? "danger" : "neutral"}>
-                        {provider.active ? ui.drawer.active : provider.health ?? "unknown"}
-                      </Badge>
-                    </div>
-                    {(provider.roles ?? []).length ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {(provider.roles ?? []).map((role: string) => (
-                          <Badge key={`${provider.provider_id}-${role}`} tone="neutral">
-                            {role}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="mt-2 text-xs text-[var(--muted)]">
-                      {locale === "zh-CN" ? "最近同步" : "Last sync"} {provider.last_sync_at ?? ui.drawer.none}
-                    </div>
-                    {(provider.diagnostics ?? []).length ? (
-                      <div className="mt-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-2 text-xs text-[var(--muted)]">
-                        {(provider.diagnostics ?? []).slice(0, 4).map((line: string, index: number) => (
-                          <div key={`${provider.provider_id}-diag-${index}`} className="break-words">
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant={provider.active ? "secondary" : "primary"}
-                        onClick={() => void onActivateProvider(provider.provider_id)}
-                      >
-                        {provider.active ? ui.drawer.active : ui.drawer.activateProvider(provider.display_name)}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={async () => {
-                          const result = (await onTestProvider(provider.provider_id)) as Record<string, unknown>;
-                          setProviderTestResult(result);
-                        }}
-                      >
-                        {locale === "zh-CN" ? "测试" : "Test"}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                {providerTestResult ? (
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--panel-muted)] p-3">
-                    <div className="font-medium text-[var(--ink)]">{locale === "zh-CN" ? "最近 Provider 测试" : "Latest provider test"}</div>
-                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
-                      {JSON.stringify(providerTestResult, null, 2)}
-                    </pre>
-                  </div>
-                ) : null}
               </div>
               <div className="mt-4 space-y-3">
                 {reflectionJobs.map((job) => (

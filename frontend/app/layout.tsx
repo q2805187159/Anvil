@@ -7,6 +7,8 @@ import { ThemeProvider } from "@/src/core/theme/provider";
 import { I18nProvider } from "@/src/core/i18n";
 import { TooltipProvider } from "@/src/components/ui/tooltip";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Anvil",
   description: "Operator workspace for the Anvil gateway",

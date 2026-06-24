@@ -55,11 +55,7 @@ def build_custom_layers(base_path: Path) -> list[ConfigLayer]:
                         "model_name": "gpt-5.4",
                     }
                 },
-                "memory": {
-                    "enabled": True,
-                    "prefetch_once_per_turn": True,
-                    "store_path": str(base_path / "memory-store"),
-                },
+                "hcms": {"enabled": True},
                 "skills_config": {
                     "enabled": True,
                     "external_dirs": [str(repo_skills)],
@@ -559,7 +555,7 @@ def test_gateway_exposes_tools_plugins_mcp_and_skill_governance(
         assert uninstall.status_code == 200
 
 
-def test_gateway_upserts_codex_style_mcp_servers(
+def test_gateway_upserts_json_mcp_servers(
     gateway_app_factory,
     contract_tmp_path,
     monkeypatch,
@@ -793,7 +789,7 @@ def test_gateway_installs_local_plugin_and_bundled_mcp(
         assert any(item["plugin_id"] == "demo-plugin" for item in plugins.json())
 
 
-def test_gateway_installs_plugin_memory_provider_and_reloads_provider_catalog(
+def test_gateway_ignores_legacy_plugin_memory_metadata_and_keeps_engine_catalog_builtin(
     gateway_app_factory,
     contract_tmp_path,
     monkeypatch,
@@ -804,13 +800,13 @@ def test_gateway_installs_plugin_memory_provider_and_reloads_provider_catalog(
     (plugin_source / "plugin.json").write_text(
         json.dumps(
             {
-                "name": "memory-provider-plugin",
-                "display_name": "Memory Provider Plugin",
+                "name": "legacy-memory-metadata-plugin",
+                "display_name": "Legacy Memory Metadata Plugin",
                 "memory_providers": [
                     {
                         "provider_id": "plugin-local-memory",
                         "display_name": "Plugin Local Memory",
-                        "kind": "local_curated",
+                        "kind": "hcms",
                         "roles": ["sync", "session_end", "delegation"],
                         "enabled": True,
                     }
@@ -830,14 +826,15 @@ def test_gateway_installs_plugin_memory_provider_and_reloads_provider_catalog(
 
         plugins = client.get("/plugins")
         assert plugins.status_code == 200
-        installed = next(item for item in plugins.json() if item["plugin_id"] == "memory-provider-plugin")
-        assert installed["memory_provider_count"] == 1
+        installed = next(item for item in plugins.json() if item["plugin_id"] == "legacy-memory-metadata-plugin")
+        assert "memory_provider_count" not in installed
+        assert "memory_providers" not in installed
 
-        providers = client.post("/memory/providers/reload")
-        assert providers.status_code == 200
-        assert any(item["provider_id"] == "plugin-local-memory" for item in providers.json())
+        engines = client.post("/memory/engines/reload")
+        assert engines.status_code == 200
+        assert {item["engine_id"] for item in engines.json()} == {"hcms"}
 
-        test = client.post("/memory/providers/plugin-local-memory/test")
+        test = client.post("/memory/engines/hcms/test")
         assert test.status_code == 200
         assert test.json()["ok"] is True
 
@@ -972,17 +969,16 @@ def test_gateway_manages_plugin_registries_and_scans_plugin_directories(
         assert all(item["plugin_id"] != "team-plugin" for item in after_delete.json())
 
 
-def test_gateway_scans_codex_style_plugin_cache_sources(
+def test_gateway_scans_plugin_cache_sources(
     gateway_app_factory,
     contract_tmp_path,
     monkeypatch,
 ) -> None:
     monkeypatch.setattr("app.gateway.services._runtime_repo_root", lambda: contract_tmp_path)
-    registry_root = contract_tmp_path / "codex-cache"
+    registry_root = contract_tmp_path / "plugin-cache"
     plugin_source = registry_root / "browser" / "26.0.0"
-    manifest_dir = plugin_source / ".codex-plugin"
-    manifest_dir.mkdir(parents=True)
-    (manifest_dir / "plugin.json").write_text(
+    plugin_source.mkdir(parents=True)
+    (plugin_source / "anvil.plugin.json").write_text(
         json.dumps(
             {
                 "name": "browser",
@@ -992,7 +988,7 @@ def test_gateway_scans_codex_style_plugin_cache_sources(
                 "keywords": ["browser", "automation"],
                 "interface": {
                     "displayName": "Browser",
-                    "shortDescription": "Control the in-app browser with Codex",
+                    "shortDescription": "Control the in-app browser with Anvil",
                     "developerName": "OpenAI",
                 },
             }
@@ -1005,8 +1001,8 @@ def test_gateway_scans_codex_style_plugin_cache_sources(
         add = client.post(
             "/plugins/registries",
             json={
-                "registry_id": "codex-cache",
-                "name": "Codex cache",
+                "registry_id": "plugin-cache",
+                "name": "Plugin cache",
                 "source": str(registry_root),
                 "trust_level": "curated",
             },
@@ -1018,7 +1014,7 @@ def test_gateway_scans_codex_style_plugin_cache_sources(
         assert catalog.status_code == 200
         entry = next(item for item in catalog.json() if item["plugin_id"] == "browser")
         assert entry["name"] == "Browser"
-        assert entry["description"] == "Control the in-app browser with Codex"
+        assert entry["description"] == "Control the in-app browser with Anvil"
         assert entry["author"] == "OpenAI"
         assert entry["tags"] == ["browser", "automation"]
         assert entry["source"].endswith(str(Path("browser") / "26.0.0"))

@@ -49,13 +49,13 @@ from anvil.mcp import (
     redact_sensitive_config,
     upsert_mcp_servers_in_config_file,
 )
-from anvil.memory_platform import MemoryRecallBenchmarkCase, MemoryRecallBenchmarkSuite
+from anvil.memory import MemoryRecallBenchmarkCase, MemoryRecallBenchmarkSuite, ReflectionJob, ReflectionScheduleKind
 from anvil.self_upgrade import SelfUpgradeHealthService
 from anvil.skills.loader import (
     default_installed_skill_root,
     default_repo_skill_root,
 )
-from anvil.runtime.runs import EMPTY_FINAL_ASSISTANT_MESSAGE, RunEventEnvelope, RunResult, RunSnapshotProjector, list_run_event_page
+from anvil.runtime.runs import EMPTY_FINAL_ASSISTANT_MESSAGE, RunEvent, RunEventEnvelope, RunResult, RunSnapshotProjector, list_run_event_page
 from anvil.runtime.serialization import strip_inline_thinking_tags
 from anvil.trajectory import (
     EvaluationReportEvaluatorResult,
@@ -87,6 +87,12 @@ from .models import (
     CapabilityPromptView,
     CapabilityResourceView,
     CompanionArtifactView,
+    BasicConfigItemView,
+    BasicConfigOverviewView,
+    BasicConfigTestRequest,
+    BasicConfigTestView,
+    BasicConfigUpdateRequest,
+    BasicConfigUpdateView,
     ConfigOverviewMetricView,
     ConfigOverviewView,
     DocumentOutlineEntryView,
@@ -108,15 +114,6 @@ from .models import (
     MemoryGovernanceBatchRequest,
     MemoryGovernanceBatchResponse,
     MemoryGovernancePlanItemView,
-    ProfileFacetAuditEntryView,
-    ProfileFacetAuditResponse,
-    ProfileFacetGovernanceRequest,
-    ProfileFacetGovernanceResponse,
-    ProfileFacetListResponse,
-    ProfileFacetPolicyView,
-    ProfileFacetRebuildRequest,
-    ProfileFacetRebuildResponse,
-    ProfileFacetView,
     MemoryMaintenanceAutomationRequest,
     MemoryMaintenanceAutomationRunResponse,
     MemoryMaintenanceAutomationStatusResponse,
@@ -129,7 +126,7 @@ from .models import (
     MemoryEntryCreateRequest,
     MemoryEntryUpdateRequest,
     MemoryEntryView,
-    MemoryProviderAdminResponse,
+    MemoryEngineAdminResponse,
     MessageContentBlockView,
     MessageEditResendRequest,
     MessageWindowView,
@@ -139,6 +136,24 @@ from .models import (
     MemoryTraceRequest,
     MemoryTraceResponse,
     MemoryTraceView,
+    HCMSQueryRequest,
+    HCMSMetricsView,
+    HCMSEvidenceView,
+    HCMSMemoryView,
+    HCMSMemoryResponse,
+    HCMSMemoryListResponse,
+    HCMSMemoryDeleteResponse,
+    HCMSRelationView,
+    HCMSMemoryRelationsResponse,
+    HCMSRecallItemView,
+    HCMSRecallResponse,
+    HCMSCausalNodeView,
+    HCMSCausalEdgeView,
+    HCMSWhyPathView,
+    HCMSWhyResponse,
+    HCMSMemoryVersionView,
+    HCMSMemoryHistoryResponse,
+    HCMSMemoryDiffResponse,
     MemoryRecallBenchmarkCaseResultView,
     MemoryRecallBenchmarkRequest,
     MemoryRecallBenchmarkResponse,
@@ -157,14 +172,9 @@ from .models import (
     MemoryAdminExportView,
     MemoryAdminImportRequest,
     MemoryAdminImportResponse,
-    MemoryProviderView,
-    MemoryProviderTestResponse,
+    MemoryEngineView,
+    MemoryEngineTestResponse,
     MemoryRetentionEntryView,
-    MemoryReviewDecisionRequest,
-    MemoryReviewBatchRequest,
-    MemoryReviewBatchResponse,
-    MemoryReviewItemView,
-    MemoryReviewResponse,
     MemoryQualityIssueView,
     MemoryStoreHealthView,
     MemoryStoreView,
@@ -206,6 +216,7 @@ from .models import (
     SelfUpgradeDomainHealthView,
     SelfUpgradeHealthResponse,
     RuntimeCapabilitiesView,
+    RuntimeContextV2DiagnosticsView,
     RuntimeOperatorStatusView,
     RuntimePhaseTimingMarkView,
     RuntimePhaseTimingsView,
@@ -1228,12 +1239,44 @@ def resume_thread_approval(deps: AppRuntimeDeps, thread_id: str, body: ApprovalR
 
 def cancel_thread_approval(deps: AppRuntimeDeps, thread_id: str, body: ApprovalCancelRequest) -> ThreadStateView:
     try:
+        previous = deps.thread_service.get_thread_state(thread_id)
         updated = deps.thread_service.cancel_pending_approval(thread_id, reason=body.reason)
     except ValueError as exc:
         message = str(exc)
         if "pending approval" in message:
             raise GatewayAdapterError(status.HTTP_409_CONFLICT, "approval_not_pending", message) from exc
         raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "thread_not_found", f"thread '{thread_id}' was not found") from exc
+    approval_request = previous.approvals.approval_request
+    if approval_request is not None:
+        sequence = deps.run_event_log_store.last_sequence(
+            thread_id=thread_id,
+            run_id=previous.identity.run_id,
+        )
+        deps.run_event_log_store.append(
+            RunEventEnvelope.from_run_event(
+                RunEvent(
+                    event="approval_resolved",
+                    data={
+                        "thread_id": thread_id,
+                        "run_id": previous.identity.run_id,
+                        "request_id": approval_request.request_id,
+                        "decision": "cancelled",
+                        "reason": body.reason,
+                        "action_kind": approval_request.action_kind,
+                        "requested_permissions": list(approval_request.requested_permissions),
+                        "scope_options": list(approval_request.scope_options),
+                        "tool_name": approval_request.tool_name,
+                        "approval_profile": approval_request.approval_profile,
+                        "risk_category": approval_request.risk_category,
+                        "capability_group": approval_request.capability_group,
+                        "execution_mode": updated.execution.execution_mode.value,
+                    },
+                ),
+                run_id=previous.identity.run_id or thread_id,
+                thread_id=thread_id,
+                sequence=sequence + 1,
+            )
+        )
 
     artifact_refs = build_canonical_artifact_refs(deps, updated.identity.thread_id)
     execution_policy = deps.thread_service.build_execution_policy_projection(updated)
@@ -2501,6 +2544,223 @@ def get_config_overview(deps: AppRuntimeDeps) -> ConfigOverviewView:
     return _build_config_overview(deps)
 
 
+def get_basic_config(deps: AppRuntimeDeps) -> BasicConfigOverviewView:
+    return _build_basic_config_overview(deps, config_path=_writable_config_path())
+
+
+async def update_basic_config(
+    deps: AppRuntimeDeps,
+    request: BasicConfigUpdateRequest,
+) -> BasicConfigUpdateView:
+    config_path = _writable_config_path()
+    original_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    dotenv_path = config_path.parent / ".env"
+    original_dotenv = dotenv_path.read_text(encoding="utf-8") if dotenv_path.exists() else None
+    try:
+        payload = read_config_file(config_path) if config_path.exists() else _minimal_home_config_payload()
+        git_payload = payload.setdefault("git", {})
+        if not isinstance(git_payload, dict):
+            raise GatewayAdapterError(status.HTTP_409_CONFLICT, "config_file_invalid", "config key 'git' must be a mapping")
+        git_payload["enabled"] = True
+        git_payload["required"] = True
+        git_payload["provider"] = _clean_string(request.git_provider) or str(git_payload.get("provider") or "github")
+        git_token_env = _clean_git_env_name(request.git_token_env) or _clean_git_env_name(git_payload.get("token_env")) or "GITHUB_TOKEN"
+        git_payload["token_env"] = git_token_env
+        _assign_optional_config_value(git_payload, "user_name", request.git_user_name)
+        _assign_optional_config_value(git_payload, "user_email", request.git_user_email)
+        _assign_optional_config_value(git_payload, "remote_url", request.git_remote_url)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        if request.git_token:
+            _upsert_dotenv_value(dotenv_path, git_token_env, request.git_token)
+            os.environ[git_token_env] = request.git_token
+        load_dotenv_file(dotenv_path, override=True)
+        _replace_runtime_config_layer(deps, build_config_layers_from_file(config_path)[0])
+        reload_view = await admin_reload(deps, scope="config")
+    except GatewayAdapterError:
+        _restore_config_files(config_path, original_text, dotenv_path, original_dotenv)
+        raise
+    except Exception:
+        _restore_config_files(config_path, original_text, dotenv_path, original_dotenv)
+        try:
+            await admin_reload(deps, scope="config")
+        except Exception:
+            pass
+        raise
+
+    basics = _build_basic_config_overview(deps, config_path=config_path)
+    return BasicConfigUpdateView(
+        config_path=str(config_path),
+        dotenv_path=str(dotenv_path) if request.git_token else None,
+        config_fingerprint=str(reload_view.get("config_fingerprint") or deps.config_result.fingerprint),
+        basics=basics,
+    )
+
+
+def test_basic_config(deps: AppRuntimeDeps, request: BasicConfigTestRequest) -> BasicConfigTestView:
+    item_id = (request.item_id or "").strip()
+    if not item_id:
+        raise GatewayAdapterError(status.HTTP_400_BAD_REQUEST, "invalid_basic_config_item", "item_id is required")
+    checked_at = utc_now().isoformat()
+    if item_id == "git_token":
+        git = deps.config_result.effective_config.git
+        token_env = _clean_git_env_name(git.token_env) or "GITHUB_TOKEN"
+        token = os.environ.get(token_env)
+        ok = bool(token)
+        return BasicConfigTestView(
+            item_id=item_id,
+            ok=ok,
+            status="ready" if ok else "missing",
+            message=f"{token_env} is configured for HCMS Git versioning." if ok else f"{token_env} is required for HCMS Git versioning.",
+            checked_at=checked_at,
+            config_fingerprint=deps.config_result.fingerprint,
+        )
+    if item_id == "git_author":
+        git = deps.config_result.effective_config.git
+        ok = bool(git.user_name and git.user_email)
+        return BasicConfigTestView(
+            item_id=item_id,
+            ok=ok,
+            status="ready" if ok else "missing",
+            message="Git author metadata is configured." if ok else "Git author name and email are optional but not both configured.",
+            checked_at=checked_at,
+            config_fingerprint=deps.config_result.fingerprint,
+        )
+    if item_id == "git_binary":
+        git_path = shutil.which("git")
+        ok = bool(git_path)
+        return BasicConfigTestView(
+            item_id=item_id,
+            ok=ok,
+            status="ready" if ok else "missing",
+            message=f"git executable found at {git_path}." if ok else "git executable was not found on PATH.",
+            checked_at=checked_at,
+            config_fingerprint=deps.config_result.fingerprint,
+        )
+    if item_id == "git_remote":
+        git = deps.config_result.effective_config.git
+        remote_url = _clean_string(git.remote_url)
+        ok = bool(remote_url and _looks_like_git_remote_url(remote_url))
+        return BasicConfigTestView(
+            item_id=item_id,
+            ok=ok,
+            status="ready" if ok else "optional",
+            message=f"Git remote URL is configured for HCMS metadata: {remote_url}" if ok else "Git remote URL is optional and not configured.",
+            checked_at=checked_at,
+            config_fingerprint=deps.config_result.fingerprint,
+        )
+    raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "basic_config_item_not_found", f"basic config item '{item_id}' was not found")
+
+
+def _build_basic_config_overview(deps: AppRuntimeDeps, *, config_path: Path) -> BasicConfigOverviewView:
+    git = deps.config_result.effective_config.git
+    dotenv_path = config_path.parent / ".env"
+    token_env = _clean_git_env_name(git.token_env) or "GITHUB_TOKEN"
+    token_configured = bool(os.environ.get(token_env))
+    git_required = bool(git.enabled and git.required)
+    required_items = [
+        BasicConfigItemView(
+            item_id="git_token",
+            label="Git token",
+            description="Required by HCMS Git-like memory version control.",
+            category="required",
+            required=True,
+            configured=token_configured,
+            testable=True,
+            token_env=token_env,
+            value=None,
+            secret=True,
+            status="ready" if token_configured else "missing",
+            message=f"{token_env} is configured." if token_configured else f"{token_env} is required.",
+        )
+    ] if git_required else []
+    author_value = _git_author_value(git.user_name, git.user_email)
+    extension_items = [
+        BasicConfigItemView(
+            item_id="git_author",
+            label="Git author",
+            description="Optional author metadata for local HCMS version records.",
+            category="extension",
+            required=False,
+            configured=bool(git.user_name and git.user_email),
+            testable=True,
+            value=author_value,
+            secret=False,
+            status="ready" if git.user_name and git.user_email else "optional",
+            message="Author metadata configured." if git.user_name and git.user_email else "Optional author metadata is not fully configured.",
+        ),
+        BasicConfigItemView(
+            item_id="git_binary",
+            label="Git executable",
+            description="Optional local git binary probe used by operator diagnostics.",
+            category="extension",
+            required=False,
+            configured=bool(shutil.which("git")),
+            testable=True,
+            value=shutil.which("git"),
+            secret=False,
+            status="ready" if shutil.which("git") else "missing",
+            message="git executable is available." if shutil.which("git") else "git executable is not on PATH.",
+        ),
+        BasicConfigItemView(
+            item_id="git_remote",
+            label="Git remote",
+            description="Optional remote repository URL for HCMS version metadata.",
+            category="extension",
+            required=False,
+            configured=bool(_clean_string(git.remote_url)),
+            testable=True,
+            value=_clean_string(git.remote_url),
+            secret=False,
+            status="ready" if _looks_like_git_remote_url(_clean_string(git.remote_url)) else "optional",
+            message="Git remote URL configured." if _clean_string(git.remote_url) else "Optional remote URL is not configured.",
+        ),
+    ]
+    configured_required = sum(1 for item in required_items if item.configured)
+    return BasicConfigOverviewView(
+        config_path=str(config_path),
+        dotenv_path=str(dotenv_path),
+        config_fingerprint=deps.config_result.fingerprint,
+        required_count=len(required_items),
+        configured_required_count=configured_required,
+        missing_required_count=max(len(required_items) - configured_required, 0),
+        required_items=required_items,
+        extension_items=extension_items,
+    )
+
+
+def _git_author_value(name: str | None, email: str | None) -> str | None:
+    if name and email:
+        return f"{name} <{email}>"
+    return name or email
+
+
+def _clean_git_env_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if cleaned.startswith("${") and cleaned.endswith("}"):
+        cleaned = cleaned[2:-1].strip()
+    return cleaned or None
+
+
+def _looks_like_git_remote_url(value: str | None) -> bool:
+    if not value:
+        return False
+    lowered = value.strip().lower()
+    return lowered.startswith(("https://", "http://", "ssh://", "git@")) or lowered.endswith(".git")
+
+
+def _assign_optional_config_value(payload: dict[str, object], key: str, value: str | None) -> None:
+    if value is None:
+        return
+    cleaned = value.strip()
+    if cleaned:
+        payload[key] = cleaned
+    else:
+        payload.pop(key, None)
+
+
 def _build_config_overview(deps: AppRuntimeDeps) -> ConfigOverviewView:
     effective_config = deps.config_result.effective_config
     models = effective_config.models.values()
@@ -2578,10 +2838,17 @@ def _build_config_overview(deps: AppRuntimeDeps) -> ConfigOverviewView:
             memory_store_count = int(memory_overview.store_count)
         except Exception:
             memory_store_count = 0
+    basic_overview = _build_basic_config_overview(deps, config_path=_writable_config_path())
 
     return ConfigOverviewView(
         status="ok",
         config_fingerprint=deps.config_result.fingerprint,
+        basics=ConfigOverviewMetricView(
+            total=basic_overview.required_count,
+            ready=basic_overview.configured_required_count,
+            issue_count=basic_overview.missing_required_count,
+            status="ready" if basic_overview.missing_required_count == 0 else "missing_required",
+        ),
         models=ConfigOverviewMetricView(
             total=model_total,
             available=model_available,
@@ -3268,8 +3535,6 @@ def list_plugins(deps: AppRuntimeDeps) -> list[PluginView]:
                     for prompt in item.get("prompts", [])
                     if str(prompt.get("prompt_id") or prompt.get("name") or "").strip()
                 ],
-                memory_providers=[dict(provider) for provider in item.get("memory_providers", []) if isinstance(provider, dict)],
-                memory_provider_count=int(item.get("memory_provider_count", 0)),
                 catalog_metadata=dict(item.get("catalog_metadata", {})),
                 discovery_source=str(item.get("discovery_source") or "plugin_config"),
             )
@@ -3307,11 +3572,9 @@ def list_plugin_catalog(deps: AppRuntimeDeps) -> list[PluginCatalogEntryView]:
                 mcp_server_count=int(item.get("mcp_server_count", 0)),
                 resource_count=int(item.get("resource_count", 0)),
                 prompt_count=int(item.get("prompt_count", 0)),
-                memory_provider_count=int(item.get("memory_provider_count", 0)),
                 skill_roots=[str(root) for root in item.get("skill_roots", []) if str(root).strip()],
                 tool_names=[str(name) for name in item.get("tool_names", []) if str(name).strip()],
                 mcp_servers=[str(server) for server in item.get("mcp_servers", []) if str(server).strip()],
-                memory_providers=[str(provider) for provider in item.get("memory_providers", []) if str(provider).strip()],
                 permissions=[str(permission) for permission in item.get("permissions", []) if str(permission).strip()],
                 catalog_metadata=dict(item.get("catalog_metadata", {})),
                 discovery_source=str(item.get("discovery_source") or "catalog"),
@@ -3420,7 +3683,7 @@ async def install_plugin(deps: AppRuntimeDeps, body: PluginInstallRequest) -> Pl
         plugin_config_path = default_anvil_config_dir(_runtime_repo_root()) / "plugins.json"
         _replace_runtime_config_layer(deps, build_plugin_config_layer_from_file(plugin_config_path))
         reload_result = await admin_reload(deps, scope="all")
-        deps.memory_manager.reload_providers(effective_config=deps.effective_config)
+        deps.memory_manager.reload_engines(effective_config=deps.effective_config)
     except ValueError as exc:
         raise GatewayAdapterError(status.HTTP_400_BAD_REQUEST, "plugin_install_failed", str(exc)) from exc
     except (OSError, TimeoutError) as exc:
@@ -3749,17 +4012,17 @@ async def get_mcp_server_provenance(deps: AppRuntimeDeps, server_id: str) -> Mcp
 
 def get_memory_overview(deps: AppRuntimeDeps) -> MemoryOverviewView:
     overview = deps.memory_manager.overview()
-    platform_enabled = bool(deps.effective_config.memory_platform.enabled)
-    legacy_capture_enabled = bool(deps.feature_set.memory_capture and not platform_enabled)
+    hcms_enabled = bool(deps.effective_config.hcms.enabled)
+    capture_status = "native" if hcms_enabled else "disabled"
     return MemoryOverviewView(
-        active_provider_id=overview.active_provider_id,
-        runtime_mode="memory_platform" if platform_enabled else "legacy",
-        legacy_capture_enabled=legacy_capture_enabled,
+        active_engine_id=overview.active_engine_id,
+        runtime_mode=getattr(overview, "runtime_mode", None) or ("hcms" if hcms_enabled else "disabled"),
+        capture_status=capture_status,
         migration_status={
             **dict(getattr(overview, "migration_status", {}) or {}),
-            "memory_platform_enabled": platform_enabled,
-            "legacy_capture_enabled": legacy_capture_enabled,
-            "legacy_store_compatibility": "read_only" if platform_enabled else "active",
+            "hcms_enabled": hcms_enabled,
+            "capture_status": capture_status,
+            "storage_contract": "hcms_only",
         },
         store_count=overview.store_count,
         archive_turn_count=overview.archive_turn_count,
@@ -3775,6 +4038,8 @@ def list_memory_stores(deps: AppRuntimeDeps) -> list[MemoryStoreView]:
 
 def list_memory_layers(deps: AppRuntimeDeps) -> list[MemoryLayerView]:
     stores = {item.store_id: item for item in deps.memory_manager.list_stores()}
+    user_store = stores.get("hcms_user")
+    workspace_store = stores.get("hcms_workspace")
     return [
         MemoryLayerView(
             layer_id=MemoryLayerId.SESSION,
@@ -3787,21 +4052,21 @@ def list_memory_layers(deps: AppRuntimeDeps) -> list[MemoryLayerView]:
         ),
         MemoryLayerView(
             layer_id=MemoryLayerId.USER,
-            display_name="User Memory",
-            description="Durable user_profile facts: stable user preferences, corrections, and collaboration habits.",
+            display_name="HCMS User Layer",
+            description="Durable HCMS user facts, preferences, corrections, confidence, evidence, and causal links.",
             writable=True,
-            entry_count=stores["user_profile"].entry_count if "user_profile" in stores else 0,
-            store_id="user_profile",
-            summary=stores["user_profile"].summary if "user_profile" in stores else None,
+            entry_count=user_store.entry_count if user_store is not None else 0,
+            store_id="hcms_user",
+            summary=user_store.summary if user_store is not None else None,
         ),
         MemoryLayerView(
             layer_id=MemoryLayerId.WORKSPACE,
-            display_name="Workspace Memory",
-            description="Durable runtime_memory facts: global work context, project facts, outcomes, and reflection write-backs.",
+            display_name="HCMS Workspace Layer",
+            description="Durable HCMS workspace facts, project context, outcomes, version history, and relation graph.",
             writable=True,
-            entry_count=stores["runtime_memory"].entry_count if "runtime_memory" in stores else 0,
-            store_id="runtime_memory",
-            summary=stores["runtime_memory"].summary if "runtime_memory" in stores else None,
+            entry_count=workspace_store.entry_count if workspace_store is not None else 0,
+            store_id="hcms_workspace",
+            summary=workspace_store.summary if workspace_store is not None else None,
         ),
     ]
 
@@ -3811,7 +4076,7 @@ def list_memory_store_entries(deps: AppRuntimeDeps, store_id: str) -> list[Memor
         entries = deps.memory_manager.list_entries(store_id)
     except KeyError as exc:
         raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_store_not_found", f"memory store '{store_id}' was not found") from exc
-    return [memory_entry_to_view(entry) for entry in entries]
+    return [memory_entry_to_view(entry, content_mode="display") for entry in entries]
 
 
 def list_memory_layer_entries(deps: AppRuntimeDeps, layer_id: str) -> list[MemoryEntryView]:
@@ -3875,6 +4140,7 @@ def update_memory_entry(
             priority=body.priority,
             confidence=body.confidence,
             salience=body.salience,
+            evidence_refs=body.evidence_refs,
             status=body.status,
         )
     except KeyError as exc:
@@ -3903,6 +4169,7 @@ def update_memory_layer_entry(
             priority=body.priority,
             confidence=body.confidence,
             salience=body.salience,
+            evidence_refs=body.evidence_refs,
             status=body.status,
         )
     except ValueError as exc:
@@ -3936,29 +4203,29 @@ def delete_memory_layer_entry(deps: AppRuntimeDeps, layer_id: str, entry_id: str
     return {"status": "deleted"}
 
 
-def list_memory_providers(deps: AppRuntimeDeps) -> list[MemoryProviderView]:
-    return [memory_provider_to_view(item) for item in deps.memory_manager.list_providers()]
+def list_memory_engines(deps: AppRuntimeDeps) -> list[MemoryEngineView]:
+    return [memory_engine_to_view(item) for item in deps.memory_manager.list_engines()]
 
 
-def reload_memory_providers(deps: AppRuntimeDeps) -> list[MemoryProviderView]:
-    return [memory_provider_to_view(item) for item in deps.memory_manager.reload_providers(effective_config=deps.effective_config)]
+def reload_memory_engines(deps: AppRuntimeDeps) -> list[MemoryEngineView]:
+    return [memory_engine_to_view(item) for item in deps.memory_manager.reload_engines(effective_config=deps.effective_config)]
 
 
-def activate_memory_provider(deps: AppRuntimeDeps, provider_id: str) -> MemoryProviderView:
+def activate_memory_engine(deps: AppRuntimeDeps, engine_id: str) -> MemoryEngineView:
     try:
-        provider = deps.memory_manager.activate_provider(provider_id)
+        engine = deps.memory_manager.activate_engine(engine_id)
     except KeyError as exc:
-        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_provider_not_found", f"memory provider '{provider_id}' was not found") from exc
-    return memory_provider_to_view(provider)
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_engine_not_found", f"memory engine '{engine_id}' was not found") from exc
+    return memory_engine_to_view(engine)
 
 
-def test_memory_provider(deps: AppRuntimeDeps, provider_id: str) -> MemoryProviderTestResponse:
+def test_memory_engine(deps: AppRuntimeDeps, engine_id: str) -> MemoryEngineTestResponse:
     try:
-        result = deps.memory_manager.test_provider(provider_id)
+        result = deps.memory_manager.test_engine(engine_id)
     except KeyError as exc:
-        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_provider_not_found", f"memory provider '{provider_id}' was not found") from exc
-    return MemoryProviderTestResponse(
-        provider_id=result.provider_id,
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_engine_not_found", f"memory engine '{engine_id}' was not found") from exc
+    return MemoryEngineTestResponse(
+        engine_id=result.engine_id,
         ok=result.ok,
         health=result.health,
         diagnostics=list(result.diagnostics),
@@ -3970,7 +4237,7 @@ def search_memory_archive(deps: AppRuntimeDeps, body: MemoryArchiveSearchRequest
     return MemoryArchiveSearchResultView(
         query=result.query,
         hits=[memory_archive_hit_to_view(item) for item in result.hits],
-        provider_notes=list(result.provider_notes),
+        engine_notes=list(result.engine_notes),
     )
 
 
@@ -4025,12 +4292,12 @@ def search_memory_sessions(deps: AppRuntimeDeps, body: SessionSearchRequest) -> 
             )
             for item in result.get("groups", [])
         ],
-        provider_notes=list(result.get("provider_notes", [])),
+        engine_notes=list(result.get("engine_notes", [])),
         current_thread_snapshot=prompt_snapshot_to_view(result.get("current_thread_snapshot")),
     )
 
 
-def get_memory_overview_vnext(deps: AppRuntimeDeps) -> MemoryOverviewView:
+def get_memory_overview_hcms(deps: AppRuntimeDeps) -> MemoryOverviewView:
     return get_memory_overview(deps)
 
 
@@ -4071,8 +4338,126 @@ def get_memory_trace(deps: AppRuntimeDeps, body: MemoryTraceRequest) -> MemoryTr
     return MemoryTraceResponse(items=[memory_trace_to_view(trace) for trace in traces])
 
 
-def list_memory_admin_providers(deps: AppRuntimeDeps) -> MemoryProviderAdminResponse:
-    return MemoryProviderAdminResponse(items=list_memory_providers(deps))
+def hcms_recall(deps: AppRuntimeDeps, body: HCMSQueryRequest) -> HCMSRecallResponse:
+    result = deps.memory_manager.hcms_search(query=body.query, limit=body.limit)
+    return HCMSRecallResponse(
+        query=body.query,
+        items=[hcms_recall_item_to_view(item) for item in result.get("items", [])],
+        metrics=HCMSMetricsView.model_validate(result.get("metrics", {})),
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def hcms_why(deps: AppRuntimeDeps, body: HCMSQueryRequest) -> HCMSWhyResponse:
+    result = deps.memory_manager.hcms_why(query=body.query, limit=body.limit)
+    return HCMSWhyResponse(
+        query=str(result.get("query") or body.query),
+        paths=[hcms_why_path_to_view(item) for item in result.get("paths", [])],
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def list_hcms_memories(
+    deps: AppRuntimeDeps,
+    *,
+    query: str | None = None,
+    state: str | None = None,
+    category: str | None = None,
+    layer_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> HCMSMemoryListResponse:
+    try:
+        result = deps.memory_manager.list_hcms_memories(
+            query=query,
+            state=state,
+            category=category,
+            layer_id=layer_id,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise GatewayAdapterError(status.HTTP_400_BAD_REQUEST, "invalid_hcms_memory_filter", str(exc)) from exc
+    return HCMSMemoryListResponse(
+        items=[hcms_memory_to_view(item) for item in result.get("items", [])],
+        total=int(result.get("total", 0)),
+        limit=int(result.get("limit", limit)),
+        offset=int(result.get("offset", offset)),
+        query=result.get("query"),
+        state=str(result.get("state") or "all"),
+        category=result.get("category"),
+        layer_id=str(result.get("layer_id") or "all"),
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def hcms_memory(deps: AppRuntimeDeps, memory_id: str) -> HCMSMemoryResponse:
+    try:
+        result = deps.memory_manager.hcms_memory(memory_id=memory_id)
+    except KeyError as exc:
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_not_found", f"memory '{memory_id}' was not found") from exc
+    return HCMSMemoryResponse(
+        memory=hcms_memory_to_view(result.get("memory")),
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def delete_hcms_memory(deps: AppRuntimeDeps, memory_id: str) -> HCMSMemoryDeleteResponse:
+    try:
+        result = deps.memory_manager.delete_hcms_memory(memory_id=memory_id)
+    except KeyError as exc:
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_not_found", f"memory '{memory_id}' was not found") from exc
+    return HCMSMemoryDeleteResponse(
+        memory_id=str(result.get("memory_id") or memory_id),
+        status=str(result.get("status") or "deleted"),
+        deleted=bool(result.get("deleted", True)),
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def hcms_history(deps: AppRuntimeDeps, memory_id: str) -> HCMSMemoryHistoryResponse:
+    try:
+        result = deps.memory_manager.hcms_history(memory_id=memory_id)
+    except KeyError as exc:
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_not_found", f"memory '{memory_id}' was not found") from exc
+    return HCMSMemoryHistoryResponse(
+        memory_id=memory_id,
+        versions=[HCMSMemoryVersionView.model_validate(item) for item in result.get("versions", [])],
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def hcms_relations(deps: AppRuntimeDeps, memory_id: str) -> HCMSMemoryRelationsResponse:
+    try:
+        result = deps.memory_manager.hcms_relations(memory_id=memory_id)
+    except KeyError as exc:
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_not_found", f"memory '{memory_id}' was not found") from exc
+    return HCMSMemoryRelationsResponse(
+        memory_id=str(result.get("memory_id") or memory_id),
+        relations=[hcms_relation_to_view(item) for item in result.get("relations", [])],
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def hcms_diff(deps: AppRuntimeDeps, memory_id: str) -> HCMSMemoryDiffResponse:
+    try:
+        result = deps.memory_manager.hcms_diff(memory_id=memory_id)
+    except KeyError as exc:
+        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_not_found", f"memory '{memory_id}' was not found") from exc
+    return HCMSMemoryDiffResponse(
+        memory_id=memory_id,
+        from_version=result.get("from_version") if result.get("from_version") is not None else None,
+        to_version=result.get("to_version") if result.get("to_version") is not None else None,
+        diff=str(result.get("diff") or ""),
+        confidence_delta=float(result.get("confidence_delta") or 0.0),
+        evidence_added=[str(item) for item in result.get("evidence_added", [])],
+        evidence_removed=[str(item) for item in result.get("evidence_removed", [])],
+        engine_notes=list(result.get("engine_notes", [])),
+    )
+
+
+def list_memory_admin_engines(deps: AppRuntimeDeps) -> MemoryEngineAdminResponse:
+    return MemoryEngineAdminResponse(items=list_memory_engines(deps))
 
 
 def list_memory_admin_reflections(deps: AppRuntimeDeps) -> ReflectionJobAdminResponse:
@@ -4199,31 +4584,6 @@ def onboard_memory_workspace(deps: AppRuntimeDeps, body: MemoryOnboardingRequest
     return MemoryOnboardingResponse.model_validate(result.model_dump(mode="json"))
 
 
-def list_memory_admin_review(deps: AppRuntimeDeps) -> MemoryReviewResponse:
-    return MemoryReviewResponse(items=[memory_review_item_to_view(item) for item in deps.memory_manager.list_review_items(status="pending")])
-
-
-def approve_memory_review_item(deps: AppRuntimeDeps, review_id: str, body: MemoryReviewDecisionRequest) -> MemoryEntryView:
-    try:
-        entry = deps.memory_manager.approve_review_item(review_id)
-    except KeyError as exc:
-        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_review_not_found", f"memory review item '{review_id}' was not found") from exc
-    return memory_entry_to_view(entry)
-
-
-def reject_memory_review_item(deps: AppRuntimeDeps, review_id: str, body: MemoryReviewDecisionRequest) -> MemoryReviewItemView:
-    try:
-        item = deps.memory_manager.reject_review_item(review_id)
-    except KeyError as exc:
-        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "memory_review_not_found", f"memory review item '{review_id}' was not found") from exc
-    return memory_review_item_to_view(item)
-
-
-def batch_memory_review(deps: AppRuntimeDeps, body: MemoryReviewBatchRequest) -> MemoryReviewBatchResponse:
-    result = deps.memory_manager.batch_review(approve=tuple(body.approve), reject=tuple(body.reject))
-    return MemoryReviewBatchResponse.model_validate(result)
-
-
 def govern_memory_entry(deps: AppRuntimeDeps, memory_id: str, body: MemoryGovernanceActionRequest) -> MemoryGovernanceActionResponse:
     try:
         result = deps.memory_manager.govern_memory(
@@ -4257,36 +4617,6 @@ def batch_govern_memory(deps: AppRuntimeDeps, body: MemoryGovernanceBatchRequest
     except ValueError as exc:
         raise GatewayAdapterError(status.HTTP_400_BAD_REQUEST, "invalid_memory_governance_batch", str(exc)) from exc
     return memory_governance_batch_to_view(result)
-
-
-def list_profile_facets(deps: AppRuntimeDeps) -> ProfileFacetListResponse:
-    return ProfileFacetListResponse(
-        policy=profile_facet_policy_to_view(deps.memory_manager.profile_facet_policy()),
-        items=[profile_facet_to_view(item) for item in deps.memory_manager.list_profile_facets()],
-    )
-
-
-def govern_profile_facet(deps: AppRuntimeDeps, facet_id: str, body: ProfileFacetGovernanceRequest) -> ProfileFacetGovernanceResponse:
-    try:
-        result = deps.memory_manager.govern_profile_facet(
-            facet_id,
-            action=body.action,
-            reason=body.reason,
-            source=body.source,
-        )
-    except KeyError as exc:
-        raise GatewayAdapterError(status.HTTP_404_NOT_FOUND, "profile_facet_not_found", f"profile facet '{facet_id}' was not found") from exc
-    except ValueError as exc:
-        raise GatewayAdapterError(status.HTTP_400_BAD_REQUEST, "invalid_profile_facet_action", str(exc)) from exc
-    return profile_facet_governance_to_view(result)
-
-
-def rebuild_profile_facets(deps: AppRuntimeDeps, body: ProfileFacetRebuildRequest) -> ProfileFacetRebuildResponse:
-    return profile_facet_rebuild_to_view(deps.memory_manager.rebuild_profile_facets(source=body.source))
-
-
-def list_profile_facet_audit(deps: AppRuntimeDeps, *, limit: int = 50) -> ProfileFacetAuditResponse:
-    return ProfileFacetAuditResponse(items=[profile_facet_audit_to_view(item) for item in deps.memory_manager.list_profile_facet_audit(limit=limit)])
 
 
 def run_memory_maintenance(deps: AppRuntimeDeps, body: MemoryMaintenanceRequest) -> MemoryMaintenanceResponse:
@@ -4341,8 +4671,6 @@ def list_reflection_jobs(deps: AppRuntimeDeps) -> list[ReflectionJobView]:
 
 
 def create_reflection_job(deps: AppRuntimeDeps, body: ReflectionJobCreateRequest) -> ReflectionJobView:
-    from anvil.memory_platform import ReflectionJob, ReflectionScheduleKind
-
     job = ReflectionJob(
         job_id=body.job_id,
         name=body.name,
@@ -4867,7 +5195,7 @@ def thread_state_to_view(
     ) if include_full_state else []
     tool_call_records = [tool_call_record_to_view(item) for item in state.execution.tool_calls] if include_full_state else []
     recent_tool_activity = [tool_activity_to_view(item) for item in state.execution.recent_tool_activity] if include_full_state else []
-    recent_approval_events = [approval_event_to_view(item) for item in state.approvals.recent_approval_events] if include_full_state else []
+    recent_approval_events = [approval_event_to_view(item) for item in state.approvals.recent_approval_events]
     active_subagent_task_ids = [task.get("task_id", "") for task in state.delegation.active_subagent_tasks]
     runtime_operator_status = (
         build_runtime_operator_status_view(
@@ -4911,6 +5239,7 @@ def thread_state_to_view(
         context_cache_diagnostics=context_cache_diagnostics_to_view(state.execution.runtime_assembly_snapshot),
         capability_assembly_diagnostics=capability_assembly_diagnostics_to_view(state.execution.runtime_assembly_snapshot),
         memory_injection_diagnostics=memory_injection_diagnostics_to_view(state.execution.runtime_assembly_snapshot),
+        runtime_context_v2_diagnostics=runtime_context_v2_diagnostics_to_view(state.execution.runtime_assembly_snapshot),
         compaction_diagnostics=compaction_diagnostics_to_view(
             state.execution.runtime_assembly_snapshot,
             state.execution.context_window_usage,
@@ -4947,7 +5276,7 @@ def thread_state_to_view(
         durable_subagent_job_history=translate([subagent_event_to_view(item) for item in state.durable_subagent_job_history]) if include_full_state else [],
         tool_calls=translate(tool_call_records) if include_full_state else [],
         recent_tool_activity=translate(recent_tool_activity) if include_full_state else [],
-        recent_approval_events=translate(recent_approval_events) if include_full_state else [],
+        recent_approval_events=translate(recent_approval_events),
         runtime_operator_status=translate(runtime_operator_status) if include_full_state else runtime_operator_status,
         last_error=translate(frontend_safe_lifecycle_error(state.lifecycle.last_error)),
         runtime_capabilities=runtime_capabilities or RuntimeCapabilitiesView(),
@@ -5278,6 +5607,21 @@ def capability_assembly_diagnostics_to_view(payload: dict[str, object] | None) -
         skills_discovery_stage_durations_ms=_int_mapping(diagnostics.get("skills_discovery_stage_durations_ms")),
         slowest_skills_discovery_stage=str(diagnostics.get("slowest_skills_discovery_stage") or "").strip() or None,
         slowest_skills_discovery_stage_duration_ms=_int_or_none(diagnostics.get("slowest_skills_discovery_stage_duration_ms")),
+        skill_retrieval_query=str(diagnostics.get("skill_retrieval_query") or ""),
+        skill_retrieval_top_k=_int_or_none(diagnostics.get("skill_retrieval_top_k")) or 0,
+        skill_retrieval_selected_ids=tuple(_string_list(diagnostics.get("skill_retrieval_selected_ids"))),
+        skill_retrieval_tiers_used=tuple(_string_list(diagnostics.get("skill_retrieval_tiers_used"))),
+        skill_retrieval_candidate_count=_int_or_none(diagnostics.get("skill_retrieval_candidate_count")) or 0,
+        skill_retrieval_loaded_full_content=_optional_bool(diagnostics.get("skill_retrieval_loaded_full_content")),
+        skill_retrieval_embedding_mode=str(diagnostics.get("skill_retrieval_embedding_mode") or "").strip() or None,
+        skill_retrieval_expanded_query_terms=tuple(_string_list(diagnostics.get("skill_retrieval_expanded_query_terms"))),
+        skill_retrieval_prefetch_ids=tuple(_string_list(diagnostics.get("skill_retrieval_prefetch_ids"))),
+        skill_retrieval_l4_rerank_triggered=bool(diagnostics.get("skill_retrieval_l4_rerank_triggered")),
+        skill_retrieval_l5_hyde_triggered=bool(diagnostics.get("skill_retrieval_l5_hyde_triggered")),
+        skill_retrieval_l6_prefetch_triggered=bool(diagnostics.get("skill_retrieval_l6_prefetch_triggered")),
+        skill_retrieval_salience_route_id=str(diagnostics.get("skill_retrieval_salience_route_id") or "").strip() or None,
+        skill_retrieval_goal_stack_ref=str(diagnostics.get("skill_retrieval_goal_stack_ref") or "").strip() or None,
+        skill_retrieval_active_goal_id=str(diagnostics.get("skill_retrieval_active_goal_id") or "").strip() or None,
         visible_by_source_kind=_int_mapping(diagnostics.get("visible_by_source_kind")),
         deferred_by_source_kind=_int_mapping(diagnostics.get("deferred_by_source_kind")),
         visible_by_group=_int_mapping(diagnostics.get("visible_by_group")),
@@ -5306,6 +5650,21 @@ def capability_assembly_diagnostics_to_view(payload: dict[str, object] | None) -
             mapped.skills_discovery_stage_durations_ms,
             mapped.slowest_skills_discovery_stage,
             mapped.slowest_skills_discovery_stage_duration_ms,
+            mapped.skill_retrieval_query,
+            mapped.skill_retrieval_top_k,
+            mapped.skill_retrieval_selected_ids,
+            mapped.skill_retrieval_tiers_used,
+            mapped.skill_retrieval_candidate_count,
+            mapped.skill_retrieval_loaded_full_content is not None,
+            mapped.skill_retrieval_embedding_mode,
+            mapped.skill_retrieval_expanded_query_terms,
+            mapped.skill_retrieval_prefetch_ids,
+            mapped.skill_retrieval_l4_rerank_triggered,
+            mapped.skill_retrieval_l5_hyde_triggered,
+            mapped.skill_retrieval_l6_prefetch_triggered,
+            mapped.skill_retrieval_salience_route_id,
+            mapped.skill_retrieval_goal_stack_ref,
+            mapped.skill_retrieval_active_goal_id,
             mapped.visible_by_source_kind,
             mapped.deferred_by_source_kind,
             mapped.visible_by_group,
@@ -5325,13 +5684,21 @@ def memory_injection_diagnostics_to_view(payload: dict[str, object] | None) -> M
     mapped = MemoryInjectionDiagnosticsView(
         source=_string_or_default(diagnostics.get("source"), "none"),
         status=_string_or_default(diagnostics.get("status"), "not_used"),
+        injection_mode=_string_or_default(diagnostics.get("injection_mode"), "context_v2"),
+        requested_injection_mode=_optional_string(diagnostics.get("requested_injection_mode")),
+        legacy_prompt_append_migrated=bool(diagnostics.get("legacy_prompt_append_migrated")),
+        legacy_prompt_append_suppressed=bool(diagnostics.get("legacy_prompt_append_suppressed")),
         snapshot_id=_optional_string(diagnostics.get("snapshot_id")),
         query_tokens=_int_or_none(diagnostics.get("query_tokens")) or 0,
-        curated_match_count=_int_or_none(diagnostics.get("curated_match_count")) or 0,
+        memory_match_count=_int_or_none(diagnostics.get("memory_match_count")) or 0,
         archive_hit_count=_int_or_none(diagnostics.get("archive_hit_count")) or 0,
         evidence_count=_int_or_none(diagnostics.get("evidence_count")) or 0,
-        provider_note_count=_int_or_none(diagnostics.get("provider_note_count")) or 0,
-        summary_present=bool(diagnostics.get("summary_present")),
+        engine_note_count=_int_or_none(diagnostics.get("engine_note_count")) or 0,
+        context_v2_block_count=_int_or_none(diagnostics.get("context_v2_block_count")) or 0,
+        context_v2_candidate_block_count=_int_or_none(diagnostics.get("context_v2_candidate_block_count")) or 0,
+        context_v2_selected_memory_count=_int_or_none(diagnostics.get("context_v2_selected_memory_count")) or 0,
+        context_v2_memory_block_ids=_string_list(diagnostics.get("context_v2_memory_block_ids")),
+        hcms_v2_memory_block_ids=_string_list(diagnostics.get("hcms_v2_memory_block_ids")),
         rendered_tokens_before_truncation=_int_or_none(diagnostics.get("rendered_tokens_before_truncation")) or 0,
         rendered_tokens=_int_or_none(diagnostics.get("rendered_tokens")) or 0,
         token_budget=_int_or_none(diagnostics.get("token_budget")),
@@ -5344,13 +5711,21 @@ def memory_injection_diagnostics_to_view(payload: dict[str, object] | None) -> M
         (
             mapped.source != "none",
             mapped.status != "not_used",
+            mapped.injection_mode != "context_v2",
+            mapped.requested_injection_mode,
+            mapped.legacy_prompt_append_migrated,
+            mapped.legacy_prompt_append_suppressed,
             mapped.snapshot_id,
             mapped.query_tokens,
-            mapped.curated_match_count,
+            mapped.memory_match_count,
             mapped.archive_hit_count,
             mapped.evidence_count,
-            mapped.provider_note_count,
-            mapped.summary_present,
+            mapped.engine_note_count,
+            mapped.context_v2_block_count,
+            mapped.context_v2_candidate_block_count,
+            mapped.context_v2_selected_memory_count,
+            mapped.context_v2_memory_block_ids,
+            mapped.hcms_v2_memory_block_ids,
             mapped.rendered_tokens_before_truncation,
             mapped.rendered_tokens,
             mapped.token_budget is not None,
@@ -5358,6 +5733,84 @@ def memory_injection_diagnostics_to_view(payload: dict[str, object] | None) -> M
             mapped.error_type,
             mapped.store_counts,
             mapped.source_kind_counts,
+        )
+    ):
+        return None
+    return mapped
+
+
+def runtime_context_v2_diagnostics_to_view(payload: dict[str, object] | None) -> RuntimeContextV2DiagnosticsView | None:
+    if not isinstance(payload, dict):
+        return None
+    context_v2 = _runtime_context_v2_mapping(payload.get("context_v2"))
+    if not context_v2 or _optional_bool(context_v2.get("enabled")) is False:
+        return None
+    trace = _runtime_context_v2_mapping(context_v2.get("trace"))
+    runtime_state = _runtime_context_v2_mapping(context_v2.get("runtime_state"))
+    review_inbox = _runtime_context_v2_mapping(runtime_state.get("review_inbox"))
+    event_log = _runtime_context_v2_mapping(runtime_state.get("event_log"))
+
+    runtime_event_counts = _runtime_context_v2_event_counts(event_log, context_v2)
+    replay_phase_coverage = _runtime_context_v2_replay_phase_coverage(runtime_event_counts)
+    conflict_warnings = _runtime_context_v2_warning_refs(review_inbox)
+    block_counts = _runtime_context_v2_block_counts(trace, context_v2)
+    mapped = RuntimeContextV2DiagnosticsView(
+        actual_prompt_mode=_optional_string(context_v2.get("actual_prompt_mode")),
+        trace_id=_runtime_context_v2_first_string(trace.get("trace_id"), context_v2.get("trace_id")),
+        prompt_hash=_runtime_context_v2_first_string(
+            trace.get("prompt_hash"),
+            context_v2.get("prompt_hash"),
+            context_v2.get("rendered_context_hash"),
+        ),
+        actual_system_prompt_hash=_optional_string(context_v2.get("actual_system_prompt_hash")),
+        selected_capabilities=_runtime_context_v2_string_refs(trace.get("selected_capabilities")),
+        selected_tools=_runtime_context_v2_string_refs(trace.get("selected_tools")),
+        selected_skills=_runtime_context_v2_string_refs(trace.get("selected_skills")),
+        selected_mcp_tools=_runtime_context_v2_string_refs(trace.get("selected_mcp_tools")),
+        selected_memory=_runtime_context_v2_string_refs(trace.get("selected_memory")),
+        selected_tool_result_refs=_runtime_context_v2_string_refs(trace.get("selected_tool_result_refs")),
+        selected_conflict_warnings=conflict_warnings,
+        block_counts=block_counts,
+        dropped_block_count=_runtime_context_v2_count(trace.get("dropped_block_ids"), trace.get("dropped_blocks")),
+        compressed_block_count=_runtime_context_v2_count(
+            trace.get("compressed_block_ids"),
+            trace.get("compressed_blocks"),
+        ),
+        deferred_block_count=_runtime_context_v2_count(trace.get("deferred_block_ids"), trace.get("deferred_blocks")),
+        runtime_event_counts=runtime_event_counts,
+        replay_phase_coverage=replay_phase_coverage,
+        trace_replay_ready=(
+            bool(runtime_event_counts) and all(replay_phase_coverage.values())
+            if replay_phase_coverage
+            else None
+        ),
+        conflict_warning_count=(
+            _int_or_none(review_inbox.get("open_item_count"))
+            or _int_or_none(review_inbox.get("item_count"))
+            or len(conflict_warnings)
+        ),
+    )
+    if not any(
+        (
+            mapped.actual_prompt_mode,
+            mapped.trace_id,
+            mapped.prompt_hash,
+            mapped.actual_system_prompt_hash,
+            mapped.selected_capabilities,
+            mapped.selected_tools,
+            mapped.selected_skills,
+            mapped.selected_mcp_tools,
+            mapped.selected_memory,
+            mapped.selected_tool_result_refs,
+            mapped.selected_conflict_warnings,
+            mapped.block_counts,
+            mapped.dropped_block_count,
+            mapped.compressed_block_count,
+            mapped.deferred_block_count,
+            mapped.runtime_event_counts,
+            mapped.replay_phase_coverage,
+            mapped.trace_replay_ready is not None,
+            mapped.conflict_warning_count,
         )
     ):
         return None
@@ -5495,6 +5948,145 @@ def _string_list(value: object) -> list[str]:
             continue
         result.append(text)
     return result
+
+
+def _runtime_context_v2_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _runtime_context_v2_records(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _runtime_context_v2_first_string(*values: object) -> str | None:
+    for value in values:
+        text = _optional_string(value)
+        if text is not None:
+            return text
+    return None
+
+
+def _runtime_context_v2_string_refs(value: object) -> list[str]:
+    result: list[str] = []
+    candidate_keys = (
+        "block_id",
+        "review_inbox_id",
+        "alert_id",
+        "conflict_id",
+        "memory_id",
+        "claim_id",
+        "result_id",
+        "ref",
+        "id",
+        "name",
+        "capability_id",
+        "tool_name",
+        "source_ref",
+    )
+
+    def append(text: str | None) -> None:
+        if text is None or text in result:
+            return
+        result.append(text)
+
+    if isinstance(value, str):
+        append(_optional_string(value))
+        return result
+    if not isinstance(value, (list, tuple)):
+        return result
+    for item in value:
+        if isinstance(item, str):
+            append(_optional_string(item))
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in candidate_keys:
+            text = _optional_string(item.get(key))
+            if text is not None:
+                append(text)
+                break
+    return result
+
+
+def _runtime_context_v2_count(*values: object) -> int:
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            return len(value)
+    return 0
+
+
+def _runtime_context_v2_block_counts(
+    trace: dict[str, object],
+    context_v2: dict[str, object],
+) -> dict[str, int]:
+    counts = _int_mapping(trace.get("block_counts"))
+    derived = {
+        "candidate": _runtime_context_v2_count(trace.get("candidate_block_ids")),
+        "selected": _runtime_context_v2_count(trace.get("selected_block_ids")),
+        "compressed": _runtime_context_v2_count(trace.get("compressed_block_ids"), trace.get("compressed_blocks")),
+        "deferred": _runtime_context_v2_count(trace.get("deferred_block_ids"), trace.get("deferred_blocks")),
+        "dropped": _runtime_context_v2_count(trace.get("dropped_block_ids"), trace.get("dropped_blocks")),
+    }
+    for key, value in derived.items():
+        if value:
+            counts.setdefault(key, value)
+    for source_key, target_key in (
+        ("candidate_block_count", "candidate"),
+        ("selected_block_count", "selected"),
+        ("compressed_block_count", "compressed"),
+        ("deferred_block_count", "deferred"),
+        ("dropped_block_count", "dropped"),
+        ("hcms_v2_memory_candidate_count", "hcms_v2_memory_candidate"),
+        ("hcms_v2_memory_selected_count", "hcms_v2_memory_selected"),
+    ):
+        value = _int_or_none(context_v2.get(source_key))
+        if value:
+            counts.setdefault(target_key, value)
+    return counts
+
+
+def _runtime_context_v2_event_counts(
+    event_log: dict[str, object],
+    context_v2: dict[str, object],
+) -> dict[str, int]:
+    event_types = _runtime_context_v2_string_refs(event_log.get("event_types"))
+    if not event_types:
+        event_types = _runtime_context_v2_string_refs(
+            [event.get("event_type") for event in _runtime_context_v2_records(event_log.get("events"))]
+        )
+    if not event_types:
+        turn_pipeline = _runtime_context_v2_mapping(context_v2.get("turn_pipeline"))
+        event_types = _runtime_context_v2_string_refs(turn_pipeline.get("event_types"))
+    counts: dict[str, int] = {}
+    for event_type in event_types:
+        counts[event_type] = counts.get(event_type, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _runtime_context_v2_replay_phase_coverage(runtime_event_counts: dict[str, int]) -> dict[str, bool]:
+    if not runtime_event_counts:
+        return {}
+    return {
+        "action_dispatch": bool(runtime_event_counts.get("action_dispatch")),
+        "observation_handling": bool(runtime_event_counts.get("observation_handling")),
+        "state_update": bool(runtime_event_counts.get("state_update")),
+        "maintenance_scheduling": bool(runtime_event_counts.get("maintenance_scheduling")),
+    }
+
+
+def _runtime_context_v2_warning_refs(review_inbox: dict[str, object]) -> list[str]:
+    refs = _runtime_context_v2_string_refs(review_inbox.get("warning_block_ids"))
+    for item in _runtime_context_v2_string_refs(review_inbox.get("warning_blocks")):
+        if item not in refs:
+            refs.append(item)
+    for item in _runtime_context_v2_string_refs(review_inbox.get("items")):
+        if item not in refs:
+            refs.append(item)
+    return refs
 
 
 def _count_string_field(items: list[dict[str, object]], field_name: str) -> dict[str, int]:
@@ -5873,7 +6465,7 @@ def schedule_memory_capture_flush(deps: AppRuntimeDeps, result: RunResult) -> No
 
     namespace = result.runtime.context.memory_namespace or "global/default"
     deps.run_engine.submit_background_task(
-        "legacy-memory-flush",
+        "hcms-memory-flush",
         lambda: memory_service.process_pending(namespace),
     )
 
@@ -7147,13 +7739,15 @@ def memory_store_to_view(store) -> MemoryStoreView:
     )
 
 
-def memory_entry_to_view(entry) -> MemoryEntryView:
+def memory_entry_to_view(entry, *, content_mode: str = "canonical") -> MemoryEntryView:
+    metadata = getattr(entry, "metadata", {}) or {}
+    content = str(metadata.get("raw_content") or entry.content) if content_mode == "display" else entry.content
     return MemoryEntryView(
         entry_id=entry.entry_id,
         memory_id=entry.memory_id,
         store_id=entry.store_id,
         layer_id=entry.layer_id,
-        content=entry.content,
+        content=content,
         category=entry.category,
         source_kind=entry.source_kind,
         priority=entry.priority,
@@ -7174,7 +7768,7 @@ def memory_entry_to_view(entry) -> MemoryEntryView:
 
 def recall_evidence_to_view(item) -> RecallEvidenceView:
     if isinstance(item, dict):
-        return RecallEvidenceView.model_validate(item)
+        return _recall_evidence_payload_to_view(item)
     return RecallEvidenceView(
         evidence_id=item.evidence_id,
         source_kind=item.source_kind,
@@ -7194,27 +7788,189 @@ def recall_evidence_to_view(item) -> RecallEvidenceView:
     )
 
 
-def memory_provider_to_view(provider) -> MemoryProviderView:
-    return MemoryProviderView(
-        provider_id=provider.provider_id,
-        display_name=provider.display_name,
-        kind=getattr(provider, "kind", "local_curated"),
-        origin=getattr(provider, "origin", "builtin"),
-        family=provider.family,
-        description=provider.description,
-        active=provider.active,
-        configured=provider.configured,
-        available=provider.available,
-        supports_prefetch=provider.supports_prefetch,
-        supports_sync=provider.supports_sync,
-        supports_index=getattr(provider, "supports_index", True),
-        supports_reflection=provider.supports_reflection,
-        supports_explain=getattr(provider, "supports_explain", True),
-        supports_archive_search=provider.supports_archive_search,
-        roles=list(getattr(provider, "roles", ()) or ()),
-        health=str(getattr(provider, "health", "unknown")),
-        diagnostics=list(getattr(provider, "diagnostics", ()) or ()),
-        last_sync_at=getattr(provider, "last_sync_at", None),
+def _recall_evidence_payload_to_view(payload: dict[str, object]) -> RecallEvidenceView:
+    public_payload = {
+        key: value
+        for key in RecallEvidenceView.model_fields
+        if (value := payload.get(key)) is not None
+    }
+    if public_payload.get("evidence_id") and public_payload.get("source_kind") and public_payload.get("source_id"):
+        return RecallEvidenceView.model_validate(public_payload)
+
+    capture_id = _recall_evidence_text(payload.get("capture_envelope_id"))
+    observation_id = _recall_evidence_text(payload.get("observation_id"))
+    event_id = _recall_evidence_text(payload.get("event_id"))
+    event_type = _recall_evidence_text(payload.get("event_type")) or "runtime_event"
+    guard_action = _recall_evidence_text(payload.get("guard_action"))
+    slow_status = _recall_evidence_text(payload.get("hcms_v2_slow_consolidation_status"))
+    consolidated_memory_ids = _recall_evidence_texts(payload.get("hcms_v2_slow_consolidated_memory_ids"))
+
+    reason_parts = [f"event={event_type}"]
+    if guard_action:
+        reason_parts.append(f"guard={guard_action}")
+    if slow_status:
+        reason_parts.append(f"slow_consolidation={slow_status}")
+
+    excerpt_parts = []
+    if event_id:
+        excerpt_parts.append(f"event_id={event_id}")
+    if observation_id:
+        excerpt_parts.append(f"observation_id={observation_id}")
+
+    fallback_id = capture_id or observation_id or event_id or _recall_evidence_text(payload.get("source_id")) or "memory-trace"
+    return RecallEvidenceView(
+        evidence_id=_recall_evidence_text(payload.get("evidence_id")) or fallback_id,
+        source_kind="hcms_v2_capture" if capture_id or observation_id else "memory_trace",
+        source_id=observation_id or event_id or capture_id or fallback_id,
+        layer_id=_recall_evidence_text(payload.get("layer_id")),
+        memory_id=_recall_evidence_text(payload.get("memory_id"))
+        or (consolidated_memory_ids[0] if consolidated_memory_ids else None),
+        archive_id=_recall_evidence_text(payload.get("archive_id")),
+        thread_id=_recall_evidence_text(payload.get("thread_id")),
+        score=_recall_evidence_float(payload.get("score")),
+        match_score=_recall_evidence_optional_float(payload.get("match_score")),
+        rerank_score=_recall_evidence_optional_float(payload.get("rerank_score")),
+        recency_score=_recall_evidence_optional_float(payload.get("recency_score")),
+        final_score=_recall_evidence_optional_float(payload.get("final_score")),
+        dropped_reason=_recall_evidence_text(payload.get("dropped_reason")),
+        reason="; ".join(reason_parts),
+        excerpt="; ".join(excerpt_parts),
+    )
+
+
+def _recall_evidence_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _recall_evidence_texts(value: object) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [text for item in value if (text := _recall_evidence_text(item))]
+    text = _recall_evidence_text(value)
+    return [text] if text else []
+
+
+def _recall_evidence_float(value: object) -> float:
+    result = _recall_evidence_optional_float(value)
+    return result if result is not None else 0.0
+
+
+def _recall_evidence_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def hcms_evidence_to_view(item) -> HCMSEvidenceView:
+    payload = dict(item)
+    return HCMSEvidenceView(
+        evidence_id=str(payload.get("evidence_id") or ""),
+        type=str(payload.get("type") or ""),
+        content=str(payload.get("content") or ""),
+        weight=float(payload.get("weight") or 0.0),
+        timestamp=payload.get("timestamp"),
+        source_id=str(payload.get("source_id") or ""),
+        metadata=dict(payload.get("metadata", {})),
+    )
+
+
+def hcms_memory_to_view(item) -> HCMSMemoryView:
+    payload = dict(item)
+    return HCMSMemoryView(
+        memory_id=str(payload.get("memory_id") or ""),
+        version=int(payload.get("version") or 1),
+        parent_id=payload.get("parent_id"),
+        content=str(payload.get("content") or ""),
+        summary=str(payload.get("summary") or ""),
+        category=str(payload.get("category") or "note"),
+        confidence=float(payload.get("confidence") or 0.0),
+        salience=float(payload.get("salience") or 0.0),
+        state=str(payload.get("state") or "active"),
+        source_thread_id=payload.get("source_thread_id"),
+        source_type=str(payload.get("source_type") or "observation"),
+        tags=[str(item) for item in payload.get("tags", [])],
+        entities=[str(item) for item in payload.get("entities", [])],
+        concepts=[str(item) for item in payload.get("concepts", [])],
+        evidence=[hcms_evidence_to_view(evidence) for evidence in payload.get("evidence", [])],
+        metadata=dict(payload.get("metadata", {})),
+        created_at=payload.get("created_at"),
+        updated_at=payload.get("updated_at"),
+        accessed_at=payload.get("accessed_at"),
+    )
+
+
+def hcms_relation_to_view(item) -> HCMSRelationView:
+    payload = dict(item)
+    source_memory = payload.get("source_memory")
+    target_memory = payload.get("target_memory")
+    return HCMSRelationView(
+        relation_id=str(payload.get("relation_id") or ""),
+        source_memory_id=str(payload.get("source_memory_id") or ""),
+        target_memory_id=str(payload.get("target_memory_id") or ""),
+        relation_type=str(payload.get("relation_type") or "related_to"),
+        weight=float(payload.get("weight") or 0.0),
+        confidence=float(payload.get("confidence") or 0.0),
+        bidirectional=bool(payload.get("bidirectional", False)),
+        metadata=dict(payload.get("metadata", {})),
+        created_at=payload.get("created_at"),
+        updated_at=payload.get("updated_at"),
+        source_memory=hcms_memory_to_view(source_memory) if source_memory is not None else None,
+        target_memory=hcms_memory_to_view(target_memory) if target_memory is not None else None,
+    )
+
+
+def hcms_recall_item_to_view(item) -> HCMSRecallItemView:
+    payload = dict(item)
+    memory = payload.get("memory")
+    return HCMSRecallItemView(
+        memory_id=str(payload.get("memory_id") or ""),
+        score=float(payload.get("score") or 0.0),
+        raw_scores={str(key): float(value) for key, value in dict(payload.get("raw_scores", {})).items()},
+        ranks={str(key): int(value) for key, value in dict(payload.get("ranks", {})).items()},
+        explanation=str(payload.get("explanation") or ""),
+        memory=hcms_memory_to_view(memory) if memory is not None else None,
+    )
+
+
+def hcms_why_path_to_view(item) -> HCMSWhyPathView:
+    payload = dict(item)
+    return HCMSWhyPathView(
+        nodes=[HCMSCausalNodeView.model_validate(node) for node in payload.get("nodes", [])],
+        edges=[HCMSCausalEdgeView.model_validate(edge) for edge in payload.get("edges", [])],
+        total_strength=float(payload.get("total_strength") or 0.0),
+        confidence=float(payload.get("confidence") or 0.0),
+        explanation_kind=str(payload.get("explanation_kind") or "causal"),
+        degradation_reason=payload.get("degradation_reason"),
+        evidence_summary=list(payload.get("evidence_summary") or []),
+    )
+
+
+def memory_engine_to_view(engine) -> MemoryEngineView:
+    return MemoryEngineView(
+        engine_id=engine.engine_id,
+        display_name=engine.display_name,
+        kind=getattr(engine, "kind", "hcms"),
+        origin=getattr(engine, "origin", "builtin"),
+        family=engine.family,
+        description=engine.description,
+        active=engine.active,
+        configured=engine.configured,
+        available=engine.available,
+        supports_prefetch=engine.supports_prefetch,
+        supports_sync=engine.supports_sync,
+        supports_index=getattr(engine, "supports_index", True),
+        supports_reflection=engine.supports_reflection,
+        supports_explain=getattr(engine, "supports_explain", True),
+        supports_archive_search=engine.supports_archive_search,
+        roles=list(getattr(engine, "roles", ()) or ()),
+        health=str(getattr(engine, "health", "unknown")),
+        diagnostics=list(getattr(engine, "diagnostics", ()) or ()),
+        last_sync_at=getattr(engine, "last_sync_at", None),
     )
 
 
@@ -7352,7 +8108,7 @@ def memory_trace_to_view(trace) -> MemoryTraceView:
         query=trace.query,
         trace_kind=trace.trace_kind,
         target_id=trace.target_id,
-        provider_notes=list(trace.provider_notes),
+        engine_notes=list(trace.engine_notes),
         evidence=[recall_evidence_to_view(item) for item in trace.evidence],
         created_at=trace.created_at,
     )
@@ -7412,14 +8168,15 @@ def memory_health_to_view(report) -> MemoryHealthResponse:
         status=report.status,
         quality_score=report.quality_score,
         archive_turn_count=report.archive_turn_count,
-        pending_review_count=report.pending_review_count,
+        observation_queue_count=report.observation_queue_count,
         conflict_count=report.conflict_count,
         stale_count=report.stale_count,
-        provider_count=report.provider_count,
-        provider_health=dict(report.provider_health),
+        engine_count=report.engine_count,
+        engine_health=dict(report.engine_health),
         stores=[memory_store_health_to_view(item) for item in report.stores],
         issues=[memory_quality_issue_to_view(item) for item in report.issues],
         recommendations=list(report.recommendations),
+        diagnostics=list(getattr(report, "diagnostics", ()) or ()),
         generated_at=report.generated_at,
     )
 
@@ -7526,10 +8283,6 @@ def memory_recall_benchmark_run_to_view(item) -> MemoryRecallBenchmarkRunView:
     )
 
 
-def memory_review_item_to_view(item) -> MemoryReviewItemView:
-    return MemoryReviewItemView.model_validate(item.model_dump(mode="json") if hasattr(item, "model_dump") else item)
-
-
 def memory_governance_to_view(result) -> MemoryGovernanceActionResponse:
     return MemoryGovernanceActionResponse(
         action=result.action,
@@ -7539,7 +8292,7 @@ def memory_governance_to_view(result) -> MemoryGovernanceActionResponse:
         status=result.status,
         message=result.message,
         entry=memory_entry_to_view(result.entry) if result.entry is not None else None,
-        review_item=memory_review_item_to_view(result.review_item) if result.review_item is not None else None,
+        quality_issue=MemoryQualityIssueView.model_validate(result.quality_issue.model_dump(mode="json")) if result.quality_issue is not None else None,
         before_retention=memory_retention_to_view(result.before_retention) if result.before_retention is not None else None,
         after_retention=memory_retention_to_view(result.after_retention) if result.after_retention is not None else None,
     )
@@ -7560,39 +8313,6 @@ def memory_governance_batch_to_view(result) -> MemoryGovernanceBatchResponse:
         items=[memory_governance_plan_item_to_view(item) for item in result.items],
         results=[memory_governance_to_view(item) for item in result.results],
         errors=list(result.errors),
-    )
-
-
-def profile_facet_to_view(item) -> ProfileFacetView:
-    return ProfileFacetView.model_validate(item.model_dump(mode="json") if hasattr(item, "model_dump") else item)
-
-
-def profile_facet_policy_to_view(item) -> ProfileFacetPolicyView:
-    return ProfileFacetPolicyView.model_validate(item.model_dump(mode="json") if hasattr(item, "model_dump") else item)
-
-
-def profile_facet_audit_to_view(item) -> ProfileFacetAuditEntryView:
-    return ProfileFacetAuditEntryView.model_validate(item.model_dump(mode="json") if hasattr(item, "model_dump") else item)
-
-
-def profile_facet_governance_to_view(result) -> ProfileFacetGovernanceResponse:
-    return ProfileFacetGovernanceResponse(
-        action=result.action,
-        facet=profile_facet_to_view(result.facet),
-        status=result.status,
-        message=result.message,
-        audit_entry=profile_facet_audit_to_view(result.audit_entry) if result.audit_entry is not None else None,
-    )
-
-
-def profile_facet_rebuild_to_view(result) -> ProfileFacetRebuildResponse:
-    return ProfileFacetRebuildResponse(
-        status=result.status,
-        source=result.source,
-        facet_count=result.facet_count,
-        updated_count=result.updated_count,
-        facets=[profile_facet_to_view(item) for item in result.facets],
-        audit_entry=profile_facet_audit_to_view(result.audit_entry) if result.audit_entry is not None else None,
     )
 
 
@@ -7621,9 +8341,18 @@ def memory_maintenance_to_view(result) -> MemoryMaintenanceResponse:
 
 
 def deps_score_entry(entry) -> float:
-    from anvil.memory_platform.resolution import MemoryResolutionService
+    confidence = _bounded_score(getattr(entry, "confidence", 0.5))
+    salience = _bounded_score(getattr(entry, "salience", getattr(entry, "priority", 0.5)))
+    access_count = max(int(getattr(entry, "access_count", 0) or 0), 0)
+    return round(min(1.0, confidence * 0.55 + salience * 0.35 + min(access_count * 0.02, 0.10)), 4)
 
-    return MemoryResolutionService().effective_score(entry)
+
+def _bounded_score(value) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 0.5
+    return min(max(numeric, 0.0), 1.0)
 
 
 def prompt_snapshot_to_view(snapshot: dict | None) -> PromptSnapshotMetadataView | None:

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from anvil.config import EffectiveConfig
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
 
 from .contracts import SkillGovernanceRecord, SkillManifest
 from .governance import SkillGovernanceService, utc_now_iso
@@ -110,7 +110,7 @@ SUPPORTED_ACTIONS = (
     "rollback",
     "merge_plan",
     "merge_apply",
-    "review_plan",
+    "quality_plan",
     "review_apply",
     "feedback",
     "learn_procedure",
@@ -255,7 +255,7 @@ class SkillCuratorService:
                 dry_run=dry_run,
                 force=force,
             )
-        if normalized in {"review_plan", "plan_review"}:
+        if normalized in {"quality_plan", "plan_review"}:
             return self.plan_skill_review(
                 config=config,
                 skill_id=skill_id,
@@ -516,10 +516,10 @@ class SkillCuratorService:
             if review_lookup is not None and review_lookup.scan_truncated:
                 actions.append(
                     {
-                        "action": "review_plan",
+                        "action": "quality_plan",
                         "accepted": False,
                         "skill_id": skill_id,
-                        "reason": "curator review proposal scan truncated before review_plan",
+                        "reason": "curator review proposal scan truncated before quality_plan",
                         **review_lookup.metadata("review_proposal"),
                     }
                 )
@@ -536,7 +536,7 @@ class SkillCuratorService:
                 if dry_run:
                     actions.append(
                         {
-                            "action": "review_plan",
+                            "action": "quality_plan",
                             "skill_id": skill_id,
                             "reason": "quality review signal",
                             "dry_run": True,
@@ -558,13 +558,13 @@ class SkillCuratorService:
                     paths = {"proposal_path": str(self._review_proposals_root(config) / str(proposal["proposal_id"]) / "proposal.json")}
                     if not planned.get("reused"):
                         paths = self._write_review_proposal(config=config, proposal=proposal)
-                        self._record_review_plan_history(config=config, proposal=proposal)
+                        self._record_quality_plan_history(config=config, proposal=proposal)
                     item["last_review_proposal_id"] = proposal["proposal_id"]
-                    item["last_review_planned_at"] = utc_now_iso()
+                    item["last_quality_planned_at"] = utc_now_iso()
                     item["last_review_signal"] = self._review_signal_fingerprint(item)
                     actions.append(
                         {
-                            "action": "review_plan",
+                            "action": "quality_plan",
                             "skill_id": skill_id,
                             "proposal_id": proposal["proposal_id"],
                             "proposal_path": paths["proposal_path"],
@@ -577,11 +577,11 @@ class SkillCuratorService:
                     existing = None if review_lookup.scan_truncated else review_lookup.proposal
                     if existing is not None:
                         item["last_review_proposal_id"] = existing["proposal_id"]
-                        item["last_review_planned_at"] = utc_now_iso()
+                        item["last_quality_planned_at"] = utc_now_iso()
                         item["last_review_signal"] = self._review_signal_fingerprint(item)
                         actions.append(
                             {
-                                "action": "review_plan",
+                                "action": "quality_plan",
                                 "skill_id": skill_id,
                                 "proposal_id": existing["proposal_id"],
                                 "proposal_path": str(self._review_proposals_root(config) / str(existing["proposal_id"]) / "proposal.json"),
@@ -981,16 +981,16 @@ class SkillCuratorService:
         if dry_run:
             return {
                 "accepted": True,
-                "mode": "curator_review_plan",
+                "mode": "curator_quality_plan",
                 "dry_run": True,
                 "proposal": proposal,
                 "would_write_proposal": str(self._review_proposals_root(config) / str(proposal["proposal_id"]) / "proposal.json"),
             }
         paths = self._write_review_proposal(config=config, proposal=proposal)
-        self._record_review_plan_history(config=config, proposal=proposal)
+        self._record_quality_plan_history(config=config, proposal=proposal)
         return {
             "accepted": True,
-            "mode": "curator_review_plan",
+            "mode": "curator_quality_plan",
             "proposal_id": proposal["proposal_id"],
             "proposal": proposal,
         } | paths
@@ -2972,11 +2972,11 @@ class SkillCuratorService:
             if self._should_plan_skill_review(config=config, skill_id=skill_id, item=item):
                 recommendations.append(
                     self._recommendation(
-                        action="review_plan",
+                        action="quality_plan",
                         skill_id=skill_id,
                         reason="quality review signal",
                         priority=900 + self._review_priority(item),
-                        next_tool_call={"action": "review_plan", "skill_id": skill_id},
+                        next_tool_call={"action": "quality_plan", "skill_id": skill_id},
                         item=item,
                     )
                 )
@@ -3079,7 +3079,7 @@ class SkillCuratorService:
     ) -> tuple[list[dict[str, object]], dict[str, int]]:
         limits = {
             "archive": max(int(config.skills_config.curator.max_archive_per_run or 0), 0),
-            "review_plan": max(int(config.skills_config.curator.max_review_plan_per_run or 0), 0),
+            "quality_plan": max(int(config.skills_config.curator.max_quality_plan_per_run or 0), 0),
             "merge_plan": max(int(config.skills_config.curator.max_merge_plan_per_run or 0), 0),
             "promote_procedure": max(int(config.skills_config.curator.max_procedure_promotions_per_run or 0), 0),
             "promote_template": max(int(config.skills_config.curator.max_template_promotions_per_run or 0), 0),
@@ -3139,12 +3139,12 @@ class SkillCuratorService:
                 "reason": recommendation.get("reason") or "duplicate skill candidate",
                 "priority": recommendation.get("priority"),
             }
-        if action_name == "review_plan":
+        if action_name == "quality_plan":
             skill_id = str(recommendation.get("skill_id") or "").strip()
             if not skill_id:
                 return None
             return {
-                "action": "review_plan",
+                "action": "quality_plan",
                 "skill_id": skill_id,
                 "reason": recommendation.get("reason") or "quality review signal",
                 "priority": recommendation.get("priority"),
@@ -3170,7 +3170,7 @@ class SkillCuratorService:
 
     def _maintenance_action_sort_key(self, action: dict[str, object]) -> tuple[int, str, str]:
         order = {
-            "review_plan": 10,
+            "quality_plan": 10,
             "merge_plan": 20,
             "promote_procedure": 30,
             "promote_template": 40,
@@ -3195,7 +3195,7 @@ class SkillCuratorService:
         action_name = str(action.get("action") or "")
         skill_id = str(action.get("skill_id") or "").strip() or None
         try:
-            if action_name == "review_plan":
+            if action_name == "quality_plan":
                 planned = self.plan_skill_review(
                     config=config,
                     skill_id=skill_id,
@@ -3592,7 +3592,7 @@ class SkillCuratorService:
     ) -> dict[str, object]:
         normalized = self._normalize_skill_id(skill_id)
         if normalized is None:
-            return self._refusal("review_plan requires a safe skill_id")
+            return self._refusal("quality_plan requires a safe skill_id")
         if not self._is_workspace_skill_id(normalized):
             return self._refusal(f"skill '{normalized}' is not in the curator workspace root")
         manifest = next(
@@ -3776,12 +3776,12 @@ class SkillCuratorService:
             scan_truncated=proposal_scan.scan_truncated,
         )
 
-    def _record_review_plan_history(self, *, config: EffectiveConfig, proposal: dict[str, object]) -> None:
+    def _record_quality_plan_history(self, *, config: EffectiveConfig, proposal: dict[str, object]) -> None:
         self.governance.record_history(
             config,
             SkillGovernanceRecord(
                 skill_id=str(proposal["skill_id"]),
-                action="curator_review_plan",
+                action="curator_quality_plan",
                 created_at=utc_now_iso(),
                 detail={
                     "proposal_id": proposal["proposal_id"],

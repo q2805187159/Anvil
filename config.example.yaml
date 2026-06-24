@@ -36,8 +36,10 @@
 # - token_usage (optional; default disabled): token accounting and cost table.
 # - trajectory_export (optional; defaults shown): SFT/RL trajectory export.
 # - scheduled_tasks (optional; defaults shown): cron-like task runner settings.
-# - memory/memory_platform (optional; defaults disabled): memory injection,
-#   archival, review, updater, and reflection jobs.
+# - git (required for HCMS version metadata; default token_env GITHUB_TOKEN):
+#   token env name plus optional author/remote metadata.
+# - hcms (optional; defaults disabled): HCMS recall injection,
+#   archival, quality, updater, and reflection jobs.
 # - tool_output_budget/tool_visibility_budget (optional; defaults shown):
 #   tool-result truncation and schema-visibility budgets.
 # - skills_config (optional; defaults shown): skill discovery/governance.
@@ -74,9 +76,8 @@
 #   oauth, env_resolution, header_templates, resource_policy, prompt_policy,
 #   reconnect_policy, healthcheck. Common stdio/http MCP aliases are accepted.
 # - extensions.plugins.<id>: enabled, source_path, skill_roots, inline_tools,
-#   resources, prompts, memory_providers, catalog_metadata.
-# - extensions.plugins.<id>.memory_providers[]: provider_id (required),
-#   display_name, kind, roles, settings, enabled.
+#   resources, prompts, catalog_metadata. Active memory engine truth remains
+#   built-in HCMS.
 # - terminal.backends.<id>: kind, label, enabled, command_prefix, default_cwd,
 #   working_dir, env, env_passthrough, env_prefix_passthrough, timeout_seconds,
 #   lifetime_seconds, image, host, username, sandbox_id, app, runtime,
@@ -528,9 +529,7 @@ context_files:
   enabled: true
   filenames:
     - AGENTS.md
-    - CLAUDE.md
-    - CODEX.md
-    - GEMINI.md
+    - PROJECT_RULES.md
     - .cursorrules
     - .windsurfrules
   rule_globs:
@@ -540,9 +539,7 @@ context_files:
   recursive_agents: false
   recursive_names:
     - AGENTS.md
-    - CODEX.md
-    - CLAUDE.md
-    - GEMINI.md
+    - PROJECT_RULES.md
   max_files: 12
   max_chars: 12000
   max_chars_per_file: 4000
@@ -681,34 +678,41 @@ loop_detection:
   max_identical_turns: 3
 
 # ------------------------------------------------------------
-# Memory
-# transcript_context_tokens is used when transcript/archive recall is injected
-# alongside curated memory.
+# Git base configuration
+# HCMS Git-like version metadata treats Git as required base configuration.
+# Keep the token value in `.env`; this config names the env variable.
 # ------------------------------------------------------------
-memory:
+git:
   enabled: true
-  prefetch_once_per_turn: true
-  # Optional. When omitted, legacy memory lives under the active Anvil Home.
-  store_path: null
-  namespace: global/default
-  max_facts: 12
-  injection_token_budget: 1200
-  transcript_context_tokens: 4000
+  required: true
+  provider: github
+  token_env: GITHUB_TOKEN
+  user_name:
+  user_email:
+  remote_url:
 
-memory_platform:
+# ------------------------------------------------------------
+# HCMS Memory
+# transcript_context_tokens is used when transcript/archive recall is injected
+# alongside structured HCMS recall.
+# ------------------------------------------------------------
+hcms:
   enabled: true
+  # hybrid: Markdown memories + SQLite index + full MemoryState sidecar.
+  # filesystem: compact JSON MemoryState store for lightweight local runs.
+  storage_backend: hybrid
   stores:
-    runtime_memory:
+    hcms_workspace:
       enabled: true
-      display_name: Runtime Memory
+      display_name: HCMS Workspace Layer
       max_chars: 2800
       injection_chars: 1400
       max_tokens: 700
       injection_tokens: 350
-      category_bias: runtime
-    user_profile:
+      category_bias: workspace
+    hcms_user:
       enabled: true
-      display_name: User Profile
+      display_name: HCMS User Layer
       max_chars: 1800
       injection_chars: 1000
       max_tokens: 450
@@ -716,18 +720,13 @@ memory_platform:
       category_bias: preference
   archive:
     enabled: true
-    sqlite_path: ./.anvil/memory-platform/archive.sqlite3
+    sqlite_path: ./.anvil/hcms/archive.sqlite3
     fts_enabled: true
     max_hits: 8
-  providers:
-    active_provider_id: anvil_factgraph
+  engines:
+    active_engine_id: hcms
     catalog:
-      local_curated:
-        enabled: true
-        configured: true
-        roles: [sync, index, memory_write, session_end, pre_compact, delegation]
-        settings: {}
-      anvil_factgraph:
+      hcms:
         enabled: true
         configured: true
         roles: [sync, index, reflection, explain, memory_write, session_end, pre_compact, delegation]
@@ -743,13 +742,13 @@ memory_platform:
         cron: null
         interval_seconds: 3600
         template: custom
-        target_store_id: runtime_memory
+        target_store_id: hcms_workspace
         instructions: null
         source_query: null
   compaction_hooks:
     enabled: true
     include_archive: true
-    include_provider_notes: true
+    include_engine_notes: true
   session_search:
     enabled: true
     default_limit: 5
@@ -762,9 +761,20 @@ memory_platform:
     max_evidence: 8
     min_relevance_score: 0.05
     turn_recall_token_budget: 900
+    bm25_weight: 0.3
+    vector_weight: 0.4
+    graph_weight: 0.2
+    temporal_weight: 0.1
+    rrf_k: 60
+    enable_adaptive_weights: true
+    enable_cache: true
+    cache_ttl: 300
+    cache_max_entries: 100
+    enable_mmr: true
+    mmr_lambda: 0.72
     enable_model_rerank: false
     rerank_model_name: minimax
-  review:
+  quality:
     auto_accept_confidence: 0.82
     auto_supersede_confidence: 0.9
     max_direct_content_chars: 360
@@ -793,10 +803,10 @@ memory_platform:
     interval_hours: null
     min_idle_seconds: 0
     max_archive_per_run: 2
-    max_review_per_run: 8
+    max_quality_inspections_per_run: 8
     max_reinforce_per_run: 6
     min_quality_score_for_execute: 0.55
-    max_pending_review_for_execute: 30
+    max_quality_issues_for_execute: 30
     run_reflection_due_jobs: true
     include_health: true
   onboarding:
@@ -805,8 +815,8 @@ memory_platform:
     # excludes env/secret/build-cache paths, scrubs accidental credentials, and
     # queues one review item by default instead of writing directly into prompt-visible memory.
     trigger_when_project_memory_empty: true
-    review_first: true
-    target_store_id: runtime_memory
+    quality_first: true
+    target_store_id: hcms_workspace
     target_layer_id: workspace
     category: project_context
     max_files: 8
@@ -832,9 +842,9 @@ memory_platform:
       - pytest.ini
       - setup.cfg
       - requirements*.txt
-      - docs/architecture/*.md
+      - docs/guides/*.md
       - docs/adr/*.md
-      - docs/guides/quickstart*.md
+      - docs/memory/*.md
     exclude_patterns:
       - .env
       - .env.*
@@ -852,20 +862,23 @@ memory_platform:
       - "**/build/**"
   transcript:
     enabled: true
-    sqlite_path: ./.anvil/memory-platform/transcript.sqlite3
+    sqlite_path: ./.anvil/hcms/transcript.sqlite3
     fts_enabled: true
     transcript_context_tokens: 4000
   prompt_snapshot:
     enabled: true
-    store_path: ./.anvil/memory-platform/prompt-snapshots
+    store_path: ./.anvil/hcms/prompt-snapshots
     ttl_days: 7
     max_snapshots_per_thread: 10
   session_snapshot:
     enabled: true
-    store_path: ./.anvil/memory-platform/session-snapshots
+    store_path: ./.anvil/hcms/session-snapshots
   update_queue:
     enabled: true
     debounce_seconds: 1.5
+    min_window_seconds: 5
+    default_window_seconds: 30
+    max_window_seconds: 60
     # Optional. Low-signal turns are batched until this many completed turns are pending.
     min_batch_turns: 4
     max_batch_turns: 8
@@ -949,7 +962,7 @@ skills_config:
     maintenance_enabled: true
     max_actions_per_run: 25
     max_archive_per_run: 2
-    max_review_plan_per_run: 6
+    max_quality_plan_per_run: 6
     max_merge_plan_per_run: 3
     max_procedure_promotions_per_run: 3
     max_template_promotions_per_run: 3
@@ -1298,13 +1311,6 @@ extensions:
       inline_tools: []
       resources: []
       prompts: []
-      memory_providers:
-        - provider_id: example_memory
-          display_name: Example Memory Provider
-          kind: http
-          roles: [recall, sync]
-          settings: {}
-          enabled: false
       catalog_metadata: {}
 
 # ------------------------------------------------------------

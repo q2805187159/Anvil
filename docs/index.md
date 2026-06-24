@@ -26,6 +26,7 @@ This is the top-level navigation page for the release-facing Anvil documentation
 - [`guides/tui.md`](./guides/tui.md)
 - [`guides/commands.md`](./guides/commands.md)
 - [`guides/configuration.md`](./guides/configuration.md)
+- [`guides/hcms-memory-api.md`](./guides/hcms-memory-api.md)
 - [`guides/model-provider-configuration.md`](./guides/model-provider-configuration.md)
 - [`guides/doctor-smoke-and-tracing.md`](./guides/doctor-smoke-and-tracing.md)
 - [`guides/extensions-and-capability-surfaces.md`](./guides/extensions-and-capability-surfaces.md)
@@ -34,10 +35,15 @@ This is the top-level navigation page for the release-facing Anvil documentation
 - [`guides/open-source-release.md`](./guides/open-source-release.md)
 - [`guides/release-verification.md`](./guides/release-verification.md)
 
+## HCMS Evidence
+
+- [`memory/hcms-implementation-audit.md`](./memory/hcms-implementation-audit.md)
+- [`memory/hcms-benchmark-report.md`](./memory/hcms-benchmark-report.md)
+
 ## Examples
 
 - [`examples/README.md`](https://github.com/q2805187159/Anvil/blob/main/examples/README.md)
-- [`plugins/memory-http-provider-plugin/README.md`](https://github.com/q2805187159/Anvil/blob/main/plugins/memory-http-provider-plugin/README.md)
+- [`plugins/memory-http-integration-notes/README.md`](https://github.com/q2805187159/Anvil/blob/main/plugins/memory-http-integration-notes/README.md)
 
 ## Testing and Release Tracking
 

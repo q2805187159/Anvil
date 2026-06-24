@@ -73,8 +73,6 @@ class PromptInjectionView(BaseModel):
             sections.append(PromptSection(name="approval_context", content=self.approval_context))
         if self.plan_context:
             sections.append(PromptSection(name="plan_context", content=self.plan_context))
-        if self.memory_context:
-            sections.append(PromptSection(name="memory_context", content=self.memory_context))
         if self.promoted_capabilities:
             promoted = "\n".join(f"- {name}" for name in self.promoted_capabilities)
             sections.append(PromptSection(name="promoted_capabilities", content=promoted))
@@ -466,7 +464,7 @@ def _build_stable_sections(
                 "For capability discovery use tool_catalog/tool_view, toolset_catalog/toolset_view, and capability_search before guessing names or schemas. "
                 "Large external tool catalogs may be task-filtered; if a likely tool is deferred or missing, use capability_search or tool_catalog with a specific query before assuming it is unavailable. "
                 "For governed surfaces use only Anvil skill tools: skills_list, skill_view, skill_content, skill_files, and skill_read_file. "
-                "Do not call legacy external skill-download tools that mention .claude/skills; Anvil skills are already governed by the registry and must be accessed through skill_id plus relative_path. "
+                "Do not call legacy external skill-download tools that target third-party skill directories; Anvil skills are already governed by the registry and must be accessed through skill_id plus relative_path. "
                 "For document extraction and Word export, prefer extract_document and export_document before falling back to run_command. "
                 "If a request requires a user decision, call ask_clarification with structured options so clients can render a choice UI and resume with the user's selection. "
                 "When multiple related decisions are needed, use ask_clarification fields to bundle them into one typed form instead of emitting a markdown checklist or separate pause requests. "
@@ -506,8 +504,8 @@ def _build_stable_sections(
             PromptSection(
                 name="memory_snapshot",
                 content=(
-                    "Stable snapshot contains ambient defaults only: durable user preferences, profile facets, "
-                    "workspace constraints, and reusable outcomes that passed memory governance. Treat it as prior context, "
+                    "Stable snapshot contains ambient defaults only: HCMS user preferences, workspace constraints, "
+                    "evidence-backed memories, and reusable outcomes that passed HCMS quality checks. Treat it as prior context, "
                     "not as fresh user instruction. Use dynamic memory recall, session_search, or memory_trace for fact lookup "
                     "when the current task needs specific evidence or when the snapshot may be stale.\n\n"
                     f"{memory_snapshot}"

@@ -6,7 +6,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from anvil.agents import ThreadLifecycleStatus, ThreadState
-from anvil.memory_platform.scrubber import MemorySecretScrubber
+from anvil.memory.scrubber import MemorySecretScrubber
+from anvil.runtime.context_v2 import (
+    context_v2_evaluation_record_from_snapshot,
+    context_v2_evaluation_run_from_snapshot,
+)
 
 from .contracts import (
     EvaluationBatchReport,
@@ -80,8 +84,12 @@ class ThreadEvaluationReportBuilder:
                     _runtime_phase_diagnostics(state.execution.runtime_phase_timings),
                     options=options,
                 ),
-                runtime_assembly_snapshot=self._safe_mapping(state.execution.runtime_assembly_snapshot, options=options),
+                runtime_assembly_snapshot=self._safe_runtime_assembly_snapshot(
+                    state.execution.runtime_assembly_snapshot,
+                    options=options,
+                ),
                 runtime_assembly_diff=self._safe_mapping(state.execution.runtime_assembly_diff, options=options),
+                context_v2_evaluation=self._context_v2_evaluation(state, options=options),
                 context_window_usage=self._safe_mapping(state.execution.context_window_usage, options=options),
                 token_usage=self._safe_mapping(state.execution.token_usage, options=options),
                 model_fallback_history=[
@@ -270,6 +278,8 @@ class ThreadEvaluationReportBuilder:
         )
         if compaction_diagnostics:
             lines.append(f"- Compaction diagnostics: `{_format_compaction_diagnostics(compaction_diagnostics)}`")
+        if report.runtime.context_v2_evaluation:
+            lines.append(f"- Context V2 evaluation: `{_format_context_v2_evaluation(report.runtime.context_v2_evaluation)}`")
         runtime_diff_paths = _runtime_assembly_changed_paths(report.runtime.runtime_assembly_diff)
         if runtime_diff_paths:
             lines.append(f"- Runtime assembly diff: `{', '.join(runtime_diff_paths[:12])}`")
@@ -647,10 +657,40 @@ class ThreadEvaluationReportBuilder:
             }
         )
 
+    def _context_v2_evaluation(self, state: ThreadState, *, options: EvaluationReportOptions) -> dict[str, object]:
+        record = context_v2_evaluation_record_from_snapshot(state.execution.runtime_assembly_snapshot)
+        if record is None:
+            return {}
+        payload = record.model_dump(mode="json")
+        diagnostics = payload.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            payload["diagnostics"] = _context_v2_diagnostics_for_report(diagnostics)
+        observability = _runtime_observability_summary(state.execution.runtime_assembly_snapshot)
+        if observability:
+            payload["runtime_observability"] = observability
+        run = context_v2_evaluation_run_from_snapshot(
+            state.execution.runtime_assembly_snapshot,
+            suite_id="trajectory-context-v2",
+            run_id=state.identity.run_id or record.trace_id,
+            ablation_flags={"event_log_replay": bool(record.runtime_event_count)},
+        )
+        if run is not None:
+            run_summary = _context_v2_evaluation_run_summary(run.model_dump(mode="json"))
+            run_diagnostics = run_summary.get("diagnostics")
+            if isinstance(run_diagnostics, dict):
+                run_summary["diagnostics"] = _context_v2_diagnostics_for_report(run_diagnostics)
+            payload["evaluation_run"] = run_summary
+        return self._safe_mapping(payload, options=options)
+
     def _safe_mapping(self, value: dict[str, object], *, options: EvaluationReportOptions) -> dict[str, object]:
         if not isinstance(value, dict):
             return {}
         return self._safe_value(value, options=options)
+
+    def _safe_runtime_assembly_snapshot(self, value: dict[str, object], *, options: EvaluationReportOptions) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return self._safe_mapping(_runtime_assembly_snapshot_for_report(value), options=options)
 
     def _safe_value(self, value, *, options: EvaluationReportOptions):
         if isinstance(value, str):
@@ -1103,28 +1143,32 @@ def _memory_injection_diagnostics(runtime_assembly_snapshot: dict[str, object]) 
     if not isinstance(runtime_assembly_snapshot, dict):
         return {}
     diagnostics = runtime_assembly_snapshot.get("memory_injection_diagnostics")
-    return diagnostics if isinstance(diagnostics, dict) else {}
+    return _memory_injection_diagnostics_for_report(diagnostics)
 
 
 def _format_memory_injection_diagnostics(diagnostics: dict[str, object]) -> str:
     fields = (
         "source",
         "status",
-        "curated_match_count",
+        "injection_mode",
+        "memory_match_count",
         "archive_hit_count",
         "evidence_count",
-        "provider_note_count",
+        "engine_note_count",
         "rendered_tokens",
         "token_budget",
         "truncated",
+        "context_v2_block_count",
     )
     labels = {
-        "curated_match_count": "curated",
+        "injection_mode": "mode",
+        "memory_match_count": "memory",
         "archive_hit_count": "archive",
         "evidence_count": "evidence",
-        "provider_note_count": "provider_notes",
+        "engine_note_count": "engine_notes",
         "rendered_tokens": "tokens",
         "token_budget": "budget",
+        "context_v2_block_count": "blocks",
     }
     parts = [f"{labels.get(field, field)}={diagnostics.get(field, '-')}" for field in fields]
     store_counts = diagnostics.get("store_counts")
@@ -1190,6 +1234,573 @@ def _format_compaction_diagnostics(diagnostics: dict[str, object]) -> str:
     }
     parts = [f"{labels.get(field, field)}={diagnostics.get(field, '-')}" for field in fields if field in diagnostics]
     return " ".join(parts)
+
+
+def _format_context_v2_evaluation(record: dict[str, object]) -> str:
+    fields = (
+        "trace_id",
+        "prompt_hash",
+        "actual_system_prompt_hash",
+        "total_tokens",
+        "hard_context_tokens",
+        "candidate_block_count",
+        "selected_block_count",
+        "dropped_block_count",
+        "compressed_block_count",
+        "deferred_block_count",
+        "runtime_event_count",
+        "trace_replay_ready",
+        "fallback_used",
+        "diagnostic_only",
+    )
+    labels = {
+        "trace_id": "trace",
+        "prompt_hash": "prompt_hash",
+        "actual_system_prompt_hash": "system_prompt_hash",
+        "total_tokens": "tokens",
+        "hard_context_tokens": "hard_budget",
+        "candidate_block_count": "candidates",
+        "selected_block_count": "selected",
+        "dropped_block_count": "dropped",
+        "compressed_block_count": "compressed",
+        "deferred_block_count": "deferred",
+        "runtime_event_count": "runtime_event_count",
+        "trace_replay_ready": "replay_ready",
+    }
+    parts = [f"{labels.get(field, field)}={record.get(field, '-')}" for field in fields if field in record]
+    for field, label in (
+        ("layer_token_usage", "layers"),
+        ("source_kind_counts", "sources"),
+        ("block_type_counts", "block_types"),
+        ("drop_reason_counts", "drop_reasons"),
+        ("runtime_event_counts", "runtime_events"),
+    ):
+        values = record.get(field)
+        if isinstance(values, dict) and values:
+            parts.append(f"{label}={_format_count_map(values)}")
+    replay_coverage = record.get("replay_phase_coverage")
+    if isinstance(replay_coverage, dict) and replay_coverage:
+        covered = [str(key) for key, value in replay_coverage.items() if value]
+        missing = [str(key) for key, value in replay_coverage.items() if not value]
+        if covered:
+            parts.append(f"replay_phases={','.join(covered[:4])}")
+        if missing:
+            parts.append(f"missing_replay_phases={','.join(missing[:4])}")
+    evaluation_run = record.get("evaluation_run")
+    if isinstance(evaluation_run, dict):
+        if "trace_replay_ready" in evaluation_run:
+            parts.append(f"suite_replay_ready={evaluation_run.get('trace_replay_ready')}")
+        metrics = evaluation_run.get("metrics")
+        if isinstance(metrics, dict):
+            ready = metrics.get("replay_ready_count")
+            cases = metrics.get("trace_count")
+            if ready is not None and cases is not None:
+                parts.append(f"suite_replay_cases={ready}/{cases}")
+    for field, label in (
+        ("selected_tools", "tools"),
+        ("selected_mcp_tools", "mcp"),
+        ("selected_skills", "skills"),
+        ("selected_memory", "memory"),
+        ("selected_workspace", "workspace"),
+        ("selected_events", "events"),
+        ("selected_tool_results", "tool_results"),
+        ("selected_tool_result_refs", "tool_refs"),
+    ):
+        values = record.get(field)
+        if isinstance(values, list) and values:
+            parts.append(f"{label}={','.join(str(item) for item in values[:4])}")
+    return " ".join(parts)
+
+
+def _context_v2_evaluation_run_summary(run: dict[str, object]) -> dict[str, object]:
+    summary: dict[str, object] = {}
+    for field in ("run_id", "suite_id", "case_count", "trace_replay_ready"):
+        if field in run:
+            summary[field] = run[field]
+    for field in (
+        "metrics",
+        "runtime_event_counts",
+        "runtime_event_refs",
+        "runtime_event_trace_ids",
+        "runtime_tool_result_refs",
+        "runtime_workspace_refs",
+        "runtime_memory_refs",
+        "replay_phase_coverage",
+        "replay_missing_phases",
+        "trace_replay_matrix",
+        "ablation_flags",
+        "ablation_variant_metrics",
+        "diagnostics",
+    ):
+        value = run.get(field)
+        if value:
+            summary[field] = value
+    return summary
+
+
+def _runtime_observability_summary(snapshot: dict[str, object]) -> dict[str, object]:
+    if not isinstance(snapshot, dict):
+        return {}
+    record = context_v2_evaluation_record_from_snapshot(snapshot)
+    context_v2 = snapshot.get("context_v2")
+    if record is None or not isinstance(context_v2, dict):
+        return {}
+    diagnostics = context_v2.get("diagnostics")
+    diagnostics_payload = diagnostics if isinstance(diagnostics, dict) else {}
+    payload: dict[str, object] = {
+        "trace_id": record.trace_id,
+        "prompt_hash": record.prompt_hash,
+        "block_counts": {
+            "candidate": record.candidate_block_count,
+            "selected": record.selected_block_count,
+            "compressed": record.compressed_block_count,
+            "deferred": record.deferred_block_count,
+            "dropped": record.dropped_block_count,
+        },
+        "total_tokens": record.total_tokens,
+        "hard_context_tokens": record.hard_context_tokens,
+    }
+    if record.actual_system_prompt_hash:
+        payload["actual_system_prompt_hash"] = record.actual_system_prompt_hash
+    if record.layer_token_usage:
+        payload["layer_token_usage"] = dict(record.layer_token_usage)
+    for field in (
+        "selected_tools",
+        "selected_mcp_tools",
+        "selected_skills",
+        "selected_memory",
+        "selected_workspace",
+        "selected_events",
+        "selected_tool_results",
+        "selected_tool_result_refs",
+    ):
+        refs = _safe_ref_list(getattr(record, field, []))
+        if refs:
+            payload[field] = refs
+    retrieval_summary = _retrieval_score_summary(
+        diagnostics_payload.get("retrieval_scores")
+        or diagnostics_payload.get("memory_retrieval_scores")
+        or diagnostics_payload.get("retrieval_score_summary")
+    )
+    if retrieval_summary:
+        payload["retrieval_score_summary"] = retrieval_summary
+    _merge_diagnostic_observability(payload, diagnostics_payload)
+    _merge_event_observability(payload, context_v2)
+    return _compact_observability_payload(payload)
+
+
+def _merge_diagnostic_observability(payload: dict[str, object], diagnostics: dict[str, object]) -> None:
+    for field in ("llm_output_ref", "llm_output_hash", "llm_output_status", "user_satisfaction_proxy"):
+        text = _safe_observability_text(diagnostics.get(field))
+        if text:
+            payload[field] = text
+    for field in ("llm_output_tokens", "llm_latency_ms"):
+        value = _int_or_none(diagnostics.get(field))
+        if value is not None:
+            payload[field] = value
+
+
+def _merge_event_observability(payload: dict[str, object], context_v2: dict[str, object]) -> None:
+    events = _context_v2_runtime_events(context_v2)
+    tool_outcomes: Counter[str] = Counter()
+    tool_outcome_refs: list[str] = []
+    user_correction_count = 0
+    user_satisfaction_proxy = _safe_observability_text(payload.get("user_satisfaction_proxy"))
+    for event in events:
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        event_type = str(event.get("event_type") or "")
+        source_kind = str(event.get("source_kind") or "")
+        outcome = _safe_observability_text(metadata.get("outcome") or event.get("outcome"))
+        if outcome and ("tool" in event_type.lower() or "tool" in source_kind.lower()):
+            tool_outcomes[outcome] += 1
+            ref = _safe_observability_text(event.get("event_id") or event.get("source_ref"))
+            if ref and ref not in tool_outcome_refs:
+                tool_outcome_refs.append(ref)
+        if _truthy_observability_signal(metadata.get("user_correction") or event.get("user_correction")):
+            user_correction_count += 1
+        if not user_satisfaction_proxy:
+            user_satisfaction_proxy = _safe_observability_text(
+                metadata.get("user_satisfaction_proxy") or event.get("user_satisfaction_proxy")
+            )
+    if tool_outcomes:
+        payload["tool_outcome_counts"] = dict(sorted(tool_outcomes.items()))
+    if tool_outcome_refs:
+        payload["tool_outcome_refs"] = tool_outcome_refs[:32]
+    if user_correction_count:
+        payload["user_correction_count"] = user_correction_count
+    if user_satisfaction_proxy:
+        payload["user_satisfaction_proxy"] = user_satisfaction_proxy
+
+
+def _context_v2_runtime_events(context_v2: dict[str, object]) -> list[dict[str, object]]:
+    event_log = context_v2.get("event_log")
+    runtime_state = context_v2.get("runtime_state")
+    if isinstance(runtime_state, dict) and "event_log" in runtime_state:
+        event_log = runtime_state.get("event_log")
+    if isinstance(event_log, dict):
+        events = event_log.get("events")
+        if isinstance(events, (list, tuple)):
+            return [event for event in events if isinstance(event, dict)]
+    if isinstance(event_log, (list, tuple)):
+        return [event for event in event_log if isinstance(event, dict)]
+    return []
+
+
+def _retrieval_score_summary(value) -> dict[str, object]:
+    scores: list[float] = []
+    if isinstance(value, dict):
+        if {"count", "min", "max", "average"}.issubset(value):
+            count = _int_or_none(value.get("count"))
+            min_score = _float_or_none(value.get("min"))
+            max_score = _float_or_none(value.get("max"))
+            average = _float_or_none(value.get("average"))
+            if count is not None and min_score is not None and max_score is not None and average is not None:
+                return {
+                    "count": count,
+                    "min": round(min_score, 4),
+                    "max": round(max_score, 4),
+                    "average": round(average, 4),
+                }
+        iterable = value.values()
+    elif isinstance(value, (list, tuple, set)):
+        iterable = value
+    else:
+        return {}
+    for item in iterable:
+        if isinstance(item, dict):
+            score = (
+                _float_or_none(item.get("score"))
+                or _float_or_none(item.get("retrieval_score"))
+                or _float_or_none(item.get("similarity"))
+            )
+        else:
+            score = _float_or_none(item)
+        if score is not None:
+            scores.append(score)
+    if not scores:
+        return {}
+    return {
+        "count": len(scores),
+        "min": round(min(scores), 4),
+        "max": round(max(scores), 4),
+        "average": round(sum(scores) / len(scores), 4),
+    }
+
+
+def _safe_observability_text(value, *, max_chars: int = 240) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text[:max_chars]
+
+
+def _truthy_observability_signal(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "corrected", "correction", "user_correction"}
+
+
+def _compact_observability_payload(payload: dict[str, object]) -> dict[str, object]:
+    compacted: dict[str, object] = {}
+    for key, value in payload.items():
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        compacted[key] = value
+    return compacted
+
+
+_RUNTIME_EVENT_REPORT_FIELDS = (
+    "event_id",
+    "sequence",
+    "event_type",
+    "timestamp",
+    "created_at",
+    "actor",
+    "thread_id",
+    "run_id",
+    "turn_id",
+    "source_kind",
+    "source_ref",
+    "payload_ref",
+    "privacy_level",
+    "trust_level",
+    "trace_id",
+    "tool_result_refs",
+    "workspace_refs",
+    "goal_stack_ref",
+    "capability_usage_refs",
+    "memory_refs",
+)
+
+_RUNTIME_EVENT_RAW_METADATA_KEYS = {
+    "args",
+    "arguments",
+    "body",
+    "completion",
+    "content",
+    "input",
+    "inputs",
+    "message",
+    "messages",
+    "output",
+    "params",
+    "payload",
+    "payload_text",
+    "prompt",
+    "raw_output",
+    "raw_payload",
+    "raw_prompt",
+    "raw_result",
+    "raw_tool_output",
+    "request",
+    "response",
+    "result",
+    "results",
+    "tool_output",
+    "tool_result",
+    "tool_result_output",
+}
+
+_RUNTIME_EVENT_SAFE_RAW_METADATA_KEYS = {
+    "raw_size_bytes",
+    "raw_size_chars",
+    "raw_token_count",
+    "raw_tokens_approx",
+}
+
+_MEMORY_INJECTION_DIAGNOSTIC_REPORT_FIELDS = (
+    "source",
+    "status",
+    "injection_mode",
+    "actual_prompt_mode",
+    "snapshot_id",
+    "query_tokens",
+    "memory_match_count",
+    "archive_hit_count",
+    "evidence_count",
+    "engine_note_count",
+    "rendered_tokens_before_truncation",
+    "rendered_tokens",
+    "token_budget",
+    "truncated",
+    "context_v2_block_count",
+    "context_v2_candidate_block_count",
+    "context_v2_selected_memory_count",
+    "context_v2_memory_block_ids",
+    "context_v2_memory_block_refs",
+    "hcms_v2_memory_block_ids",
+    "store_counts",
+    "source_kind_counts",
+    "error_type",
+    "context_v2_assembly_error",
+)
+
+_MEMORY_INJECTION_DIAGNOSTIC_REF_FIELDS = {
+    "context_v2_memory_block_ids",
+    "context_v2_memory_block_refs",
+    "hcms_v2_memory_block_ids",
+}
+
+_MEMORY_INJECTION_DIAGNOSTIC_COUNT_MAP_FIELDS = {
+    "store_counts",
+    "source_kind_counts",
+}
+
+
+def _runtime_assembly_snapshot_for_report(snapshot: dict[str, object]) -> dict[str, object]:
+    payload = dict(snapshot)
+    context_v2 = payload.get("context_v2")
+    if isinstance(context_v2, dict):
+        payload["context_v2"] = _context_v2_snapshot_for_report(context_v2)
+    diagnostics = payload.get("memory_injection_diagnostics")
+    if isinstance(diagnostics, dict):
+        payload["memory_injection_diagnostics"] = _memory_injection_diagnostics_for_report(
+            diagnostics,
+            context_v2=payload.get("context_v2"),
+        )
+    return payload
+
+
+def _memory_injection_diagnostics_for_report(diagnostics, *, context_v2=None) -> dict[str, object]:
+    if not isinstance(diagnostics, dict):
+        return {}
+    payload: dict[str, object] = {}
+    for field in _MEMORY_INJECTION_DIAGNOSTIC_REPORT_FIELDS:
+        if field not in diagnostics:
+            continue
+        value = _memory_injection_diagnostic_value_for_report(field, diagnostics.get(field))
+        if value in (None, "", [], {}):
+            continue
+        payload[field] = value
+    if isinstance(context_v2, dict):
+        _merge_context_v2_memory_diagnostics(payload, context_v2)
+    return payload
+
+
+def _memory_injection_diagnostic_value_for_report(field: str, value):
+    if field in _MEMORY_INJECTION_DIAGNOSTIC_REF_FIELDS:
+        return _safe_ref_list(value)
+    if field in _MEMORY_INJECTION_DIAGNOSTIC_COUNT_MAP_FIELDS:
+        return _safe_count_map(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value
+    if value is None:
+        return None
+    return str(value)[:240]
+
+
+def _merge_context_v2_memory_diagnostics(payload: dict[str, object], context_v2: dict[str, object]) -> None:
+    for field in ("hcms_v2_memory_block_ids", "context_v2_memory_block_ids"):
+        refs = _safe_ref_list(context_v2.get(field))
+        if refs:
+            payload.setdefault(field, refs)
+    refs = _safe_ref_list(
+        payload.get("context_v2_memory_block_ids")
+        or payload.get("context_v2_memory_block_refs")
+        or payload.get("hcms_v2_memory_block_ids")
+    )
+    if refs:
+        payload.setdefault("context_v2_block_count", len(refs))
+        payload.setdefault("context_v2_memory_block_ids", refs)
+
+
+def _safe_ref_list(value, *, limit: int = 32) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    refs: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        refs.append(text[:240])
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def _safe_count_map(value) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    payload: dict[str, int] = {}
+    for key, item in value.items():
+        count = _int_or_none(item)
+        if count is None:
+            continue
+        payload[str(key)[:120]] = count
+    return payload
+
+
+def _context_v2_snapshot_for_report(context_v2: dict[str, object]) -> dict[str, object]:
+    payload = dict(context_v2)
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        payload["diagnostics"] = _context_v2_diagnostics_for_report(diagnostics)
+    runtime_state = payload.get("runtime_state")
+    if isinstance(runtime_state, dict):
+        runtime_state_payload = dict(runtime_state)
+        if "event_log" in runtime_state_payload:
+            runtime_state_payload["event_log"] = _runtime_event_log_for_report(runtime_state_payload.get("event_log"))
+        payload["runtime_state"] = runtime_state_payload
+    if "event_log" in payload:
+        payload["event_log"] = _runtime_event_log_for_report(payload.get("event_log"))
+    return payload
+
+
+def _context_v2_diagnostics_for_report(diagnostics: dict[object, object]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in diagnostics.items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or _runtime_event_metadata_key_is_raw(normalized_key):
+            continue
+        safe_value = _context_v2_diagnostic_value_for_report(value)
+        if safe_value in (None, "", [], {}):
+            continue
+        payload[normalized_key] = safe_value
+    return payload
+
+
+def _context_v2_diagnostic_value_for_report(value):
+    if isinstance(value, dict):
+        return _context_v2_diagnostics_for_report(value)
+    if isinstance(value, list):
+        return [_context_v2_diagnostic_value_for_report(item) for item in value]
+    if isinstance(value, tuple):
+        return [_context_v2_diagnostic_value_for_report(item) for item in value]
+    return value
+
+
+def _runtime_event_log_for_report(event_log):
+    if isinstance(event_log, dict):
+        payload = dict(event_log)
+        events = payload.get("events")
+        if isinstance(events, (list, tuple)):
+            payload["events"] = [_runtime_event_for_report(event) for event in events]
+        return payload
+    if isinstance(event_log, (list, tuple)):
+        return [_runtime_event_for_report(event) for event in event_log]
+    return event_log
+
+
+def _runtime_event_for_report(event):
+    if not isinstance(event, dict):
+        return event
+    payload = {
+        field: event[field]
+        for field in _RUNTIME_EVENT_REPORT_FIELDS
+        if field in event
+    }
+    metadata = event.get("metadata")
+    if isinstance(metadata, dict):
+        safe_metadata = _runtime_event_metadata_for_report(metadata)
+        if safe_metadata:
+            payload["metadata"] = safe_metadata
+    return payload
+
+
+def _runtime_event_metadata_for_report(metadata: dict[object, object]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in metadata.items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or _runtime_event_metadata_key_is_raw(normalized_key):
+            continue
+        payload[normalized_key] = _runtime_event_metadata_value_for_report(value)
+    return payload
+
+
+def _runtime_event_metadata_value_for_report(value):
+    if isinstance(value, dict):
+        return _runtime_event_metadata_for_report(value)
+    if isinstance(value, list):
+        return [_runtime_event_metadata_value_for_report(item) for item in value]
+    if isinstance(value, tuple):
+        return [_runtime_event_metadata_value_for_report(item) for item in value]
+    return value
+
+
+def _runtime_event_metadata_key_is_raw(key: str) -> bool:
+    normalized = key.lower()
+    if normalized in _RUNTIME_EVENT_RAW_METADATA_KEYS:
+        return True
+    if normalized.startswith("raw_") and normalized not in _RUNTIME_EVENT_SAFE_RAW_METADATA_KEYS:
+        return True
+    if normalized.endswith("_raw"):
+        return True
+    if "prompt" in normalized and not normalized.endswith("_hash") and normalized != "actual_prompt_mode":
+        return True
+    if "output" in normalized and "compaction_profile" not in normalized and not normalized.endswith(
+        ("_count", "_counts", "_chars", "_tokens", "_status", "_ref", "_refs", "_hash", "_id", "_ids")
+    ):
+        return True
+    return False
 
 
 def _format_count_map(values: dict[str, object], *, limit: int = 4) -> str:

@@ -4,7 +4,14 @@ import { createElement } from "react";
 import { TooltipProvider } from "@/src/components/ui/tooltip";
 import { I18nProvider } from "@/src/core/i18n";
 
-import type { MessageView, QueuedFollowUpView, RunStreamEvent, ToolActivityView } from "@/src/core/contracts";
+import type {
+  EvaluationThreadReportView,
+  MessageView,
+  QueuedFollowUpView,
+  RunStreamEvent,
+  RuntimeContextV2DiagnosticsView,
+  ToolActivityView,
+} from "@/src/core/contracts";
 import { sortThreadsByRecency, threadActivityAt } from "@/src/core/threads/recency";
 
 import {
@@ -1172,6 +1179,10 @@ describe("ContextWindowUsagePanel", () => {
             skills_discovery_stage_durations_ms: { resolve_roots: 4, loader_discover: 30, total: 42 },
             slowest_skills_discovery_stage: "loader_discover",
             slowest_skills_discovery_stage_duration_ms: 30,
+            skill_retrieval_selected_ids: [],
+            skill_retrieval_tiers_used: [],
+            skill_retrieval_expanded_query_terms: [],
+            skill_retrieval_prefetch_ids: [],
             visible_by_source_kind: { builtin: 6, skill: 2 },
             deferred_by_source_kind: { mcp: 4 },
             visible_by_group: { code: 5 },
@@ -1182,18 +1193,19 @@ describe("ContextWindowUsagePanel", () => {
             status: "injected",
             snapshot_id: "snapshot-1",
             query_tokens: 9,
-            curated_match_count: 2,
+            memory_match_count: 2,
             archive_hit_count: 1,
             evidence_count: 3,
-            provider_note_count: 1,
-            summary_present: true,
+            engine_note_count: 1,
             rendered_tokens_before_truncation: 1200,
             rendered_tokens: 900,
             token_budget: 900,
             truncated: true,
             error_type: null,
+            context_v2_memory_block_ids: [],
+            hcms_v2_memory_block_ids: [],
             store_counts: { project: 2 },
-            source_kind_counts: { curated: 2, archive: 1 },
+            source_kind_counts: { memory: 2, archive: 1 },
           },
           activeModelName: "openai",
         }),
@@ -1225,7 +1237,7 @@ describe("ContextWindowUsagePanel", () => {
     expectVisibleText("true");
     expect(screen.getByText(/Scopes: \.:1/)).toBeInTheDocument();
     expect(screen.getByText("Memory injection")).toBeInTheDocument();
-    expect(screen.getByText(/Curated 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Memory matches 2/)).toBeInTheDocument();
     expect(screen.getByText(/Stores: project:2/)).toBeInTheDocument();
     expect(screen.getByText("Capability diagnostics")).toBeInTheDocument();
     expect(screen.getByText(/8 visible tools \/ 4 deferred tools/)).toBeInTheDocument();
@@ -1234,6 +1246,41 @@ describe("ContextWindowUsagePanel", () => {
     expect(screen.getAllByText("40").length).toBeGreaterThan(0);
     expect(screen.getByText(/Skills stages: loader_discover:30/)).toBeInTheDocument();
     expect(screen.getByText(/Visible sources: builtin:6/)).toBeInTheDocument();
+    unmount();
+  });
+
+  it("renders Context V2 memory as a named context category", async () => {
+    const { fireEvent, render, screen } = await import("@testing-library/react");
+    const { ContextWindowUsageControl } = await import("./workspace-shell");
+
+    const { unmount } = render(
+      withProviders(
+        createElement(ContextWindowUsageControl, {
+          usage: {
+            context_tokens: 650,
+            context_source: "estimated",
+            context_breakdown: { messages: 320, system: 160, context_v2_memory: 64 },
+            context_breakdown_percentages: { messages: 0.5, system: 0.25, context_v2_memory: 0.1 },
+            dominant_context_category: "context_v2_memory",
+            total_tokens: 54,
+            input_tokens: 30,
+            output_tokens: 24,
+            autocompact_buffer_tokens: 150,
+            free_space_tokens: 350,
+            context_window_tokens: 1000,
+            auto_compact_threshold_tokens: 800,
+            compact_status: "below_threshold",
+          },
+          activeModelName: "openai",
+        }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Context window 650 \/ 1k \(65%\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+
+    expectVisibleText("Context V2 Memory");
+    expect(screen.queryByText("context_v2_memory")).not.toBeInTheDocument();
     unmount();
   });
 
@@ -1295,7 +1342,7 @@ describe("ContextWindowUsagePanel", () => {
     }
   });
 
-  it("renders Claude Code style context window rows and usage details", async () => {
+  it("renders agent context window rows and usage details", async () => {
     const { fireEvent, render, screen } = await import("@testing-library/react");
     const { ContextWindowUsagePanel } = await import("./workspace-shell");
 
@@ -1401,6 +1448,10 @@ describe("ContextWindowUsagePanel", () => {
             skills_discovery_stage_durations_ms: { resolve_roots: 4, loader_discover: 30, total: 42 },
             slowest_skills_discovery_stage: "loader_discover",
             slowest_skills_discovery_stage_duration_ms: 30,
+            skill_retrieval_selected_ids: [],
+            skill_retrieval_tiers_used: [],
+            skill_retrieval_expanded_query_terms: [],
+            skill_retrieval_prefetch_ids: [],
             visible_by_source_kind: { builtin: 6, skill: 2 },
             deferred_by_source_kind: { mcp: 4 },
             visible_by_group: { code: 5 },
@@ -1411,18 +1462,19 @@ describe("ContextWindowUsagePanel", () => {
             status: "injected",
             snapshot_id: "snapshot-1",
             query_tokens: 9,
-            curated_match_count: 2,
+            memory_match_count: 2,
             archive_hit_count: 1,
             evidence_count: 3,
-            provider_note_count: 1,
-            summary_present: true,
+            engine_note_count: 1,
             rendered_tokens_before_truncation: 1200,
             rendered_tokens: 900,
             token_budget: 900,
             truncated: true,
             error_type: null,
+            context_v2_memory_block_ids: [],
+            hcms_v2_memory_block_ids: [],
             store_counts: { project: 2 },
-            source_kind_counts: { curated: 2, archive: 1 },
+            source_kind_counts: { memory: 2, archive: 1 },
           },
           compactionDiagnostics: {
             compaction_level: 2,
@@ -1485,8 +1537,8 @@ describe("ContextWindowUsagePanel", () => {
     expect(screen.getByText(/Runtime paths Fingerprint:/)).toBeInTheDocument();
     expect(screen.getByText("Memory injection")).toBeInTheDocument();
     expectVisibleText("Rendered tokens");
-    expect(screen.getByText(/Recall: Curated 2/)).toBeInTheDocument();
-    expect(screen.getByText(/Sources: curated:2/)).toBeInTheDocument();
+    expect(screen.getByText(/Recall: Memory matches 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Sources: memory:2/)).toBeInTheDocument();
     expect(screen.getByText("Compaction diagnostics")).toBeInTheDocument();
     expect(screen.getAllByText("Summary source").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Summary model").length).toBeGreaterThan(0);
@@ -1511,6 +1563,182 @@ describe("ContextWindowUsagePanel", () => {
     expect(screen.getByText("1.8k")).toBeInTheDocument();
     expect(screen.getByText("Keep recent")).toBeInTheDocument();
     expect(screen.getAllByText("12").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("RuntimeContextV2ObservabilityPanel", () => {
+  function withProviders(component: React.ReactElement) {
+    return createElement(I18nProvider, null, createElement(TooltipProvider, null, component));
+  }
+
+  it("renders selected Runtime Context V2 evidence without raw tool results", async () => {
+    const { render, screen } = await import("@testing-library/react");
+    const { RuntimeContextV2ObservabilityPanel, buildRuntimeContextV2ObservabilitySummary } = await import("./workspace-shell");
+    const report: EvaluationThreadReportView = {
+      report_id: "report-thread-a",
+      thread_id: "thread-a",
+      run_id: "run-a",
+      generated_at: "2026-06-11T00:00:00.000Z",
+      outcome: "passed",
+      score: 1,
+      evaluator: null,
+      runtime: {
+        status: "completed",
+        model: "openai",
+        execution_mode: "default",
+        reasoning_effort: null,
+        runtime_phase_timings: {},
+        runtime_phase_diagnostics: {},
+        runtime_assembly_snapshot: {
+          context_v2: {
+            trace: {
+              trace_id: "ctx-trace-1",
+              prompt_hash: "prompt-hash-1",
+              selected_tools: ["read_file"],
+              selected_skills: ["skill.python"],
+              selected_mcp_tools: ["browser_mcp"],
+              selected_memory: ["claim-1"],
+              selected_tool_result_refs: ["artifact://thread-a/tool-results/call-read.txt"],
+            },
+            runtime_state: {
+              review_inbox: {
+                warning_block_count: 1,
+                warning_block_ids: ["conflict-warning-1"],
+              },
+            },
+            actual_system_prompt_hash: "actual-prompt-hash-1",
+          },
+        },
+        runtime_assembly_diff: {},
+        context_v2_evaluation: {
+          trace_id: "ctx-trace-1",
+          prompt_hash: "prompt-hash-1",
+          selected_memory: ["claim-1"],
+          selected_tools: ["read_file"],
+          selected_skills: ["skill.python"],
+          selected_mcp_tools: ["browser_mcp"],
+          selected_tool_result_refs: ["artifact://thread-a/tool-results/call-read.txt"],
+          runtime_observability: {
+            block_counts: { memory: 1, capability: 3, tool_result_ref: 1 },
+          },
+          evaluation_run: {
+            trace_replay_ready: true,
+            runtime_event_counts: { intake: 1, tool_result: 1 },
+            replay_phase_coverage: { context_assembly: true, memory_capture: true },
+          },
+        },
+        context_window_usage: {},
+        token_usage: {},
+        model_fallback_history: [],
+      },
+      tool_calls: [
+        {
+          tool_call_id: "call-read",
+          name: "read_file",
+          status: "completed",
+          result_text: "raw secret result must not render",
+        },
+      ],
+      approvals: [],
+      artifacts: {},
+      hidden_bug_risks: [],
+      recommendations: [],
+      notes: [],
+    };
+
+    const summary = buildRuntimeContextV2ObservabilitySummary(report);
+    expect(summary.selectedMemory).toEqual(["claim-1"]);
+    expect(summary.selectedToolResultRefs).toEqual(["artifact://thread-a/tool-results/call-read.txt"]);
+    expect(summary.traceReplayReady).toBe(true);
+    expect(summary.conflictWarningCount).toBe(1);
+
+    render(
+      withProviders(
+        createElement(RuntimeContextV2ObservabilityPanel, {
+          report,
+          locale: "en-US",
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("runtime-context-v2-observability")).toBeInTheDocument();
+    expectVisibleText("Runtime Context V2");
+    expectVisibleText("ctx-trace-1");
+    expectVisibleText("Trace replay ready");
+    expectVisibleText("read_file");
+    expectVisibleText("skill.python");
+    expectVisibleText("browser_mcp");
+    expectVisibleText("claim-1");
+    expectVisibleText("artifact://thread-a/tool-results/call-read.txt");
+    expectVisibleText("Conflict warnings");
+    expectVisibleText("conflict-warning-1");
+    expect(screen.queryByText("raw secret result must not render")).not.toBeInTheDocument();
+  });
+
+  it("renders live Runtime Context V2 diagnostics without an evaluation report", async () => {
+    const { render, screen } = await import("@testing-library/react");
+    const { RuntimeContextV2ObservabilityPanel, buildRuntimeContextV2ObservabilitySummary } = await import("./workspace-shell");
+    const diagnostics: RuntimeContextV2DiagnosticsView = {
+      actual_prompt_mode: "runtime_context_v2",
+      trace_id: "ctx-live-1",
+      prompt_hash: "prompt-live-1",
+      actual_system_prompt_hash: "actual-live-1",
+      selected_capabilities: ["tool:shell"],
+      selected_tools: ["shell"],
+      selected_skills: ["skill.live"],
+      selected_mcp_tools: ["mcp.live"],
+      selected_memory: ["claim-live"],
+      selected_tool_result_refs: ["artifact://thread-live/tool-results/call-shell.txt"],
+      selected_conflict_warnings: ["runtime-warning:block-live"],
+      block_counts: { memory: 1, capability: 1, dropped: 1 },
+      dropped_block_count: 1,
+      compressed_block_count: 0,
+      deferred_block_count: 0,
+      runtime_event_counts: {
+        action_dispatch: 1,
+        observation_handling: 1,
+        state_update: 1,
+        maintenance_scheduling: 1,
+      },
+      replay_phase_coverage: {
+        action_dispatch: true,
+        observation_handling: true,
+        state_update: true,
+        maintenance_scheduling: true,
+      },
+      trace_replay_ready: true,
+      conflict_warning_count: 1,
+    };
+
+    const summary = buildRuntimeContextV2ObservabilitySummary(null, diagnostics);
+    expect(summary.traceId).toBe("ctx-live-1");
+    expect(summary.selectedCapabilities).toEqual(["tool:shell"]);
+    expect(summary.selectedMemory).toEqual(["claim-live"]);
+    expect(summary.selectedToolResultRefs).toEqual(["artifact://thread-live/tool-results/call-shell.txt"]);
+    expect(summary.runtimeEventCounts).toContainEqual({ name: "action_dispatch", value: "1" });
+    expect(summary.replayPhaseCoverage).toContainEqual({ name: "maintenance_scheduling", value: "true" });
+    expect(summary.conflictWarnings).toEqual(["runtime-warning:block-live"]);
+
+    render(
+      withProviders(
+        createElement(RuntimeContextV2ObservabilityPanel, {
+          report: null,
+          diagnostics,
+          locale: "en-US",
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("runtime-context-v2-observability")).toBeInTheDocument();
+    expectVisibleText("ctx-live-1");
+    expectVisibleText("shell");
+    expectVisibleText("skill.live");
+    expectVisibleText("mcp.live");
+    expectVisibleText("claim-live");
+    expectVisibleText("artifact://thread-live/tool-results/call-shell.txt");
+    expectVisibleText("action_dispatch");
+    expectVisibleText("maintenance_scheduling");
+    expectVisibleText("runtime-warning:block-live");
   });
 });
 

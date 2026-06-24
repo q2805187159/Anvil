@@ -82,6 +82,36 @@ class SkillSummary(BaseModel):
     curator: dict[str, object] = Field(default_factory=dict)
 
 
+class SkillCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    title: str
+    summary: str
+    selection_rank: int | None = None
+    selected: bool = False
+    tier_scores: dict[str, float] = Field(default_factory=dict)
+    fusion_score: float = 0.0
+    matched_terms: tuple[str, ...] = ()
+    matched_fields: tuple[str, ...] = ()
+    graph_neighbors: tuple[str, ...] = ()
+    source_ref: str = ""
+    token_cost: int = 0
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class SkillRetrievalPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = ""
+    top_k: int = 0
+    selected_skill_ids: tuple[str, ...] = ()
+    l0_summary: dict[str, object] = Field(default_factory=dict)
+    tiers_used: tuple[str, ...] = ()
+    candidates: tuple[SkillCandidate, ...] = ()
+    diagnostics: dict[str, object] = Field(default_factory=dict)
+
+
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

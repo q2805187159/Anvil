@@ -352,7 +352,11 @@ def bootstrap_anvil_profile_home(
 
 
 def default_anvil_config_dir(repo_root: Path | None = None) -> Path:
-    _ = repo_root
+    env_home = os.getenv(ANVIL_HOME_ENV_VAR)
+    if env_home:
+        return get_anvil_home()
+    if repo_root is not None:
+        return (Path(repo_root).expanduser().resolve() / ANVIL_CONFIG_DIR_NAME).resolve()
     return resolve_anvil_profile_home()
 
 
@@ -362,7 +366,7 @@ def resolve_config_path(
     repo_root: Path | None = None,
 ) -> Path | None:
     root = (repo_root or get_repo_root()).resolve()
-    profile_home = resolve_anvil_profile_home()
+    profile_home = default_anvil_config_dir(root)
     load_dotenv_file(profile_home / DOTENV_FILE_NAME)
 
     if config_path is not None:
@@ -391,7 +395,7 @@ def build_default_config_layers(
     repo_root: Path | None = None,
 ) -> list[ConfigLayer]:
     root = (repo_root or get_repo_root()).resolve()
-    profile_home = bootstrap_anvil_profile_home()
+    profile_home = bootstrap_anvil_profile_home(anvil_home=default_anvil_config_dir(root))
     load_dotenv_file(profile_home / DOTENV_FILE_NAME)
     config_file = resolve_config_path(config_path, repo_root=root)
     layers: list[ConfigLayer] = [
@@ -645,26 +649,42 @@ def _default_profile_config_payload(profile_name: str) -> dict[str, object]:
 
 def _runtime_default_config_payload() -> dict[str, object]:
     return {
-        "memory": {
+        "git": {
             "enabled": True,
-            "prefetch_once_per_turn": True,
-            "namespace": "global/default",
-            "max_facts": 12,
-            "injection_token_budget": 1200,
-            "transcript_context_tokens": 4000,
+            "required": True,
+            "provider": "github",
+            "token_env": "GITHUB_TOKEN",
         },
-        "memory_platform": {
+        "hcms": {
             "enabled": True,
+            "recall": {
+                "bm25_weight": 0.3,
+                "vector_weight": 0.4,
+                "graph_weight": 0.2,
+                "temporal_weight": 0.1,
+                "rrf_k": 60,
+                "enable_adaptive_weights": True,
+                "enable_cache": True,
+                "cache_ttl": 300,
+                "cache_max_entries": 100,
+                "enable_mmr": True,
+                "mmr_lambda": 0.72,
+            },
             "update_queue": {
                 "enabled": True,
                 "debounce_seconds": 1.5,
+                "min_window_seconds": 5.0,
+                "default_window_seconds": 30.0,
+                "max_window_seconds": 60.0,
                 "min_batch_turns": 4,
                 "max_batch_turns": 8,
             },
             "updater": {
                 "enabled": True,
+                "mode": "heuristic",
                 "max_input_tokens": 6000,
                 "max_output_tokens": 1800,
+                "fact_confidence_threshold": 0.82,
                 "timeout_seconds": 60,
                 "fail_open": True,
             },

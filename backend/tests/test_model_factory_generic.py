@@ -221,7 +221,7 @@ def test_factory_requires_provider_setting_secret_refs(monkeypatch: pytest.Monke
         create_chat_model(model)
 
 
-def test_factory_passes_deerflow_style_model_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_passes_generic_model_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
     CapturingChatModel.captured_kwargs = {}
 

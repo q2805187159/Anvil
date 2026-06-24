@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-import logging
+from dataclasses import dataclass
 import json
+import logging
+import re
 import time
 from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from anvil.agents.lead_agent.context_files import build_project_context_snapshot
-from anvil.memory_platform.contracts import sanitize_memory_context_text
+from anvil.memory import sanitize_memory_context_text
+from anvil.memory.hcms_v2 import memory_injection_view_v2_from_legacy, memory_injection_view_v2_to_blocks
+from anvil.runtime.context_v2 import ContextBlock, ContextSource, ContextSourceKind, EvidenceRef, stable_context_id
+from anvil.runtime.token_budget import TokenBudgetService
 from anvil.skills.service import normalize_skill_id
 
 from .contracts import ContextRequest, ContextResponse, ContextType
@@ -25,21 +30,36 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_CONTEXT_CHARS = 8_000
 _MAX_CONTEXT_CHARS = 40_000
 _FILE_READ_BYTE_MULTIPLIER = 4
-_DIRECT_PROJECT_FILE_NAMES = {"readme.md", "readme_zh.md", "agents.md", "claude.md", "codex.md", "gemini.md"}
+_DIRECT_PROJECT_FILE_NAMES = {"readme.md", "readme_zh.md", "agents.md", "project_rules.md"}
 _PROJECT_CONTEXT_ALIASES = {"", "*", ".", "project", "workspace", "context", "context_files"}
 _CONTEXT_SECTION_TAGS = (
     "jit_context",
     "project_context_files",
     "context_file",
+    "memory_context",
     "memory_recall",
 )
+_XML_CONTEXT_SECTION_PATTERN = re.compile(
+    r"</?(?:jit_context|project_context_files|context_file|memory_context|memory_recall)(?:\s+[^>]*)?>",
+    re.IGNORECASE,
+)
+_BRACKETED_CONTEXT_SECTION_PATTERN = re.compile(
+    r"\[/?(?:jit_context|project_context_files|context_file|memory_context|memory_recall)(?:\s+[^\]\r\n]*)?\]",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _LoadedContext:
+    content: str
+    metadata: dict[str, Any]
 
 
 class ContextLoader:
     """Loads context on-demand from various sources.
 
     Supports:
-    - Memory context (from memory platform)
+    - Memory context (from HCMS recall services)
     - File context (from path service)
     - Skill context (from skills service)
     - Tool context (from tool registry)
@@ -85,9 +105,10 @@ class ContextLoader:
         """
         start_time = time.time()
         cache_key = self._cache_key(request, context)
+        use_cache = self.cache is not None and request.context_type != ContextType.MEMORY
 
         # Check cache first
-        if self.cache:
+        if use_cache and self.cache:
             cached_content = self.cache.get(cache_key)
             if cached_content:
                 load_time_ms = (time.time() - start_time) * 1000
@@ -103,14 +124,20 @@ class ContextLoader:
 
         # Load from source
         try:
-            content = self._load_from_source(request, context)
-            if content is None:
+            loaded = self._load_from_source(request, context)
+            if loaded is None:
                 return None
+            if isinstance(loaded, _LoadedContext):
+                content = loaded.content
+                metadata = dict(loaded.metadata)
+            else:
+                content = loaded
+                metadata = {}
 
             load_time_ms = (time.time() - start_time) * 1000
 
             # Cache the result
-            if self.cache:
+            if use_cache and self.cache:
                 tokens = self._estimate_tokens(content)
                 self.cache.put(cache_key, content, tokens)
 
@@ -120,7 +147,8 @@ class ContextLoader:
                 content=content,
                 tokens=self._estimate_tokens(content),
                 cached=False,
-                load_time_ms=load_time_ms
+                load_time_ms=load_time_ms,
+                metadata=metadata,
             )
 
         except Exception as e:
@@ -133,7 +161,7 @@ class ContextLoader:
         self,
         request: ContextRequest,
         context: LeadAgentContext | None
-    ) -> str | None:
+    ) -> str | _LoadedContext | None:
         """Load content from appropriate source.
 
         Args:
@@ -159,8 +187,8 @@ class ContextLoader:
             logger.warning("Unknown context type: %s", request.context_type)
             return None
 
-    def _load_memory(self, request: ContextRequest, context: LeadAgentContext | None) -> str | None:
-        """Load memory context from memory platform."""
+    def _load_memory(self, request: ContextRequest, context: LeadAgentContext | None) -> str | _LoadedContext | None:
+        """Load memory context from HCMS recall services."""
         if context is None or context.memory_manager is None:
             return None
 
@@ -171,13 +199,21 @@ class ContextLoader:
                 return None
             if hasattr(manager, "prefetch_recall"):
                 recall = manager.prefetch_recall(thread_id=context.thread_id, query=query)
-                rendered = recall.render_turn_block() if hasattr(recall, "render_turn_block") else str(recall)
-                return self._format_context_block(
-                    context_type=request.context_type,
-                    identifier=query,
-                    content=rendered,
+                context_v2_loaded = self._load_memory_recall_as_context_v2(
+                    recall,
+                    query=query,
                     request=request,
-                    attrs={"thread_id": context.thread_id},
+                    context=context,
+                )
+                if context_v2_loaded is not None:
+                    return context_v2_loaded
+                rendered = recall.render_turn_block() if hasattr(recall, "render_turn_block") else str(recall)
+                return self._load_unstructured_memory_recall_as_context_v2(
+                    rendered,
+                    recall=recall,
+                    query=query,
+                    request=request,
+                    context=context,
                 )
             if hasattr(manager, "search_sessions"):
                 result = manager.search_sessions(
@@ -199,6 +235,183 @@ class ContextLoader:
         except Exception as e:
             logger.error("Failed to load memory %s: %s", request.identifier, e)
             return None
+
+    def _load_memory_recall_as_context_v2(
+        self,
+        recall: Any,
+        *,
+        query: str,
+        request: ContextRequest,
+        context: LeadAgentContext,
+    ) -> _LoadedContext | None:
+        injection = getattr(recall, "injection", None)
+        if injection is None:
+            return None
+
+        token_budget = TokenBudgetService()
+        view = memory_injection_view_v2_from_legacy(injection, query=query, token_budget=token_budget)
+        blocks = [
+            block.model_dump(mode="json")
+            for block in memory_injection_view_v2_to_blocks(view, token_budget=token_budget)
+        ]
+        if not blocks:
+            return None
+
+        existing_blocks = list(getattr(context, "context_v2_memory_blocks", ()) or ())
+        merged_blocks = _merge_context_v2_blocks(existing_blocks, blocks)
+        context.context_v2_memory_blocks = merged_blocks
+
+        block_ids = [str(block.get("block_id") or "") for block in blocks if block.get("block_id")]
+        snapshot_id = str(getattr(recall, "snapshot_fingerprint", "") or "")
+        diagnostics = dict(getattr(context, "memory_injection_diagnostics", {}) or {})
+        diagnostics.update(
+            {
+                "source": "jit_context_loader",
+                "status": "injected",
+                "injection_mode": "context_v2",
+                "snapshot_id": snapshot_id,
+                "context_v2_block_count": len(blocks),
+                "memory_match_count": len(blocks),
+                "evidence_count": sum(len(block.get("evidence_refs", ()) or ()) for block in blocks),
+                "rendered_tokens": sum(int(block.get("token_cost") or 0) for block in blocks),
+            }
+        )
+        context.memory_injection_diagnostics = diagnostics
+
+        content_payload = {
+            "injection_mode": "context_v2",
+            "query": query,
+            "snapshot_id": snapshot_id,
+            "blocks": blocks,
+            "diagnostics": {
+                "block_count": len(blocks),
+                "block_ids": block_ids,
+                "source": "jit_context_loader",
+            },
+        }
+        content = self._format_context_block(
+            context_type=request.context_type,
+            identifier=query,
+            content=json.dumps(content_payload, ensure_ascii=False, sort_keys=True, default=str),
+            request=request,
+            attrs={
+                "thread_id": context.thread_id,
+                "injection_mode": "context_v2",
+                "block_count": str(len(blocks)),
+            },
+        )
+        if content is None:
+            return None
+        return _LoadedContext(
+            content=content,
+            metadata={
+                "source": "jit_context_loader",
+                "status": "injected",
+                "injection_mode": "context_v2",
+                "snapshot_id": snapshot_id,
+                "context_v2_block_count": len(blocks),
+                "context_v2_memory_block_ids": block_ids,
+            },
+        )
+
+    def _load_unstructured_memory_recall_as_context_v2(
+        self,
+        rendered: str,
+        *,
+        recall: Any,
+        query: str,
+        request: ContextRequest,
+        context: LeadAgentContext,
+    ) -> _LoadedContext | None:
+        sanitized = _strip_context_section_fence_tags(rendered)
+        if not sanitized:
+            return None
+
+        token_budget = TokenBudgetService()
+        snapshot_id = str(getattr(recall, "snapshot_fingerprint", "") or "")
+        block = ContextBlock(
+            block_id=stable_context_id("jit-memory", context.thread_id, query, snapshot_id, sanitized),
+            block_type="retrieved_memory",
+            source=ContextSource(
+                kind=ContextSourceKind.MEMORY,
+                name="jit_context_loader",
+                ref=snapshot_id or None,
+                metadata={"query": query, "unstructured": True},
+            ),
+            title="JIT Memory Recall",
+            content=sanitized,
+            token_cost=token_budget.count_text(sanitized),
+            priority=0.55,
+            salience=0.55,
+            confidence=0.5,
+            position_hint="memory:jit",
+            evidence_refs=(
+                EvidenceRef(
+                    ref_id=stable_context_id("jit-memory-evidence", context.thread_id, query, snapshot_id),
+                    source_kind="memory_recall",
+                    source_id=snapshot_id or context.thread_id,
+                    span=token_budget.truncate_text(sanitized, max_tokens=80, max_chars=320),
+                    confidence=0.5,
+                ),
+            ),
+            tags=("memory", "jit_context", "unstructured_recall"),
+            metadata={"source": "jit_context_loader", "injection_mode": "context_v2_unstructured"},
+        )
+        blocks = [block.model_dump(mode="json")]
+        context.context_v2_memory_blocks = _merge_context_v2_blocks(
+            list(getattr(context, "context_v2_memory_blocks", ()) or ()),
+            blocks,
+        )
+        diagnostics = dict(getattr(context, "memory_injection_diagnostics", {}) or {})
+        diagnostics.update(
+            {
+                "source": "jit_context_loader",
+                "status": "injected",
+                "injection_mode": "context_v2_unstructured",
+                "snapshot_id": snapshot_id,
+                "context_v2_block_count": 1,
+                "memory_match_count": 1,
+                "evidence_count": 1,
+                "rendered_tokens": block.token_cost,
+            }
+        )
+        context.memory_injection_diagnostics = diagnostics
+        block_id = block.block_id
+        content_payload = {
+            "injection_mode": "context_v2_unstructured",
+            "query": query,
+            "snapshot_id": snapshot_id,
+            "blocks": blocks,
+            "diagnostics": {
+                "block_count": 1,
+                "block_ids": [block_id],
+                "source": "jit_context_loader",
+            },
+        }
+        content = self._format_context_block(
+            context_type=request.context_type,
+            identifier=query,
+            content=json.dumps(content_payload, ensure_ascii=False, sort_keys=True, default=str),
+            request=request,
+            attrs={
+                "thread_id": context.thread_id,
+                "injection_mode": "context_v2_unstructured",
+                "block_count": "1",
+            },
+        )
+        if content is None:
+            return None
+        return _LoadedContext(
+            content=content,
+            metadata={
+                "source": "jit_context_loader",
+                "status": "injected",
+                "injection_mode": "context_v2_unstructured",
+                "snapshot_id": snapshot_id,
+                "context_v2_block_count": 1,
+                "context_v2_memory_block_ids": [block_id],
+            },
+        )
 
     def _load_file(self, request: ContextRequest, context: LeadAgentContext | None) -> str | None:
         """Load file context from path service."""
@@ -329,7 +542,7 @@ class ContextLoader:
             return None
 
     def _load_project(self, request: ContextRequest, context: LeadAgentContext | None) -> str | None:
-        """Load project context (README, CLAUDE.md, etc.)."""
+        """Load project context files such as README, AGENTS.md, and project rules."""
         if context is None or context.path_service is None:
             return None
 
@@ -558,7 +771,6 @@ class ContextLoader:
         candidates = {
             "request": context.request_context,
             "summary": context.summary_context,
-            "memory": context.memory_context,
             "todo": context.todo_context,
             "approval": context.approval_context,
             "uploads": context.upload_context,
@@ -600,3 +812,26 @@ class ContextLoader:
 
 def _looks_like_windows_path(value: str) -> bool:
     return len(value) >= 2 and value[1] == ":" and value[0].isalpha()
+
+
+def _strip_context_section_fence_tags(value: str | None) -> str:
+    text = _XML_CONTEXT_SECTION_PATTERN.sub("", str(value or ""))
+    text = sanitize_memory_context_text(text).replace("\x00", "")
+    text = _BRACKETED_CONTEXT_SECTION_PATTERN.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _merge_context_v2_blocks(
+    existing_blocks: list[dict[str, Any]],
+    new_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for block in [*existing_blocks, *new_blocks]:
+        block_id = str(block.get("block_id") or "")
+        if block_id:
+            if block_id in seen:
+                continue
+            seen.add(block_id)
+        merged.append(block)
+    return merged

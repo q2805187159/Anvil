@@ -13,6 +13,11 @@ Thumbs.db
 host/
 %SystemDrive%/
 
+# Local assistant context files
+CLAUDE.md
+CODEX.md
+GEMINI.md
+
 # Python caches and local environments
 __pycache__/
 *.py[cod]
@@ -21,7 +26,9 @@ __pycache__/
 _tmp_test/
 _tmp-debug/
 _tmp_debug/
+.tmp/
 .tmp-debug/
+.tmp-hcms-import/
 _tmp_pkg_install/
 .mypy_cache/
 .ruff_cache/
@@ -41,6 +48,7 @@ backend/_tmp_test/
 backend/_tmp_pkg_install/
 backend/.pytest_cache/
 backend/.pytest_tmp/
+backend/tmp/
 backend/.coverage
 backend/coverage.xml
 backend/htmlcov/
@@ -75,16 +83,20 @@ docs/implementation/*audit*.md
 docs/*bootstrap-prompt*.md
 docs/*phased-build*.md
 docs/debug-pic/
+docs/assets/screenshots/
 docs/FINAL-TESTING-REPORT.md
 docs/OPTIMIZATION-SUMMARY.md
 docs/PROJECT-COMPLETE.md
 optimization-log.md
 
-# Optional local skill packs. Public releases keep these out of the main tree;
-# install/share reviewed skill packs through Anvil Home or a dedicated package.
-skills/
-
 # Logs and temporary files
 *.log
 *.tmp
 *.bak
+pytest-cache-files-*/
+pytest_tmp/
+
+frontend/.next-release/
+frontend/.next-probe*/
+frontend/.next-release-builds/
+frontend/.next-release-current.json

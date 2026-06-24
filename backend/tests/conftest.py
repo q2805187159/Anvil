@@ -14,6 +14,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 HARNESS_SRC = Path(__file__).resolve().parents[1] / "packages" / "harness"
 BACKEND_TEST_TMP_ENV = "ANVIL_BACKEND_TEST_TMP"
 
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+os.environ["LANGCHAIN_TRACING"] = "false"
+os.environ.pop("LANGSMITH_API_KEY", None)
+os.environ.pop("LANGCHAIN_API_KEY", None)
+
 
 def _select_local_tmp() -> Path:
     candidates = []
@@ -128,11 +134,7 @@ def build_gateway_config_layers(base_path: Path, *, refresh_policy: str = "dynam
                         "model_name": "gpt-5.4",
                     }
                 },
-                "memory": {
-                    "enabled": True,
-                    "prefetch_once_per_turn": True,
-                    "store_path": str(base_path / "memory-store"),
-                },
+                "hcms": {"enabled": True},
                 "skills_config": {
                     "enabled": True,
                     "external_dirs": [str(skills_root)],

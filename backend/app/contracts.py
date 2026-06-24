@@ -291,6 +291,21 @@ class CapabilityAssemblyDiagnosticsView(BaseModel):
     skills_discovery_stage_durations_ms: dict[str, int] = Field(default_factory=dict)
     slowest_skills_discovery_stage: str | None = None
     slowest_skills_discovery_stage_duration_ms: int | None = None
+    skill_retrieval_query: str = ""
+    skill_retrieval_top_k: int = 0
+    skill_retrieval_selected_ids: tuple[str, ...] = ()
+    skill_retrieval_tiers_used: tuple[str, ...] = ()
+    skill_retrieval_candidate_count: int = 0
+    skill_retrieval_loaded_full_content: bool | None = None
+    skill_retrieval_embedding_mode: str | None = None
+    skill_retrieval_expanded_query_terms: tuple[str, ...] = ()
+    skill_retrieval_prefetch_ids: tuple[str, ...] = ()
+    skill_retrieval_l4_rerank_triggered: bool = False
+    skill_retrieval_l5_hyde_triggered: bool = False
+    skill_retrieval_l6_prefetch_triggered: bool = False
+    skill_retrieval_salience_route_id: str | None = None
+    skill_retrieval_goal_stack_ref: str | None = None
+    skill_retrieval_active_goal_id: str | None = None
     visible_by_source_kind: dict[str, int] = Field(default_factory=dict)
     deferred_by_source_kind: dict[str, int] = Field(default_factory=dict)
     visible_by_group: dict[str, int] = Field(default_factory=dict)
@@ -302,13 +317,21 @@ class MemoryInjectionDiagnosticsView(BaseModel):
 
     source: str = "none"
     status: str = "not_used"
+    injection_mode: str = "context_v2"
+    requested_injection_mode: str | None = None
+    legacy_prompt_append_migrated: bool = False
+    legacy_prompt_append_suppressed: bool = False
     snapshot_id: str | None = None
     query_tokens: int = 0
-    curated_match_count: int = 0
+    memory_match_count: int = 0
     archive_hit_count: int = 0
     evidence_count: int = 0
-    provider_note_count: int = 0
-    summary_present: bool = False
+    engine_note_count: int = 0
+    context_v2_block_count: int = 0
+    context_v2_candidate_block_count: int = 0
+    context_v2_selected_memory_count: int = 0
+    context_v2_memory_block_ids: list[str] = Field(default_factory=list)
+    hcms_v2_memory_block_ids: list[str] = Field(default_factory=list)
     rendered_tokens_before_truncation: int = 0
     rendered_tokens: int = 0
     token_budget: int | None = None
@@ -316,6 +339,30 @@ class MemoryInjectionDiagnosticsView(BaseModel):
     error_type: str | None = None
     store_counts: dict[str, int] = Field(default_factory=dict)
     source_kind_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class RuntimeContextV2DiagnosticsView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actual_prompt_mode: str | None = None
+    trace_id: str | None = None
+    prompt_hash: str | None = None
+    actual_system_prompt_hash: str | None = None
+    selected_capabilities: list[str] = Field(default_factory=list)
+    selected_tools: list[str] = Field(default_factory=list)
+    selected_skills: list[str] = Field(default_factory=list)
+    selected_mcp_tools: list[str] = Field(default_factory=list)
+    selected_memory: list[str] = Field(default_factory=list)
+    selected_tool_result_refs: list[str] = Field(default_factory=list)
+    selected_conflict_warnings: list[str] = Field(default_factory=list)
+    block_counts: dict[str, int] = Field(default_factory=dict)
+    dropped_block_count: int = 0
+    compressed_block_count: int = 0
+    deferred_block_count: int = 0
+    runtime_event_counts: dict[str, int] = Field(default_factory=dict)
+    replay_phase_coverage: dict[str, bool] = Field(default_factory=dict)
+    trace_replay_ready: bool | None = None
+    conflict_warning_count: int = 0
 
 
 class RuntimePhaseTimingMarkView(BaseModel):
@@ -407,6 +454,7 @@ class ThreadStateView(BaseModel):
     context_cache_diagnostics: ContextCacheDiagnosticsView | None = None
     capability_assembly_diagnostics: CapabilityAssemblyDiagnosticsView | None = None
     memory_injection_diagnostics: MemoryInjectionDiagnosticsView | None = None
+    runtime_context_v2_diagnostics: RuntimeContextV2DiagnosticsView | None = None
     compaction_diagnostics: CompactionDiagnosticsView | None = None
     runtime_phase_timings: RuntimePhaseTimingsView | None = None
     last_message_interrupted: bool = False
@@ -1028,6 +1076,7 @@ class EvaluationReportRuntimeSectionView(BaseModel):
     runtime_phase_diagnostics: dict[str, Any] = Field(default_factory=dict)
     runtime_assembly_snapshot: dict[str, Any] = Field(default_factory=dict)
     runtime_assembly_diff: dict[str, Any] = Field(default_factory=dict)
+    context_v2_evaluation: dict[str, Any] = Field(default_factory=dict)
     context_window_usage: dict[str, Any] = Field(default_factory=dict)
     token_usage: dict[str, Any] = Field(default_factory=dict)
     model_fallback_history: list[dict[str, Any]] = Field(default_factory=list)
@@ -1545,6 +1594,7 @@ class ConfigOverviewView(BaseModel):
 
     status: str = "ok"
     config_fingerprint: str
+    basics: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
     models: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
     tools: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
     skills: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
@@ -1552,6 +1602,73 @@ class ConfigOverviewView(BaseModel):
     mcp: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
     plugins: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
     scheduled: ConfigOverviewMetricView = Field(default_factory=ConfigOverviewMetricView)
+
+
+class BasicConfigItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    label: str
+    description: str = ""
+    category: Literal["required", "extension"]
+    required: bool = False
+    configured: bool = False
+    testable: bool = True
+    token_env: str | None = None
+    value: str | None = None
+    secret: bool = False
+    status: str = "unknown"
+    message: str | None = None
+
+
+class BasicConfigOverviewView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config_path: str
+    dotenv_path: str
+    config_fingerprint: str
+    required_count: int = 0
+    configured_required_count: int = 0
+    missing_required_count: int = 0
+    required_items: list[BasicConfigItemView] = Field(default_factory=list)
+    extension_items: list[BasicConfigItemView] = Field(default_factory=list)
+
+
+class BasicConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    git_token_env: str | None = None
+    git_token: str | None = None
+    git_provider: str | None = None
+    git_user_name: str | None = None
+    git_user_email: str | None = None
+    git_remote_url: str | None = None
+
+
+class BasicConfigUpdateView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config_path: str
+    dotenv_path: str | None = None
+    config_fingerprint: str
+    basics: BasicConfigOverviewView
+
+
+class BasicConfigTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+
+
+class BasicConfigTestView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    ok: bool
+    status: str
+    message: str
+    checked_at: str
+    config_fingerprint: str
 
 
 class SkillValidationIssueView(BaseModel):
@@ -1845,15 +1962,16 @@ class MemoryEntryUpdateRequest(BaseModel):
     priority: float | None = None
     confidence: float | None = None
     salience: float | None = None
+    evidence_refs: tuple[str, ...] = ()
     status: str | None = None
 
 
-class MemoryProviderView(BaseModel):
+class MemoryEngineView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_id: str
+    engine_id: str
     display_name: str
-    kind: str = "local_curated"
+    kind: str = "hcms"
     origin: str = "builtin"
     family: str
     description: str
@@ -1872,10 +1990,10 @@ class MemoryProviderView(BaseModel):
     last_sync_at: datetime | None = None
 
 
-class MemoryProviderTestResponse(BaseModel):
+class MemoryEngineTestResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_id: str
+    engine_id: str
     ok: bool
     health: str = "unknown"
     diagnostics: list[str] = Field(default_factory=list)
@@ -1925,7 +2043,7 @@ class MemoryArchiveSearchResultView(BaseModel):
 
     query: str
     hits: list[MemoryArchiveSearchHitView] = Field(default_factory=list)
-    provider_notes: list[str] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
 
 
 class PromptSnapshotMetadataView(BaseModel):
@@ -2003,16 +2121,16 @@ class SessionSearchResultView(BaseModel):
     thread_id: str | None = None
     scope: SessionSearchScope
     groups: list[SessionSearchThreadGroupView] = Field(default_factory=list)
-    provider_notes: list[str] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
     current_thread_snapshot: PromptSnapshotMetadataView | None = None
 
 
 class MemoryOverviewView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    active_provider_id: str | None = None
-    runtime_mode: str = "memory_platform"
-    legacy_capture_enabled: bool = False
+    active_engine_id: str | None = None
+    runtime_mode: str = "hcms"
+    capture_status: str = "native"
     migration_status: dict[str, Any] = Field(default_factory=dict)
     store_count: int
     archive_turn_count: int
@@ -2037,7 +2155,7 @@ class MemoryTraceView(BaseModel):
     query: str | None = None
     trace_kind: str
     target_id: str | None = None
-    provider_notes: list[str] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
     evidence: list[RecallEvidenceView] = Field(default_factory=list)
     created_at: datetime
 
@@ -2046,6 +2164,212 @@ class MemoryTraceResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[MemoryTraceView] = Field(default_factory=list)
+
+
+class HCMSQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    limit: int = 10
+
+
+class HCMSMetricsView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    llm_calls_avoided: int = 0
+    deterministic_updates: int = 0
+    recall_count: int = 0
+    last_latency_ms: float = 0.0
+    recall_hit_rate: float = 0.0
+
+
+class HCMSEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str
+    type: str
+    content: str
+    weight: float = 0.0
+    timestamp: datetime
+    source_id: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HCMSMemoryView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    version: int = 1
+    parent_id: str | None = None
+    content: str
+    summary: str = ""
+    category: str
+    confidence: float = 0.5
+    salience: float = 0.5
+    state: str = "active"
+    source_thread_id: str | None = None
+    source_type: str = "observation"
+    tags: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    evidence: list[HCMSEvidenceView] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    accessed_at: datetime
+
+
+class HCMSMemoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory: HCMSMemoryView
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSMemoryListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[HCMSMemoryView] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+    query: str | None = None
+    state: str = "all"
+    category: str | None = None
+    layer_id: str = "all"
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSMemoryDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    status: str = "deleted"
+    deleted: bool = True
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSRelationView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relation_id: str
+    source_memory_id: str
+    target_memory_id: str
+    relation_type: str
+    weight: float = 0.0
+    confidence: float = 0.0
+    bidirectional: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    source_memory: HCMSMemoryView | None = None
+    target_memory: HCMSMemoryView | None = None
+
+
+class HCMSMemoryRelationsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    relations: list[HCMSRelationView] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSRecallItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    score: float = 0.0
+    raw_scores: dict[str, float] = Field(default_factory=dict)
+    ranks: dict[str, int] = Field(default_factory=dict)
+    explanation: str = ""
+    memory: HCMSMemoryView | None = None
+
+
+class HCMSRecallResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    items: list[HCMSRecallItemView] = Field(default_factory=list)
+    metrics: HCMSMetricsView = Field(default_factory=HCMSMetricsView)
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSCausalNodeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    event_type: str = "memory"
+    timestamp: datetime
+    confidence: float = 0.0
+
+
+class HCMSCausalEdgeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edge_id: str
+    source_event: str
+    target_event: str
+    causal_type: str
+    strength: float = 0.0
+    evidence: list[str] = Field(default_factory=list)
+    timestamp: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HCMSWhyPathView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[HCMSCausalNodeView] = Field(default_factory=list)
+    edges: list[HCMSCausalEdgeView] = Field(default_factory=list)
+    total_strength: float = 0.0
+    confidence: float = 0.0
+    explanation_kind: str = "causal"
+    degradation_reason: str | None = None
+    evidence_summary: list[str] = Field(default_factory=list)
+
+
+class HCMSWhyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    paths: list[HCMSWhyPathView] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSMemoryVersionView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version_id: str
+    memory_id: str
+    version: int
+    parent_id: str | None = None
+    content: str
+    summary: str = ""
+    diff: str = ""
+    reason: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class HCMSMemoryHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    versions: list[HCMSMemoryVersionView] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
+
+
+class HCMSMemoryDiffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    from_version: int | None = None
+    to_version: int | None = None
+    diff: str = ""
+    confidence_delta: float = 0.0
+    evidence_added: list[str] = Field(default_factory=list)
+    evidence_removed: list[str] = Field(default_factory=list)
+    engine_notes: list[str] = Field(default_factory=list)
 
 
 class MemoryRecallBenchmarkCaseView(BaseModel):
@@ -2271,42 +2595,16 @@ class MemoryHealthResponse(BaseModel):
     status: str = "healthy"
     quality_score: float = 1.0
     archive_turn_count: int = 0
-    pending_review_count: int = 0
+    observation_queue_count: int = 0
     conflict_count: int = 0
     stale_count: int = 0
-    provider_count: int = 0
-    provider_health: dict[str, str] = Field(default_factory=dict)
+    engine_count: int = 0
+    engine_health: dict[str, str] = Field(default_factory=dict)
     stores: list[MemoryStoreHealthView] = Field(default_factory=list)
     issues: list[MemoryQualityIssueView] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
     generated_at: datetime
-
-
-class MemoryReviewItemView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    review_id: str
-    layer_id: str
-    store_id: str
-    action: str
-    content: str
-    category: str
-    priority: float
-    confidence: float
-    salience: float
-    evidence_refs: tuple[str, ...] = ()
-    supersedes: tuple[str, ...] = ()
-    conflicts_with: tuple[str, ...] = ()
-    rationale: str | None = None
-    status: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class MemoryReviewResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[MemoryReviewItemView] = Field(default_factory=list)
 
 
 class MemoryGovernanceActionRequest(BaseModel):
@@ -2327,7 +2625,7 @@ class MemoryGovernanceActionResponse(BaseModel):
     status: str = "ok"
     message: str = ""
     entry: MemoryEntryView | None = None
-    review_item: MemoryReviewItemView | None = None
+    quality_issue: MemoryQualityIssueView | None = None
     before_retention: MemoryRetentionEntryView | None = None
     after_retention: MemoryRetentionEntryView | None = None
 
@@ -2372,110 +2670,6 @@ class MemoryGovernanceBatchResponse(BaseModel):
     items: list[MemoryGovernancePlanItemView] = Field(default_factory=list)
     results: list[MemoryGovernanceActionResponse] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
-
-
-class ProfileFacetView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    facet_id: str
-    source_memory_id: str
-    entry_id: str
-    store_id: str = "user_profile"
-    class_id: str
-    key: str
-    value: str
-    source_category: str
-    evidence_refs: tuple[str, ...] = ()
-    confidence: float = 0.0
-    salience: float = 0.0
-    priority: float = 0.0
-    stability_score: float = 0.0
-    state: str
-    user_state: str
-    prompt_visible: bool = False
-    source_polluted: bool = False
-    pollution_reasons: tuple[str, ...] = ()
-    reason: str = ""
-    last_seen_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProfileFacetPolicyView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    active_threshold: float = 1.5
-    provisional_threshold: float = 0.7
-    candidate_threshold: float = 0.4
-    require_review_classes: tuple[str, ...] = ()
-    class_budgets: dict[str, int] = Field(default_factory=dict)
-    default_class_budget: int = 5
-    max_facets: int = 80
-    pollution_requires_review: bool = True
-
-
-class ProfileFacetAuditEntryView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    audit_id: str
-    action: str
-    facet_id: str
-    source_memory_id: str | None = None
-    before_state: str | None = None
-    after_state: str | None = None
-    before_user_state: str | None = None
-    after_user_state: str | None = None
-    reason: str | None = None
-    source: str = "ops"
-    created_at: datetime
-
-
-class ProfileFacetListResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    policy: ProfileFacetPolicyView = Field(default_factory=ProfileFacetPolicyView)
-    items: list[ProfileFacetView] = Field(default_factory=list)
-
-
-class ProfileFacetGovernanceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action: str
-    reason: str | None = None
-    source: str = "ops"
-
-
-class ProfileFacetGovernanceResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action: str
-    facet: ProfileFacetView
-    status: str = "ok"
-    message: str = ""
-    audit_entry: ProfileFacetAuditEntryView | None = None
-
-
-class ProfileFacetRebuildRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str = "ops"
-
-
-class ProfileFacetRebuildResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: str = "completed"
-    source: str = "ops"
-    facet_count: int = 0
-    updated_count: int = 0
-    facets: list[ProfileFacetView] = Field(default_factory=list)
-    audit_entry: ProfileFacetAuditEntryView | None = None
-
-
-class ProfileFacetAuditResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[ProfileFacetAuditEntryView] = Field(default_factory=list)
 
 
 class MemoryMaintenanceRequest(BaseModel):
@@ -2585,11 +2779,11 @@ class MemoryOnboardingResponse(BaseModel):
     reason: str | None = None
     workspace_path: str = ""
     thread_id: str | None = None
-    store_id: str = "runtime_memory"
+    store_id: str = "hcms_workspace"
     layer_id: str = "workspace"
     category: str = "project_context"
     files: tuple[MemoryOnboardingFileView, ...] = ()
-    review_ids: tuple[str, ...] = ()
+    quality_issue_ids: tuple[str, ...] = ()
     written_memory_ids: tuple[str, ...] = ()
     stable_snapshot_refresh_recommended: bool = False
     created_at: datetime
@@ -2680,70 +2874,49 @@ class MemoryFlushResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thread_id: str | None = None
-    candidates_seen: int = 0
+    observations_processed: int = 0
     entries_written: int = 0
-    review_items_created: int = 0
+    quality_issues_created: int = 0
     entries_skipped: int = 0
     facts_removed: int = 0
     errors: tuple[str, ...] = ()
     written_memory_ids: tuple[str, ...] = ()
-    review_ids: tuple[str, ...] = ()
+    quality_issue_ids: tuple[str, ...] = ()
     candidate_audit: tuple[MemoryCandidateAuditEntryView, ...] = ()
-
-
-class MemoryReviewDecisionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    reason: str | None = None
-
-
-class MemoryReviewBatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    approve: list[str] = Field(default_factory=list)
-    reject: list[str] = Field(default_factory=list)
-
-
-class MemoryReviewBatchResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    approved: list[str] = Field(default_factory=list)
-    rejected: list[str] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
 
 
 class MemoryAdminExportView(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    stores: dict[str, Any] = Field(default_factory=dict)
-    review_queue: list[dict[str, Any]] = Field(default_factory=list)
-    providers: list[dict[str, Any]] = Field(default_factory=list)
+    hcms: dict[str, Any] = Field(default_factory=dict)
+    quality_issues: list[dict[str, Any]] = Field(default_factory=list)
     archive_turn_count: int = 0
 
 
 class MemoryAdminImportRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    stores: dict[str, Any] = Field(default_factory=dict)
-    review_queue: list[dict[str, Any]] = Field(default_factory=list)
+    hcms: dict[str, Any] = Field(default_factory=dict)
+    quality_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MemoryAdminImportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    entries_imported: int = 0
-    review_items_created: int = 0
+    memories_imported: int = 0
+    quality_issues_imported: int = 0
+    status: str = "ok"
 
 
 class MemoryAdminAuditView(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     snapshot: dict[str, Any] = Field(default_factory=dict)
-    pending_review_count: int = 0
+    observation_queue_count: int = 0
     conflict_count: int = 0
     staleness_count: int = 0
     health: dict[str, Any] = Field(default_factory=dict)
-    providers: list[dict[str, Any]] = Field(default_factory=list)
+    engines: list[dict[str, Any]] = Field(default_factory=list)
     candidate_audit: list[MemoryCandidateAuditEntryView] = Field(default_factory=list)
     pollution_markers: list[MemoryPollutionMarkerView] = Field(default_factory=list)
     recall_benchmark_suites: list[MemoryRecallBenchmarkSuiteView] = Field(default_factory=list)
@@ -2756,10 +2929,10 @@ class MemoryConflictResolveRequest(BaseModel):
     action: str = "keep_both"
 
 
-class MemoryProviderAdminResponse(BaseModel):
+class MemoryEngineAdminResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[MemoryProviderView] = Field(default_factory=list)
+    items: list[MemoryEngineView] = Field(default_factory=list)
 
 
 class ReflectionJobAdminResponse(BaseModel):
@@ -2793,7 +2966,7 @@ class ReflectionJobCreateRequest(BaseModel):
     job_id: str
     name: str
     schedule_kind: str
-    target_store_id: str = "runtime_memory"
+    target_store_id: str = "hcms_workspace"
     template: str = "custom"
     instructions: str | None = None
     source_query: str | None = None
@@ -3397,8 +3570,6 @@ class PluginView(BaseModel):
     tool_names: list[str] = Field(default_factory=list)
     resources: list[CapabilityResourceView] = Field(default_factory=list)
     prompts: list[CapabilityPromptView] = Field(default_factory=list)
-    memory_providers: list[dict[str, Any]] = Field(default_factory=list)
-    memory_provider_count: int = 0
     catalog_metadata: dict[str, Any] = Field(default_factory=dict)
     discovery_source: str = "plugin_config"
 
@@ -3428,11 +3599,9 @@ class PluginCatalogEntryView(BaseModel):
     mcp_server_count: int = 0
     resource_count: int = 0
     prompt_count: int = 0
-    memory_provider_count: int = 0
     skill_roots: list[str] = Field(default_factory=list)
     tool_names: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
-    memory_providers: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     catalog_metadata: dict[str, Any] = Field(default_factory=dict)
     discovery_source: str = "catalog"

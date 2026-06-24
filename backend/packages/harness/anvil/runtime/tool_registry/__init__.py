@@ -3,6 +3,7 @@ from .contracts import (
     CapabilityCatalogEntry,
     CapabilityContext,
     CapabilityDependency,
+    CapabilityFeedbackDecision,
     CapabilityHealth,
     CapabilityHealthStatus,
     CapabilityPrompt,
@@ -11,15 +12,23 @@ from .contracts import (
     CapabilitySearchResult,
     CapabilitySearchTrace,
     CapabilityStability,
+    CapabilitySuccessHistory,
     CapabilityVisibility,
     DeferredCapabilityPromotion,
+    HiddenCapabilitySummary,
+    SkillSelectionFeedback,
     TypedApprovalPolicy,
     ToolExecutionMode,
     ToolRegistryEntry,
     ToolSourceKind,
 )
 from .catalog import CapabilityCatalogService
-from .registry import ToolRegistry
+from .registry import (
+    SkillSelectionFeedbackSubscriber,
+    ToolRegistry,
+    skill_retrieval_plan_to_capability_resources,
+    skill_selection_feedback_from_runtime_event,
+)
 from .service import CapabilityAssemblyResult, CapabilityAssemblyService, MentionResolution
 from .tool_names import (
     CAPABILITY_DISCOVERY_TOOL_NAMES,
@@ -38,6 +47,7 @@ __all__ = [
     "CapabilityCatalogService",
     "CapabilityContext",
     "CapabilityDependency",
+    "CapabilityFeedbackDecision",
     "CapabilityHealth",
     "CapabilityHealthStatus",
     "CapabilityPrompt",
@@ -46,14 +56,18 @@ __all__ = [
     "CapabilitySearchResult",
     "CapabilitySearchTrace",
     "CapabilityStability",
+    "CapabilitySuccessHistory",
     "CapabilityVisibility",
     "CAPABILITY_DISCOVERY_TOOL_NAMES",
     "CODING_AUDIT_TOOL_NAMES",
     "CODING_DISCOVERY_TOOL_NAMES",
     "CODING_TOOL_NAMES",
     "DeferredCapabilityPromotion",
+    "HiddenCapabilitySummary",
     "MentionResolution",
     "PROCEDURE_NOISE_TOOL_NAMES",
+    "SkillSelectionFeedback",
+    "SkillSelectionFeedbackSubscriber",
     "TypedApprovalPolicy",
     "ToolExecutionMode",
     "ToolRegistry",
@@ -62,4 +76,6 @@ __all__ = [
     "ToolsetCatalogService",
     "ToolsetDefinition",
     "ToolSourceKind",
+    "skill_retrieval_plan_to_capability_resources",
+    "skill_selection_feedback_from_runtime_event",
 ]

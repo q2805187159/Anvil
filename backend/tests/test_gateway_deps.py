@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import asyncio
 import threading
+from pathlib import Path
 from fastapi.testclient import TestClient
 
 from anvil.config import ConfigLayer, ConfigLayerKind
@@ -91,6 +92,49 @@ def test_gateway_deps_lifecycle_builds_runtime_bundle(gateway_app_factory) -> No
         assert deps.extensions_service is not None
 
 
+def test_runtime_deps_default_config_layers_are_repo_root_scoped(contract_tmp_path, monkeypatch) -> None:
+    from app import runtime_deps as runtime_deps_module
+
+    captured_roots: list[Path | None] = []
+    expected_repo_root = Path(runtime_deps_module.__file__).resolve().parents[2]
+
+    def fake_build_default_config_layers(*, repo_root: Path | None = None):
+        captured_roots.append(repo_root)
+        return [
+            ConfigLayer(
+                name="test",
+                kind=ConfigLayerKind.DEFAULT,
+                data={
+                    "default_model": "openai",
+                    "models": {
+                        "openai": {
+                            "name": "openai",
+                            "provider": "openai",
+                            "provider_kind": "openai_compatible",
+                            "model_name": "gpt-5.4",
+                        }
+                    },
+                    "hcms": {"enabled": True},
+                    "skills_config": {"enabled": False},
+                    "subagents": {"enabled": False},
+                    "guardrails": {"enabled": False},
+                },
+            )
+        ]
+
+    monkeypatch.delenv("ANVIL_HOME", raising=False)
+    monkeypatch.setattr(runtime_deps_module, "build_default_config_layers", fake_build_default_config_layers)
+
+    deps = runtime_deps_module.build_runtime_deps_bundle(app_state_root=contract_tmp_path / "runtime")
+    try:
+        deps.config_coordinator._rebuild_layers(force=True)
+
+        assert captured_roots == [expected_repo_root, expected_repo_root]
+        assert deps.config_coordinator.repo_root == expected_repo_root
+    finally:
+        deps.close()
+
+
 def test_runtime_deps_are_reused_through_app_state(gateway_client) -> None:
     app = gateway_client.app
     first = app.state.runtime_deps
@@ -146,7 +190,7 @@ def test_gateway_runtime_deps_runs_skill_curator_automation(gateway_app_factory,
         result = deps.run_skill_curator_automation_sync(force_run=True)
         assert result.ran is True
         assert result.report["recommendations"][0]["next_tool_call"] == {
-            "action": "review_plan",
+            "action": "quality_plan",
             "skill_id": "agent-gateway-automation",
         }
 
